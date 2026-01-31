@@ -1,0 +1,41 @@
+{
+  "manifest_version": 2,
+  "name": "ThunderRAG",
+  "version": "0.1.2",
+  "description": "Adds a message filter action that POSTs full messages to a configured HTTP endpoint.",
+  "icons": {
+    "64": "icons/rag-query.svg"
+  },
+  "applications": {
+    "gecko": {
+      "id": "rag-filter-action@example.com",
+      "strict_min_version": "140.0"
+    }
+  },
+  "permissions": [
+    "accountsRead",
+    "messagesRead",
+    "tabs",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "browser_action": {
+    "default_title": "ThunderRAG",
+    "default_icon": {
+      "64": "icons/rag-query.svg"
+    }
+  },
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "experiment_apis": {
+    "ragFilterAction": {
+      "schema": "experiments/ragFilterAction/schema.json",
+      "parent": {
+        "scopes": ["addon_parent"],
+        "paths": [["ragFilterAction"]],
+        "script": "experiments/ragFilterAction/parent.js"
+      }
+    }
+  }
+}

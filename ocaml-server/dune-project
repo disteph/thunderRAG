@@ -1,0 +1,22 @@
+(lang dune 3.13)
+(name rag_email_server)
+(generate_opam_files true)
+
+(package
+  (name rag_email_server)
+  (synopsis "Simple HTTP server to accept RFC822 emails and print text/plain parts")
+  (license "MIT")
+  (authors "")
+  (maintainers "")
+  (depends
+   (ocaml (>= 5.1))
+   (dune (>= 3.13))
+   eio_main
+   cohttp-eio
+   uri
+   yojson
+   mrmime
+   angstrom
+   bigstringaf
+   logs
+   fmt))

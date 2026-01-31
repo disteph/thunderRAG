@@ -1,0 +1,17 @@
+(executable
+ (name main)
+ (modules main tool_check)
+ (public_name rag-email-server)
+ (promote (until-clean) (into ".."))
+ (libraries eio_main cohttp-eio uri yojson mrmime angstrom logs logs.fmt fmt bigstringaf unix))
+
+(rule
+ (targets tool_check.ml)
+ (action
+  (progn
+   (bash
+    "command -v pandoc >/dev/null 2>&1 || { echo 'ERROR: pandoc not found in PATH.' 1>&2; echo 'Install (macOS): brew install pandoc' 1>&2; echo 'Install (Debian/Ubuntu): sudo apt install pandoc' 1>&2; echo 'Install (Fedora): sudo dnf install pandoc' 1>&2; exit 1; }; command -v pdftotext >/dev/null 2>&1 || { echo 'ERROR: pdftotext not found in PATH.' 1>&2; echo 'Install (macOS): brew install poppler' 1>&2; echo 'Install (Debian/Ubuntu): sudo apt install poppler-utils' 1>&2; echo 'Install (Fedora): sudo dnf install poppler-utils' 1>&2; exit 1; }"
+    )
+   (with-stdout-to tool_check.ml
+    (echo "let ensure () = ()")))))
+

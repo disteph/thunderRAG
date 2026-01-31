@@ -1,0 +1,22 @@
+[
+  {
+    "namespace": "ragFilterAction",
+    "description": "Registers the ThunderRAG filter custom action.",
+    "functions": [
+      {
+        "name": "register",
+        "type": "function",
+        "description": "Register the custom filter action.",
+        "async": true,
+        "parameters": []
+      },
+      {
+        "name": "unregister",
+        "type": "function",
+        "description": "Unregister the custom filter action (best-effort).",
+        "async": true,
+        "parameters": []
+      }
+    ]
+  }
+]

@@ -1,0 +1,14 @@
+.DS_Store
+.vscode/
+
+ThunderRAG/build/
+ThunderRAG/dist/
+
+ocaml-server/_build/
+ocaml-server/main.exe
+
+python-engine/.venv/
+python-engine/data/
+
+__pycache__/
+*.pyc
