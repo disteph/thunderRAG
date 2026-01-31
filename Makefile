@@ -58,7 +58,7 @@ clean-python:
 	rm -rf "$(PYTHON_ENGINE_DIR)/.venv"
 
 run-ocaml: ocaml
-	cd "$(OCAML_SERVER_DIR)" && opam exec -- dune exec -- rag-email-server -- -p 8090
+	cd "$(OCAML_SERVER_DIR)" && opam exec -- dune exec rag-email-server -- -p 8090
 
 run-python: python
 	cd "$(PYTHON_ENGINE_DIR)" && .venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000

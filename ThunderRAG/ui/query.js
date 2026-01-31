@@ -157,6 +157,9 @@ async function onAsk() {
   const base = normalizeBaseUrl($("serverBase").value);
   localStorage.setItem("rag.serverBase", base);
 
+  const mode = String($("mode").value || "assistive");
+  localStorage.setItem("rag.mode", mode);
+
   const question = ($("question").value || "").trim();
   const topK = parseInt($("topK").value || "8", 10);
 
@@ -172,7 +175,7 @@ async function onAsk() {
   $("status").textContent = "Querying...";
 
   try {
-    const res = await fetchJson(`${base}/query`, { question, top_k: topK });
+    const res = await fetchJson(`${base}/query`, { question, top_k: topK, mode });
     setAssistantMessage(assistant.bubble, res?.answer || "", res?.sources || []);
     $("status").textContent = "";
   } catch (e) {
@@ -204,6 +207,9 @@ async function onReset() {
 function init() {
   const saved = localStorage.getItem("rag.serverBase");
   $("serverBase").value = saved || "http://localhost:8080";
+
+  const savedMode = localStorage.getItem("rag.mode");
+  $("mode").value = savedMode === "grounded" ? "grounded" : "assistive";
 
   $("askBtn").addEventListener("click", onAsk);
   $("resetBtn").addEventListener("click", onReset);

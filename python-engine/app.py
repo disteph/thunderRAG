@@ -37,6 +37,7 @@ class IngestResponse(BaseModel):
 class QueryRequest(BaseModel):
     question: str
     top_k: int = Field(default=DEFAULT_TOP_K, ge=1, le=50)
+    mode: str = Field(default="assistive")
 
 
 class SourceChunk(BaseModel):
@@ -330,6 +331,10 @@ async def query(req: QueryRequest) -> QueryResponse:
     if not state:
         raise HTTPException(status_code=503, detail="not initialized")
 
+    mode = (req.mode or "assistive").strip().lower()
+    if mode not in ("assistive", "grounded"):
+        raise HTTPException(status_code=400, detail="mode must be 'assistive' or 'grounded'")
+
     async with state.lock:
         if state.index is None or state.index.ntotal == 0:
             raise HTTPException(status_code=400, detail="index is empty")
@@ -378,13 +383,26 @@ async def query(req: QueryRequest) -> QueryResponse:
         context_parts.append(f"[Source {i} | doc_id={h.doc_id} | chunk_id={h.chunk_id}]\n{h.text}")
 
     context = "\n\n".join(context_parts)
-    prompt = (
-        "You are a local assistant answering questions from an email archive. "
-        "Use ONLY the provided sources. If the sources do not contain the answer, say you don't know.\n\n"
-        f"Question: {req.question}\n\n"
-        f"Sources:\n{context}\n\n"
-        "Answer:\n"
-    )
+
+    if mode == "grounded":
+        prompt = (
+            "You are a local assistant answering questions from an email archive. "
+            "Use ONLY the provided sources. If the sources do not contain the answer, say you don't know.\n\n"
+            f"Question: {req.question}\n\n"
+            f"Sources:\n{context}\n\n"
+            "Answer:\n"
+        )
+    else:
+        prompt = (
+            "You are a local assistant. You are helping the user with email-related tasks. "
+            "The provided sources are optional context from the user's email archive. "
+            "Use them when relevant, and cite them using [Source N] when you rely on them. "
+            "If the sources do not contain the answer, still be helpful and answer from general knowledge, "
+            "but do not invent claims about what the sources say.\n\n"
+            f"Question: {req.question}\n\n"
+            f"Sources (optional):\n{context}\n\n"
+            "Answer:\n"
+        )
 
     async with httpx.AsyncClient(trust_env=False) as client:
         answer = await _ollama_generate(client, prompt)
