@@ -8,7 +8,7 @@ ADDON_DIR := ThunderRAG
 .PHONY: all deps xpi ocaml python \
 	python-deps ocaml-deps \
 	clean clean-xpi clean-ocaml clean-python \
-	run-ocaml run-python
+	run-ocaml run-python run
 
 all: xpi ocaml python
 
@@ -62,3 +62,10 @@ run-ocaml: ocaml
 
 run-python: python
 	cd "$(PYTHON_ENGINE_DIR)" && .venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000
+
+run: python ocaml
+	@set -euo pipefail; \
+	( cd "$(PYTHON_ENGINE_DIR)" && .venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000 ) & PY_PID=$$!; \
+	( cd "$(OCAML_SERVER_DIR)" && opam exec -- dune exec rag-email-server -- -p 8090 ) & OCAML_PID=$$!; \
+	trap 'kill $$PY_PID $$OCAML_PID 2>/dev/null || true' INT TERM EXIT; \
+	wait

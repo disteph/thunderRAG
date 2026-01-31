@@ -1,8 +1,11 @@
 import asyncio
 import json
 import os
+import re
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional
 
 import faiss  # type: ignore
@@ -23,6 +26,53 @@ OLLAMA_LLM_MODEL = os.environ.get("OLLAMA_LLM_MODEL", "llama3")
 DEFAULT_TOP_K = int(os.environ.get("RAG_ENGINE_TOP_K", "8"))
 
 
+def _build_retrieval_text(question: str, history: List["ChatMessage"]) -> str:
+    q = (question or "").strip()
+    hist_text = _render_history(history or [], max_chars=3500)
+    if not hist_text:
+        return q
+    out = "Conversation:\n" + hist_text + "\n\nQuestion:\n" + q
+    return out[:4000]
+
+
+def _render_history(history: List["ChatMessage"], max_chars: int) -> str:
+    msgs = history or []
+    used = 0
+    out_rev: List[str] = []
+    for m in reversed(msgs):
+        role = (m.role or "").strip().lower()
+        if role not in ("user", "assistant", "system"):
+            role = "user"
+        label = "User" if role == "user" else ("Assistant" if role == "assistant" else "System")
+        content = (m.content or "").strip()
+        if not content:
+            continue
+        s = f"{label}: {content}"
+        extra = len(s) + (1 if out_rev else 0)
+        if used + extra > max_chars:
+            break
+        out_rev.append(s)
+        used += extra
+    return "\n".join(reversed(out_rev)).strip()
+
+
+def _parse_email_date(s: Any) -> Optional[datetime]:
+    if not isinstance(s, str):
+        return None
+    s = s.strip()
+    if not s:
+        return None
+    try:
+        dt = parsedate_to_datetime(s)
+    except Exception:
+        return None
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return None
+    return dt
+
+
 class IngestRequest(BaseModel):
     id: str = Field(..., description="Document/message id")
     text: str = Field(..., description="Text content to embed")
@@ -34,10 +84,16 @@ class IngestResponse(BaseModel):
     chunks_ingested: int
 
 
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
 class QueryRequest(BaseModel):
     question: str
     top_k: int = Field(default=DEFAULT_TOP_K, ge=1, le=50)
     mode: str = Field(default="assistive")
+    history: List[ChatMessage] = Field(default_factory=list)
 
 
 class SourceChunk(BaseModel):
@@ -64,6 +120,16 @@ class DeleteResponse(BaseModel):
 
 class ResetResponse(BaseModel):
     status: str
+
+
+class SummarizeRequest(BaseModel):
+    text: str
+    target_chars: int = Field(default=4000, ge=200, le=20000)
+    kind: str = Field(default="history")
+
+
+class SummarizeResponse(BaseModel):
+    summary: str
 
 
 @dataclass
@@ -335,12 +401,15 @@ async def query(req: QueryRequest) -> QueryResponse:
     if mode not in ("assistive", "grounded"):
         raise HTTPException(status_code=400, detail="mode must be 'assistive' or 'grounded'")
 
+    retrieval_text = _build_retrieval_text(req.question, req.history)
+    search_k = req.top_k
+
     async with state.lock:
         if state.index is None or state.index.ntotal == 0:
             raise HTTPException(status_code=400, detail="index is empty")
 
         async with httpx.AsyncClient(trust_env=False) as client:
-            qvec = await _ollama_embed(client, req.question)
+            qvec = await _ollama_embed(client, retrieval_text)
 
         if state.dim is None or len(qvec) != state.dim:
             raise HTTPException(status_code=500, detail="embedding dim mismatch")
@@ -350,7 +419,7 @@ async def query(req: QueryRequest) -> QueryResponse:
         import numpy as np
 
         q = np.array([qvec], dtype="float32")
-        scores, ids = state.index.search(q, req.top_k)
+        scores, ids = state.index.search(q, search_k)
 
         hits: List[SourceChunk] = []
         cur = state.conn.cursor()
@@ -378,16 +447,40 @@ async def query(req: QueryRequest) -> QueryResponse:
                 )
             )
 
+    history_text = _render_history(req.history or [], max_chars=12000)
+
     context_parts = []
     for i, h in enumerate(hits, start=1):
-        context_parts.append(f"[Source {i} | doc_id={h.doc_id} | chunk_id={h.chunk_id}]\n{h.text}")
+        md = h.metadata or {}
+        meta_lines: List[str] = []
+        for k in ("from", "to", "cc", "bcc", "subject", "date", "message_id"):
+            v = md.get(k)
+            if isinstance(v, str) and v.strip():
+                meta_lines.append(f"{k}: {v.strip()}")
+
+        atts = md.get("attachments")
+        if isinstance(atts, list):
+            files = [str(x).strip() for x in atts if isinstance(x, str) and str(x).strip()]
+            if files:
+                meta_lines.append("attachments: " + ", ".join(files))
+
+        meta_block = "\n".join(meta_lines)
+        if meta_block:
+            context_parts.append(
+                f"[Source {i} | doc_id={h.doc_id} | chunk_id={h.chunk_id}]\nMetadata:\n{meta_block}\n\nText:\n{h.text}"
+            )
+        else:
+            context_parts.append(f"[Source {i} | doc_id={h.doc_id} | chunk_id={h.chunk_id}]\n{h.text}")
 
     context = "\n\n".join(context_parts)
 
     if mode == "grounded":
         prompt = (
             "You are a local assistant answering questions from an email archive. "
-            "Use ONLY the provided sources. If the sources do not contain the answer, say you don't know.\n\n"
+            "Use ONLY the provided sources for factual claims about emails. "
+            "You may use the conversation to understand references like 'that email', but do not treat it as evidence. "
+            "If the sources do not contain the answer, say you don't know.\n\n"
+            f"Conversation (optional):\n{history_text}\n\n"
             f"Question: {req.question}\n\n"
             f"Sources:\n{context}\n\n"
             "Answer:\n"
@@ -397,8 +490,11 @@ async def query(req: QueryRequest) -> QueryResponse:
             "You are a local assistant. You are helping the user with email-related tasks. "
             "The provided sources are optional context from the user's email archive. "
             "Use them when relevant, and cite them using [Source N] when you rely on them. "
+            "If the user asks about who sent an email, the subject, recipients, or message-id, answer by reading the sources (prefer metadata/headers). "
+            "If the user refers to an unspecified source among several, ask which [Source N] they mean. "
             "If the sources do not contain the answer, still be helpful and answer from general knowledge, "
             "but do not invent claims about what the sources say.\n\n"
+            f"Conversation (optional):\n{history_text}\n\n"
             f"Question: {req.question}\n\n"
             f"Sources (optional):\n{context}\n\n"
             "Answer:\n"
@@ -459,3 +555,44 @@ async def admin_reset() -> ResetResponse:
         state.dim = None
 
     return ResetResponse(status="ok")
+
+
+@app.post("/admin/summarize", response_model=SummarizeResponse)
+async def admin_summarize(req: SummarizeRequest) -> SummarizeResponse:
+    text = (req.text or "").strip()
+    if not text:
+        return SummarizeResponse(summary="")
+
+    kind = (req.kind or "history").strip().lower()
+    if kind not in ("history", "sources"):
+        kind = "history"
+
+    instr = (
+        "Summarize the following conversation so it can be used as context for a future assistant reply. "
+        "Preserve user preferences, decisions, constraints, open questions, and any specific identifiers. "
+        "Do not invent facts. "
+    )
+    if kind == "sources":
+        instr = (
+            "Summarize the following sources recap so it can be used as context for follow-up questions. "
+            "Preserve any doc_id/message_id, dates, subjects, senders, and attachment filenames. "
+            "Do not invent sources. "
+        )
+
+    target = int(req.target_chars)
+    prompt = (
+        f"{instr}\\n"
+        f"Target length: at most {target} characters.\\n"
+        "Output plain text.\\n\\n"
+        "Text to summarize:\n"
+        + text
+        + "\n"
+    )
+
+    async with httpx.AsyncClient(trust_env=False) as client:
+        summary = await _ollama_generate(client, prompt)
+
+    if len(summary) > target:
+        summary = summary[:target]
+
+    return SummarizeResponse(summary=summary)

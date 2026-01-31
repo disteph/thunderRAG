@@ -102,6 +102,251 @@ let sanitize_utf8 (s : string) : string =
   loop 0;
   Buffer.contents buf
 
+let hex_value (c : char) : int option =
+  if c >= '0' && c <= '9' then Some (Char.code c - Char.code '0')
+  else if c >= 'A' && c <= 'F' then Some (10 + Char.code c - Char.code 'A')
+  else if c >= 'a' && c <= 'f' then Some (10 + Char.code c - Char.code 'a')
+  else None
+
+let percent_decode (s : string) : string =
+  let len = String.length s in
+  let buf = Buffer.create len in
+  let rec loop i =
+    if i >= len then ()
+    else
+      match s.[i] with
+      | '%' when i + 2 < len -> (
+          match (hex_value s.[i + 1], hex_value s.[i + 2]) with
+          | Some a, Some b ->
+              Buffer.add_char buf (Char.chr ((a lsl 4) lor b));
+              loop (i + 3)
+          | _ ->
+              Buffer.add_char buf s.[i];
+              loop (i + 1))
+      | c ->
+          Buffer.add_char buf c;
+          loop (i + 1)
+  in
+  loop 0;
+  Buffer.contents buf
+
+let strip_quotes (s : string) : string =
+  let s = String.trim s in
+  let n = String.length s in
+  if n >= 2 && s.[0] = '"' && s.[n - 1] = '"' then String.sub s 1 (n - 2) else s
+
+let decode_rfc2231_value (v : string) : string =
+  let v = strip_quotes (String.trim v) in
+  match String.split_on_char '\'' v with
+  | charset :: _lang :: value :: _rest ->
+      let charset = String.lowercase_ascii (String.trim charset) in
+      if charset = "utf-8" || charset = "utf8" then percent_decode value else percent_decode value
+  | _ -> percent_decode v
+
+let find_param ~(name : string) (header_value : string) : string option =
+  let parts = String.split_on_char ';' header_value |> List.map String.trim in
+  let name_l = String.lowercase_ascii name in
+  let rec loop = function
+    | [] -> None
+    | p :: rest ->
+        let p_l = String.lowercase_ascii p in
+        if String.length p_l >= String.length name_l + 1
+           && String.sub p_l 0 (String.length name_l + 1) = name_l ^ "="
+        then
+          let v = String.sub p (String.length name_l + 1) (String.length p - (String.length name_l + 1)) in
+          Some (String.trim v)
+        else loop rest
+  in
+  loop parts
+
+let decode_q_encoded (s : string) : string =
+  let len = String.length s in
+  let buf = Buffer.create len in
+  let rec loop i =
+    if i >= len then ()
+    else
+      match s.[i] with
+      | '_' ->
+          Buffer.add_char buf ' ';
+          loop (i + 1)
+      | '=' when i + 2 < len -> (
+          match (hex_value s.[i + 1], hex_value s.[i + 2]) with
+          | Some a, Some b ->
+              Buffer.add_char buf (Char.chr ((a lsl 4) lor b));
+              loop (i + 3)
+          | _ ->
+              Buffer.add_char buf s.[i];
+              loop (i + 1))
+      | c ->
+          Buffer.add_char buf c;
+          loop (i + 1)
+  in
+  loop 0;
+  Buffer.contents buf
+
+let base64_value (c : char) : int option =
+  if c >= 'A' && c <= 'Z' then Some (Char.code c - Char.code 'A')
+  else if c >= 'a' && c <= 'z' then Some (26 + Char.code c - Char.code 'a')
+  else if c >= '0' && c <= '9' then Some (52 + Char.code c - Char.code '0')
+  else if c = '+' then Some 62
+  else if c = '/' then Some 63
+  else None
+
+let decode_base64 (s : string) : string option =
+  let len = String.length s in
+  let buf = Buffer.create (len * 3 / 4) in
+  let rec next_non_ws i =
+    if i >= len then i
+    else
+      match s.[i] with
+      | ' ' | '\t' | '\r' | '\n' -> next_non_ws (i + 1)
+      | _ -> i
+  in
+  let rec loop i =
+    let i = next_non_ws i in
+    if i >= len then Some (Buffer.contents buf)
+    else if i + 3 >= len then None
+    else
+      let c0 = s.[i] in
+      let c1 = s.[i + 1] in
+      let c2 = s.[i + 2] in
+      let c3 = s.[i + 3] in
+      let v0 = base64_value c0 in
+      let v1 = base64_value c1 in
+      let v2 = if c2 = '=' then Some 0 else base64_value c2 in
+      let v3 = if c3 = '=' then Some 0 else base64_value c3 in
+      match (v0, v1, v2, v3) with
+      | Some a, Some b, Some c, Some d ->
+          let triple = (a lsl 18) lor (b lsl 12) lor (c lsl 6) lor d in
+          Buffer.add_char buf (Char.chr ((triple lsr 16) land 0xFF));
+          if c2 <> '=' then Buffer.add_char buf (Char.chr ((triple lsr 8) land 0xFF));
+          if c3 <> '=' then Buffer.add_char buf (Char.chr (triple land 0xFF));
+          loop (i + 4)
+      | _ -> None
+  in
+  loop 0
+
+let decode_rfc2047 (s : string) : string =
+  let len = String.length s in
+  let buf = Buffer.create len in
+  let is_prefix i pref =
+    let l = String.length pref in
+    i + l <= len && String.sub s i l = pref
+  in
+  let find_from i ch =
+    let rec loop j =
+      if j >= len then None
+      else if s.[j] = ch then Some j
+      else loop (j + 1)
+    in
+    loop i
+  in
+  let rec loop i =
+    if i >= len then ()
+    else if is_prefix i "=?" then (
+      match find_from (i + 2) '?' with
+      | None ->
+          Buffer.add_char buf s.[i];
+          loop (i + 1)
+      | Some j1 -> (
+          match find_from (j1 + 1) '?' with
+          | None ->
+              Buffer.add_char buf s.[i];
+              loop (i + 1)
+          | Some j2 -> (
+              match find_from (j2 + 1) '?' with
+              | None ->
+                  Buffer.add_char buf s.[i];
+                  loop (i + 1)
+              | Some j3 ->
+                  if j3 + 1 < len && s.[j3 + 1] = '=' then (
+                    let charset =
+                      String.sub s (i + 2) (j1 - (i + 2)) |> String.lowercase_ascii
+                    in
+                    let enc =
+                      String.sub s (j1 + 1) (j2 - (j1 + 1)) |> String.lowercase_ascii
+                    in
+                    let payload = String.sub s (j2 + 1) (j3 - (j2 + 1)) in
+                    let decoded_opt =
+                      if charset = "utf-8" || charset = "utf8" then
+                        if enc = "q" then Some (decode_q_encoded payload)
+                        else if enc = "b" then decode_base64 payload
+                        else None
+                      else None
+                    in
+                    (match decoded_opt with
+                    | Some d -> Buffer.add_string buf d
+                    | None -> Buffer.add_string buf (String.sub s i (j3 + 2 - i)));
+                    loop (j3 + 2))
+                  else (
+                    Buffer.add_char buf s.[i];
+                    loop (i + 1)))))
+    else (
+      Buffer.add_char buf s.[i];
+      loop (i + 1))
+  in
+  loop 0;
+  Buffer.contents buf
+
+let extract_attachment_filenames (raw : string) : string list =
+  let raw = normalize_newlines_for_parsing raw in
+  let lines = String.split_on_char '\n' raw |> Array.of_list in
+  let acc = Hashtbl.create 16 in
+  let add_name (v : string) : unit =
+    let v = v |> decode_rfc2231_value |> decode_rfc2047 |> sanitize_utf8 |> String.trim in
+    if v <> "" then Hashtbl.replace acc v ()
+  in
+  let n = Array.length lines in
+  let collect_folded (start_idx : int) (prefix_len : int) : (string * int) =
+    let buf = Buffer.create 128 in
+    let first = String.trim lines.(start_idx) in
+    let rest =
+      if String.length first > prefix_len then String.sub first prefix_len (String.length first - prefix_len)
+      else ""
+    in
+    Buffer.add_string buf (String.trim rest);
+    let j = ref (start_idx + 1) in
+    let continue = ref true in
+    while !continue && !j < n do
+      let l = lines.(!j) in
+      if String.length l > 0 && (l.[0] = ' ' || l.[0] = '\t') then (
+        Buffer.add_char buf ' ';
+        Buffer.add_string buf (String.trim l);
+        incr j)
+      else continue := false
+    done;
+    (Buffer.contents buf, !j)
+  in
+  let rec loop i =
+    if i >= n then ()
+    else
+      let trimmed = String.trim lines.(i) in
+      if trimmed = "" then loop (i + 1)
+      else
+        let lower = String.lowercase_ascii trimmed in
+        if String.length lower >= 19 && String.sub lower 0 19 = "content-disposition:" then (
+          let hv, j = collect_folded i 19 in
+          (match find_param ~name:"filename*" hv with
+          | Some v -> add_name v
+          | None -> (
+              match find_param ~name:"filename" hv with
+              | Some v -> add_name v
+              | None -> ()));
+          loop j)
+        else if String.length lower >= 13 && String.sub lower 0 13 = "content-type:" then (
+          let hv, j = collect_folded i 13 in
+          (match find_param ~name:"name*" hv with
+          | Some v -> add_name v
+          | None -> (
+              match find_param ~name:"name" hv with
+              | Some v -> add_name v
+              | None -> ()));
+          loop j)
+        else loop (i + 1)
+  in
+  loop 0;
+  Hashtbl.to_seq_keys acc |> List.of_seq
+
 let read_all (flow : Eio.Flow.source_ty Eio.Resource.t) : string =
   let buf = Buffer.create 16384 in
   let tmp = Cstruct.create 16384 in
@@ -233,6 +478,223 @@ let json_headers =
   Http.Header.init_with "content-type" "application/json"
   |> fun h -> Http.Header.add h "connection" "close"
 
+type chat_message =
+  { role : string
+  ; content : string
+  }
+
+type session_state =
+  { mu : Eio.Mutex.t
+  ; mutable history_summary : string
+  ; mutable tail : chat_message list
+  ; mutable sources_summary : string
+  ; mutable last_sources_recap : string
+  }
+
+let session_tbl : (string, session_state) Hashtbl.t = Hashtbl.create 64
+let session_tbl_mu : Eio.Mutex.t = Eio.Mutex.create ()
+
+let get_or_create_session (session_id : string) : session_state =
+  Eio.Mutex.use_rw ~protect:true session_tbl_mu (fun () ->
+    match Hashtbl.find_opt session_tbl session_id with
+    | Some s -> s
+    | None ->
+        let s =
+          { mu = Eio.Mutex.create ()
+          ; history_summary = ""
+          ; tail = []
+          ; sources_summary = ""
+          ; last_sources_recap = ""
+          }
+        in
+        Hashtbl.replace session_tbl session_id s;
+        s)
+
+let trim_to_max (s : string) (max_len : int) : string =
+  if max_len <= 0 then ""
+  else if String.length s <= max_len then s
+  else String.sub s 0 max_len
+
+let render_messages (msgs : chat_message list) : string =
+  msgs
+  |> List.map (fun m ->
+         let role = String.lowercase_ascii (String.trim m.role) in
+         let label =
+           if role = "assistant" then "Assistant"
+           else if role = "system" then "System"
+           else "User"
+         in
+         Printf.sprintf "%s: %s" label (String.trim m.content))
+  |> String.concat "\n"
+
+let take (n : int) (xs : 'a list) : 'a list =
+  let rec loop k acc = function
+    | [] -> List.rev acc
+    | _ when k <= 0 -> List.rev acc
+    | y :: ys -> loop (k - 1) (y :: acc) ys
+  in
+  if n <= 0 then [] else loop n [] xs
+
+let take_last (n : int) (xs : 'a list) : 'a list =
+  if n <= 0 then []
+  else
+    let len = List.length xs in
+    let drop = len - n in
+    let rec loop i = function
+      | [] -> []
+      | y :: ys -> if i <= 0 then y :: ys else loop (i - 1) ys
+    in
+    if drop <= 0 then xs else loop drop xs
+
+let drop_last (n : int) (xs : 'a list) : 'a list =
+  if n <= 0 then xs
+  else
+    let len = List.length xs in
+    let keep = len - n in
+    let rec loop i = function
+      | [] -> []
+      | y :: ys -> if i <= 0 then [] else y :: loop (i - 1) ys
+    in
+    if keep <= 0 then [] else loop keep xs
+
+let is_ok_status (status : Http.Status.t) : bool =
+  let code = Cohttp.Code.code_of_status status in
+  code >= 200 && code < 300
+
+let sources_recap_of_query_response (resp_body : string) : string option =
+  try
+    let json = Yojson.Safe.from_string resp_body in
+    let assoc =
+      match json with
+      | `Assoc kv -> kv
+      | _ -> []
+    in
+    match List.assoc_opt "sources" assoc with
+    | Some (`List xs) ->
+        let xs = if List.length xs > 12 then take 12 xs else xs in
+        let lines =
+          xs
+          |> List.mapi (fun i v ->
+                 let get_field name =
+                   match v with
+                   | `Assoc kv -> List.assoc_opt name kv
+                   | _ -> None
+                 in
+                 let doc_id =
+                   match get_field "doc_id" with
+                   | Some (`String s) -> s
+                   | _ -> ""
+                 in
+                 let md =
+                   match get_field "metadata" with
+                   | Some (`Assoc kv) -> kv
+                   | _ -> []
+                 in
+                 let get_md_str key =
+                   match List.assoc_opt key md with
+                   | Some (`String s) -> String.trim s
+                   | _ -> ""
+                 in
+                 let from_ = get_md_str "from" in
+                 let subject = get_md_str "subject" in
+                 let date_ = get_md_str "date" in
+                 let atts =
+                   match List.assoc_opt "attachments" md with
+                   | Some (`List ys) ->
+                       ys
+                       |> List.filter_map (function
+                            | `String s when String.trim s <> "" -> Some (String.trim s)
+                            | _ -> None)
+                       |> String.concat ", "
+                   | _ -> ""
+                 in
+                 let att_part = if atts = "" then "" else Printf.sprintf " attachments=%s" atts in
+                 Printf.sprintf
+                   "[Source %d] doc_id=%s from=%s subject=%s date=%s%s"
+                   (i + 1) doc_id from_ subject date_ att_part)
+        in
+        Some (String.concat "\n" lines)
+    | _ -> Some ""
+  with _ -> None
+
+let answer_of_query_response (resp_body : string) : string option =
+  try
+    let json = Yojson.Safe.from_string resp_body in
+    match json with
+    | `Assoc kv -> (
+        match List.assoc_opt "answer" kv with
+        | Some (`String s) -> Some s
+        | _ -> None)
+    | _ -> None
+  with _ -> None
+
+let call_python_summarize ~client ~sw ~(kind : string) ~(text : string) ~(target_chars : int)
+    : string option =
+  let _ = sw in
+  let body_json =
+    `Assoc
+      [ ("text", `String text)
+      ; ("target_chars", `Int target_chars)
+      ; ("kind", `String kind)
+      ]
+    |> Yojson.Safe.to_string
+  in
+  let uri = Uri.of_string (python_engine_base ^ "/admin/summarize") in
+  let body = Cohttp_eio.Body.of_string body_json in
+  let resp, resp_body =
+    Eio.Switch.run (fun inner_sw ->
+      let resp, resp_body =
+        Cohttp_eio.Client.call client ~sw:inner_sw ~headers:json_headers ~body `POST uri
+      in
+      (resp, read_all resp_body))
+  in
+  if not (is_ok_status (Http.Response.status resp)) then None
+  else
+    try
+      let json = Yojson.Safe.from_string resp_body in
+      match json with
+      | `Assoc kv -> (
+          match List.assoc_opt "summary" kv with
+          | Some (`String s) -> Some s
+          | _ -> None)
+      | _ -> None
+    with _ -> None
+
+let maybe_summarize_session ~client ~sw (s : session_state) : unit =
+  let history_max = 12000 in
+  let history_trigger = int_of_float (0.8 *. float_of_int history_max) in
+  let history_target = int_of_float (0.6 *. float_of_int history_max) in
+  let keep_recent_msgs = 10 in
+
+  let tail_text = render_messages s.tail in
+  let combined_history =
+    if String.trim s.history_summary = "" then tail_text
+    else s.history_summary ^ "\n\n" ^ tail_text
+  in
+  if String.length combined_history > history_trigger && List.length s.tail > keep_recent_msgs then (
+    let to_keep = take_last keep_recent_msgs s.tail in
+    let to_summarize = drop_last keep_recent_msgs s.tail in
+    let prefix =
+      if String.trim s.history_summary = "" then render_messages to_summarize
+      else s.history_summary ^ "\n\n" ^ render_messages to_summarize
+    in
+    match call_python_summarize ~client ~sw ~kind:"history" ~text:prefix ~target_chars:history_target with
+    | Some summary ->
+        s.history_summary <- trim_to_max summary history_target;
+        s.tail <- to_keep
+    | None -> ());
+
+  let sources_max = 8000 in
+  let sources_trigger = int_of_float (0.8 *. float_of_int sources_max) in
+  let sources_target = int_of_float (0.6 *. float_of_int sources_max) in
+  if String.length s.sources_summary > sources_trigger then
+    match
+      call_python_summarize ~client ~sw ~kind:"sources" ~text:s.sources_summary
+        ~target_chars:sources_target
+    with
+    | Some summary -> s.sources_summary <- trim_to_max summary sources_target
+    | None -> ()
+
 let forward_json ~client ~sw ~(path : string) ~(body_json : string) : (Http.Response.t * string)
     =
   let uri = Uri.of_string (python_engine_base ^ path) in
@@ -263,11 +725,13 @@ let doc_id_of_ingest (request : Http.Request.t) (parsed_headers : (string, strin
 
 let make_ingest_json ~doc_id ~(headers : (string, string) Hashtbl.t) ~(raw : string)
     ~(body_text : string) : string =
-  let from_ = header_or_empty headers "from" |> sanitize_utf8 in
-  let to_ = header_or_empty headers "to" |> sanitize_utf8 in
-  let cc_ = header_or_empty headers "cc" |> sanitize_utf8 in
-  let bcc_ = header_or_empty headers "bcc" |> sanitize_utf8 in
-  let subject = header_or_empty headers "subject" |> sanitize_utf8 in
+  let from_ = header_or_empty headers "from" |> decode_rfc2047 |> sanitize_utf8 in
+  let to_ = header_or_empty headers "to" |> decode_rfc2047 |> sanitize_utf8 in
+  let cc_ = header_or_empty headers "cc" |> decode_rfc2047 |> sanitize_utf8 in
+  let bcc_ = header_or_empty headers "bcc" |> decode_rfc2047 |> sanitize_utf8 in
+  let subject = header_or_empty headers "subject" |> decode_rfc2047 |> sanitize_utf8 in
+  let date_ = header_or_empty headers "date" |> decode_rfc2047 |> sanitize_utf8 in
+  let attachments = extract_attachment_filenames raw in
   let body_text = sanitize_utf8 body_text in
 
   let metadata_json =
@@ -277,12 +741,18 @@ let make_ingest_json ~doc_id ~(headers : (string, string) Hashtbl.t) ~(raw : str
       ; ("cc", `String cc_)
       ; ("bcc", `String bcc_)
       ; ("subject", `String subject)
+      ; ("date", `String date_)
+      ; ("attachments", `List (List.map (fun f -> `String f) attachments))
       ; ("message_id", `String doc_id)
       ]
   in
+  let attachments_line =
+    if attachments = [] then "" else Printf.sprintf "\nAttachments: %s" (String.concat ", " attachments)
+  in
   let text_for_index =
-    Printf.sprintf "From: %s\nTo: %s\nCc: %s\nBcc: %s\nSubject: %s\nMessage-Id: %s\n\n%s"
-      from_ to_ cc_ bcc_ subject doc_id body_text
+    Printf.sprintf
+      "From: %s\nTo: %s\nCc: %s\nBcc: %s\nSubject: %s\nDate: %s%s\nMessage-Id: %s\n\n%s"
+      from_ to_ cc_ bcc_ subject date_ attachments_line doc_id body_text
   in
   `Assoc
     [ ("id", `String doc_id)
@@ -462,7 +932,7 @@ let stream_mbox_messages (path : string) ~(start_pos : int) ~(on_progress : int 
               raise ex
         in
         if n = 0 then (
-          if (not !saw_any_read) && total > 0 then
+          if (not !saw_any_read) && total > 0 && !abs_pos < total then
             Printf.printf "\n[mbox] WARNING: first read returned EOF file=%s pos=%d total=%d\n%!" path
               !abs_pos total;
           ())
@@ -497,10 +967,10 @@ let stream_mbox_messages (path : string) ~(start_pos : int) ~(on_progress : int 
               match find_next_delim_start data i with
               | Some delim_start ->
                   if delim_start > i then Buffer.add_substring msg data i (delim_start - i);
-                  flush_msg ();
                   let checkpoint_pos = data_offset + delim_start in
                   (try on_checkpoint checkpoint_pos with
                   | _ -> ());
+                  flush_msg ();
                   let j = skip_delim_line data delim_start in
                   consume j
               | None ->
@@ -522,6 +992,8 @@ let stream_mbox_messages (path : string) ~(start_pos : int) ~(on_progress : int 
 
       (* Flush last buffered message to EOF. *)
       if Buffer.length msg > 0 then flush_msg ();
+      (try on_checkpoint total with
+      | _ -> ());
       (try on_progress total total with
       | _ -> ()))
 
@@ -545,9 +1017,8 @@ let show_file_progress ~idx ~total_files ~path ~cur ~total_bytes ~(last_pct : in
   if pct_int <> !last_pct then (
     last_pct := pct_int;
     let bar = render_progress_bar ~width:28 ~ratio:(float_of_int pct_int /. 100.0) in
-    let name = Filename.basename path in
     let mb x = float_of_int x /. (1024.0 *. 1024.0) in
-    Printf.printf "\r[%d/%d] %s [%s] %3d%% (%.1f/%.1f MB)%!" idx total_files name bar pct_int
+    Printf.printf "\r[%d/%d] [%s] %3d%% (%.1f/%.1f MB)%!" idx total_files bar pct_int
       (mb cur) (mb total_bytes))
 
 let show_scan_progress ~visited ~mbox_found ~path : unit =
@@ -854,7 +1325,10 @@ let handle_bulk_ingest ~client ~sw ~clock (body : string) : (Http.Response.t * s
              let start_pos, skip =
                Eio.Mutex.use_rw ~protect:true state_mu (fun () ->
                  match Hashtbl.find_opt state_tbl path with
-                 | Some prev when prev.size = size && prev.mtime = mtime && prev.completed -> (0, true)
+                 | Some prev
+                   when prev.size = size && prev.mtime = mtime
+                        && (prev.completed || prev.last_pos >= size) ->
+                     (0, true)
                  | Some prev when prev.size = size && prev.mtime = mtime -> (prev.last_pos, false)
                  | _ -> (0, false))
              in
@@ -871,7 +1345,7 @@ let handle_bulk_ingest ~client ~sw ~clock (body : string) : (Http.Response.t * s
                flush stdout)
              else (
                let size_mb = float_of_int size /. (1024.0 *. 1024.0) in
-               Printf.printf "[%d/%d] starting %s size=%.1fMB start_pos=%d\n%!" idx total_files
+               Printf.printf "[%d/%d] %s size=%.1fMB start_pos=%d\n%!" idx total_files
                  (Filename.basename path) size_mb start_pos;
                last_file_progress := Unix.gettimeofday ();
                current_file_pos := start_pos;
@@ -899,6 +1373,10 @@ let handle_bulk_ingest ~client ~sw ~clock (body : string) : (Http.Response.t * s
 
                 let on_checkpoint (pos : int) : unit =
                   p.last_pos := pos;
+                  last_file_progress := Unix.gettimeofday ();
+                  current_file_pos := pos;
+                  current_file_total := size;
+                  show_file_progress ~idx ~total_files ~path ~cur:pos ~total_bytes:size ~last_pct;
                   Eio.Mutex.use_rw ~protect:true state_mu (fun () ->
                     Hashtbl.replace state_tbl path
                       { size; mtime; last_pos = pos; completed = false };
@@ -908,9 +1386,7 @@ let handle_bulk_ingest ~client ~sw ~clock (body : string) : (Http.Response.t * s
                stream_mbox_messages path ~start_pos
                  ~on_progress:(fun cur total_bytes ->
                    last_file_progress := Unix.gettimeofday ();
-                   current_file_pos := cur;
-                   current_file_total := total_bytes;
-                    show_file_progress ~idx ~total_files ~path ~cur ~total_bytes ~last_pct)
+                   current_file_total := total_bytes)
                  ~on_checkpoint
                  ~on_message:(fun raw ->
                    if not !stop then (
@@ -957,6 +1433,66 @@ let handle_bulk_ingest ~client ~sw ~clock (body : string) : (Http.Response.t * s
 
 let handler ~client ~sw ~clock _socket request body =
   match Http.Request.meth request, Http.Request.resource request with
+  | `POST, "/admin/session/debug" ->
+      let raw = read_all body in
+      let session_id =
+        try
+          let json = Yojson.Safe.from_string raw in
+          match json with
+          | `Assoc kv -> (
+              match List.assoc_opt "session_id" kv with
+              | Some (`String s) -> s
+              | _ -> "")
+          | _ -> ""
+        with _ -> ""
+      in
+      if String.trim session_id = "" then
+        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id\n" ()
+      else
+        let s = get_or_create_session session_id in
+        let body =
+          Eio.Mutex.use_rw ~protect:true s.mu (fun () ->
+            let tail_json =
+              `List
+                (List.map
+                   (fun m ->
+                     `Assoc
+                       [ ("role", `String m.role)
+                       ; ("content", `String m.content)
+                       ])
+                   s.tail)
+            in
+            `Assoc
+              [ ("session_id", `String session_id)
+              ; ("history_summary", `String s.history_summary)
+              ; ("tail", tail_json)
+              ; ("sources_summary", `String s.sources_summary)
+              ; ("last_sources_recap", `String s.last_sources_recap)
+              ]
+            |> Yojson.Safe.to_string)
+        in
+        Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
+  | `POST, "/admin/session/reset" ->
+      let raw = read_all body in
+      let session_id =
+        try
+          let json = Yojson.Safe.from_string raw in
+          match json with
+          | `Assoc kv -> (
+              match List.assoc_opt "session_id" kv with
+              | Some (`String s) -> s
+              | _ -> "")
+          | _ -> ""
+        with _ -> ""
+      in
+      if String.trim session_id = "" then
+        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id\n" ()
+      else (
+        Eio.Mutex.use_rw ~protect:true session_tbl_mu (fun () -> Hashtbl.remove session_tbl session_id);
+        let body =
+          `Assoc [ ("status", `String "ok"); ("session_id", `String session_id) ] |> Yojson.Safe.to_string
+        in
+        Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ())
   | `POST, "/admin/bulk_state/reset" ->
       let p = bulk_state_path () in
       (try Sys.remove (p ^ ".tmp") with
@@ -979,9 +1515,114 @@ let handler ~client ~sw ~clock _socket request body =
       Cohttp_eio.Server.respond_string ~status ~body:resp_body ~headers:json_headers ()
   | `POST, "/query" ->
       let query_body = read_all body in
-      let resp, resp_body = forward_json ~client ~sw ~path:"/query" ~body_json:query_body in
-      let status = Http.Response.status resp in
-      Cohttp_eio.Server.respond_string ~status ~body:resp_body ~headers:json_headers ()
+      let session_id, question, top_k, mode =
+        try
+          let json = Yojson.Safe.from_string query_body in
+          let assoc =
+            match json with
+            | `Assoc kv -> kv
+            | _ -> []
+          in
+          let get key = List.assoc_opt key assoc in
+          let session_id =
+            match get "session_id" with
+            | Some (`String s) -> s
+            | _ -> ""
+          in
+          let question =
+            match get "question" with
+            | Some (`String s) -> s
+            | _ -> ""
+          in
+          let top_k =
+            match get "top_k" with
+            | Some (`Int n) -> n
+            | _ -> 8
+          in
+          let mode =
+            match get "mode" with
+            | Some (`String s) -> s
+            | _ -> "assistive"
+          in
+          (session_id, question, top_k, mode)
+        with _ -> ("", "", 8, "assistive")
+      in
+      if String.trim session_id = "" || String.trim question = "" then
+        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id/question\n" ()
+      else (
+        let s = get_or_create_session session_id in
+        let python_history_json =
+          Eio.Mutex.use_rw ~protect:true s.mu (fun () ->
+            let msgs = ref [] in
+            if String.trim s.history_summary <> "" then
+              msgs :=
+                !msgs
+                @ [ `Assoc
+                      [ ("role", `String "system")
+                      ; ("content", `String ("Conversation summary so far:\n" ^ s.history_summary))
+                      ]
+                  ];
+            if String.trim s.sources_summary <> "" then
+              msgs :=
+                !msgs
+                @ [ `Assoc
+                      [ ("role", `String "system")
+                      ; ("content", `String ("Sources summary so far:\n" ^ s.sources_summary))
+                      ]
+                  ];
+            if String.trim s.last_sources_recap <> "" then
+              msgs :=
+                !msgs
+                @ [ `Assoc
+                      [ ("role", `String "system")
+                      ; ("content", `String ("Previous sources recap:\n" ^ s.last_sources_recap))
+                      ]
+                  ];
+            msgs :=
+              !msgs
+              @ List.map
+                  (fun m ->
+                    `Assoc
+                      [ ("role", `String m.role)
+                      ; ("content", `String m.content)
+                      ])
+                  s.tail;
+            `List !msgs)
+        in
+        let python_body =
+          `Assoc
+            [ ("question", `String question)
+            ; ("top_k", `Int top_k)
+            ; ("mode", `String mode)
+            ; ("history", python_history_json)
+            ]
+          |> Yojson.Safe.to_string
+        in
+        let resp, resp_body = forward_json ~client ~sw ~path:"/query" ~body_json:python_body in
+        let status = Http.Response.status resp in
+
+        if is_ok_status status then (
+          match (answer_of_query_response resp_body, sources_recap_of_query_response resp_body) with
+          | Some answer, Some recap ->
+              Eio.Mutex.use_rw ~protect:true s.mu (fun () ->
+                let add_msg role content =
+                  s.tail <- s.tail @ [ { role; content } ];
+                  let max_tail = 24 in
+                  if List.length s.tail > max_tail then s.tail <- take_last max_tail s.tail
+                in
+
+                add_msg "user" question;
+                add_msg "assistant" answer;
+
+                if String.trim s.last_sources_recap <> "" then (
+                  if String.trim s.sources_summary = "" then s.sources_summary <- s.last_sources_recap
+                  else s.sources_summary <- s.sources_summary ^ "\n\n" ^ s.last_sources_recap);
+                s.last_sources_recap <- recap;
+
+                maybe_summarize_session ~client ~sw s)
+          | _ -> ());
+
+        Cohttp_eio.Server.respond_string ~status ~body:resp_body ~headers:json_headers ())
   | `POST, "/admin/delete" ->
       let delete_body = read_all body in
       let resp, resp_body = forward_json ~client ~sw ~path:"/admin/delete" ~body_json:delete_body in
