@@ -474,9 +474,124 @@ let extract_text_plain_parts (raw : string) : string =
 
 let python_engine_base = "http://127.0.0.1:8000"
 
+let ollama_base_url =
+  match Sys.getenv_opt "OLLAMA_BASE_URL" with
+  | Some s when String.trim s <> "" -> String.trim s
+  | _ -> "http://127.0.0.1:11434"
+
+let ollama_embed_model =
+  match Sys.getenv_opt "OLLAMA_EMBED_MODEL" with
+  | Some s when String.trim s <> "" -> String.trim s
+  | _ -> "nomic-embed-text"
+
+let ollama_llm_model =
+  match Sys.getenv_opt "OLLAMA_LLM_MODEL" with
+  | Some s when String.trim s <> "" -> String.trim s
+  | _ -> "llama3"
+
+let is_ok_status (status : Http.Status.t) : bool =
+  let code = Cohttp.Code.code_of_status status in
+  code >= 200 && code < 300
+
 let json_headers =
   Http.Header.init_with "content-type" "application/json"
   |> fun h -> Http.Header.add h "connection" "close"
+
+let post_json_uri ~client ~sw ~(uri : Uri.t) ~(body_json : string) : (Http.Response.t * string) =
+  let body = Cohttp_eio.Body.of_string body_json in
+  let _ = sw in
+  Eio.Switch.run (fun inner_sw ->
+    let resp, resp_body =
+      Cohttp_eio.Client.call client ~sw:inner_sw ~headers:json_headers ~body `POST uri
+    in
+    (resp, read_all resp_body))
+
+let ollama_embed ~client ~sw ~(text : string) : (float list, string) result =
+  let uri = Uri.of_string (ollama_base_url ^ "/api/embeddings") in
+  let body_json =
+    `Assoc [ ("model", `String ollama_embed_model); ("prompt", `String text) ]
+    |> Yojson.Safe.to_string
+  in
+  let resp, resp_body = post_json_uri ~client ~sw ~uri ~body_json in
+  if not (is_ok_status (Http.Response.status resp)) then Error resp_body
+  else
+    try
+      let json = Yojson.Safe.from_string resp_body in
+      match json with
+      | `Assoc kv -> (
+          match List.assoc_opt "embedding" kv with
+          | Some (`List xs) ->
+              let vec =
+                xs
+                |> List.filter_map (function
+                     | `Float f -> Some f
+                     | `Int i -> Some (float_of_int i)
+                     | `Intlit s -> (try Some (float_of_string s) with
+                        | _ -> None)
+                     | `String s -> (try Some (float_of_string s) with
+                        | _ -> None)
+                     | _ -> None)
+              in
+              if vec = [] then Error "empty embedding" else Ok vec
+          | _ -> Error "missing embedding")
+      | _ -> Error "bad embedding response"
+    with ex -> Error (Printexc.to_string ex)
+
+let ollama_chat ~client ~sw ~(messages : Yojson.Safe.t list) : (string, string) result =
+  let uri = Uri.of_string (ollama_base_url ^ "/api/chat") in
+  let body_obj : Yojson.Safe.t =
+    `Assoc
+      [ ("model", `String ollama_llm_model)
+      ; ("messages", `List messages)
+      ; ("stream", `Bool false)
+      ]
+  in
+  (match Sys.getenv_opt "RAG_DEBUG_OLLAMA_CHAT" with
+  | Some v when String.trim v = "1" ->
+      Printf.printf "\n[ollama.chat.request]\n%s\n%!" (Yojson.Safe.pretty_to_string body_obj)
+  | _ -> ());
+  let body_json = Yojson.Safe.to_string body_obj in
+  let resp, resp_body = post_json_uri ~client ~sw ~uri ~body_json in
+  if not (is_ok_status (Http.Response.status resp)) then Error resp_body
+  else
+    try
+      let json = Yojson.Safe.from_string resp_body in
+      match json with
+      | `Assoc kv -> (
+          match List.assoc_opt "message" kv with
+          | Some (`Assoc mv) -> (
+              match List.assoc_opt "content" mv with
+              | Some (`String s) -> Ok s
+              | _ -> Error "missing chat content")
+          | _ -> Error "missing chat message")
+      | _ -> Error "bad chat response"
+    with ex -> Error (Printexc.to_string ex)
+
+let l2_normalize (vec : float list) : float list =
+  let s =
+    List.fold_left
+      (fun acc v -> acc +. (v *. v))
+      0.0 vec
+  in
+  if s <= 0.0 then vec
+  else
+    let inv = 1.0 /. sqrt s in
+    List.map (fun v -> v *. inv) vec
+
+let chunk_text (text : string) : string list =
+  let chunk_size = 1500 in
+  let overlap = 200 in
+  let cleaned = String.trim text in
+  let n = String.length cleaned in
+  let rec loop start acc =
+    if start >= n then List.rev acc
+    else
+      let end_ = min n (start + chunk_size) in
+      let chunk = String.sub cleaned start (end_ - start) |> String.trim in
+      let acc = if chunk = "" then acc else chunk :: acc in
+      if end_ >= n then List.rev acc else loop (max 0 (end_ - overlap)) acc
+  in
+  if cleaned = "" then [] else loop 0 []
 
 type chat_message =
   { role : string
@@ -557,10 +672,6 @@ let drop_last (n : int) (xs : 'a list) : 'a list =
     in
     if keep <= 0 then [] else loop keep xs
 
-let is_ok_status (status : Http.Status.t) : bool =
-  let code = Cohttp.Code.code_of_status status in
-  code >= 200 && code < 300
-
 let sources_recap_of_query_response (resp_body : string) : string option =
   try
     let json = Yojson.Safe.from_string resp_body in
@@ -628,37 +739,22 @@ let answer_of_query_response (resp_body : string) : string option =
     | _ -> None
   with _ -> None
 
-let call_python_summarize ~client ~sw ~(kind : string) ~(text : string) ~(target_chars : int)
+let call_ollama_summarize ~client ~sw ~(kind : string) ~(text : string) ~(target_chars : int)
     : string option =
-  let _ = sw in
-  let body_json =
-    `Assoc
-      [ ("text", `String text)
-      ; ("target_chars", `Int target_chars)
-      ; ("kind", `String kind)
-      ]
-    |> Yojson.Safe.to_string
+  let instr =
+    if kind = "sources" then
+      "Summarize the following sources recap so it can be used as context for follow-up questions. Preserve any doc_id/message_id, dates, subjects, senders, and attachment filenames. Do not invent sources."
+    else
+      "Summarize the following conversation so it can be used as context for a future assistant reply. Preserve user preferences, decisions, constraints, open questions, and any specific identifiers. Do not invent facts."
   in
-  let uri = Uri.of_string (python_engine_base ^ "/admin/summarize") in
-  let body = Cohttp_eio.Body.of_string body_json in
-  let resp, resp_body =
-    Eio.Switch.run (fun inner_sw ->
-      let resp, resp_body =
-        Cohttp_eio.Client.call client ~sw:inner_sw ~headers:json_headers ~body `POST uri
-      in
-      (resp, read_all resp_body))
+  let messages =
+    [ `Assoc [ ("role", `String "system"); ("content", `String (instr ^ Printf.sprintf " Target length: at most %d characters. Output plain text." target_chars)) ]
+    ; `Assoc [ ("role", `String "user"); ("content", `String text) ]
+    ]
   in
-  if not (is_ok_status (Http.Response.status resp)) then None
-  else
-    try
-      let json = Yojson.Safe.from_string resp_body in
-      match json with
-      | `Assoc kv -> (
-          match List.assoc_opt "summary" kv with
-          | Some (`String s) -> Some s
-          | _ -> None)
-      | _ -> None
-    with _ -> None
+  match ollama_chat ~client ~sw ~messages with
+  | Ok s -> Some (trim_to_max (String.trim s) target_chars)
+  | Error _ -> None
 
 let maybe_summarize_session ~client ~sw (s : session_state) : unit =
   let history_max = 12000 in
@@ -678,7 +774,7 @@ let maybe_summarize_session ~client ~sw (s : session_state) : unit =
       if String.trim s.history_summary = "" then render_messages to_summarize
       else s.history_summary ^ "\n\n" ^ render_messages to_summarize
     in
-    match call_python_summarize ~client ~sw ~kind:"history" ~text:prefix ~target_chars:history_target with
+    match call_ollama_summarize ~client ~sw ~kind:"history" ~text:prefix ~target_chars:history_target with
     | Some summary ->
         s.history_summary <- trim_to_max summary history_target;
         s.tail <- to_keep
@@ -689,11 +785,65 @@ let maybe_summarize_session ~client ~sw (s : session_state) : unit =
   let sources_target = int_of_float (0.6 *. float_of_int sources_max) in
   if String.length s.sources_summary > sources_trigger then
     match
-      call_python_summarize ~client ~sw ~kind:"sources" ~text:s.sources_summary
+      call_ollama_summarize ~client ~sw ~kind:"sources" ~text:s.sources_summary
         ~target_chars:sources_target
     with
     | Some summary -> s.sources_summary <- trim_to_max summary sources_target
     | None -> ()
+
+let sources_recap_of_sources_json (sources_json : Yojson.Safe.t) : string =
+  let xs =
+    match sources_json with
+    | `List ys -> if List.length ys > 12 then take 12 ys else ys
+    | _ -> []
+  in
+  let get_assoc_field name = function
+    | `Assoc kv -> List.assoc_opt name kv
+    | _ -> None
+  in
+  let get_md_str md key =
+    match md with
+    | `Assoc kv -> (
+        match List.assoc_opt key kv with
+        | Some (`String s) -> String.trim s
+        | _ -> "")
+    | _ -> ""
+  in
+  let lines =
+    xs
+    |> List.mapi (fun i v ->
+           let doc_id =
+             match get_assoc_field "doc_id" v with
+             | Some (`String s) -> s
+             | _ -> ""
+           in
+           let md =
+             match get_assoc_field "metadata" v with
+             | Some m -> m
+             | _ -> `Assoc []
+           in
+           let from_ = get_md_str md "from" in
+           let subject = get_md_str md "subject" in
+           let date_ = get_md_str md "date" in
+           let atts =
+             match md with
+             | `Assoc kv -> (
+                 match List.assoc_opt "attachments" kv with
+                 | Some (`List ys) ->
+                     ys
+                     |> List.filter_map (function
+                          | `String s when String.trim s <> "" -> Some (String.trim s)
+                          | _ -> None)
+                     |> String.concat ", "
+                 | _ -> "")
+             | _ -> ""
+           in
+           let att_part = if atts = "" then "" else Printf.sprintf " attachments=%s" atts in
+           Printf.sprintf
+             "[Source %d] doc_id=%s from=%s subject=%s date=%s%s"
+             (i + 1) doc_id from_ subject date_ att_part)
+  in
+  String.concat "\n" lines
 
 let forward_json ~client ~sw ~(path : string) ~(body_json : string) : (Http.Response.t * string)
     =
@@ -781,7 +931,56 @@ let forward_ingest_raw ~client ~sw ~log ~(doc_id : string) ~(headers : (string, 
     flush stdout);
 
   let ingest_json = make_ingest_json ~doc_id ~headers ~raw ~body_text in
-  forward_json ~client ~sw ~path:"/ingest" ~body_json:ingest_json
+  let index_text =
+    try
+      let json = Yojson.Safe.from_string ingest_json in
+      match json with
+      | `Assoc kv -> (
+          match List.assoc_opt "text" kv with
+          | Some (`String s) -> s
+          | _ -> "")
+      | _ -> ""
+    with _ -> ""
+  in
+  let metadata_json =
+    try
+      let json = Yojson.Safe.from_string ingest_json in
+      match json with
+      | `Assoc kv -> (
+          match List.assoc_opt "metadata" kv with
+          | Some m -> m
+          | _ -> `Assoc [])
+      | _ -> `Assoc []
+    with _ -> `Assoc []
+  in
+  let chunks = chunk_text index_text in
+  let embedded_chunks =
+    chunks
+    |> List.mapi (fun i ch ->
+           match ollama_embed ~client ~sw ~text:ch with
+           | Ok v -> (i, ch, l2_normalize v)
+           | Error msg -> raise (Failure ("ollama_embed failed: " ^ msg)))
+  in
+  let chunks_json =
+    `List
+      (List.map
+         (fun (i, ch, v) ->
+           `Assoc
+             [ ("chunk_index", `Int i)
+             ; ("text", `String ch)
+             ; ("embedding", `List (List.map (fun f -> `Float f) v))
+             ])
+         embedded_chunks)
+  in
+  let body_json =
+    `Assoc
+      [ ("id", `String doc_id)
+      ; ("metadata", metadata_json)
+      ; ("chunks", chunks_json)
+      ]
+    |> Yojson.Safe.to_string
+  in
+  forward_json ~client ~sw ~path:"/ingest_embedded" ~body_json
 
 let expand_home (p : string) : string =
   if String.length p > 0 && p.[0] = '~' then
@@ -1551,78 +1750,175 @@ let handler ~client ~sw ~clock _socket request body =
         Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id/question\n" ()
       else (
         let s = get_or_create_session session_id in
-        let python_history_json =
+        let tail_snapshot, history_summary, sources_summary, last_sources_recap =
           Eio.Mutex.use_rw ~protect:true s.mu (fun () ->
-            let msgs = ref [] in
-            if String.trim s.history_summary <> "" then
-              msgs :=
-                !msgs
-                @ [ `Assoc
-                      [ ("role", `String "system")
-                      ; ("content", `String ("Conversation summary so far:\n" ^ s.history_summary))
-                      ]
-                  ];
-            if String.trim s.sources_summary <> "" then
-              msgs :=
-                !msgs
-                @ [ `Assoc
-                      [ ("role", `String "system")
-                      ; ("content", `String ("Sources summary so far:\n" ^ s.sources_summary))
-                      ]
-                  ];
-            if String.trim s.last_sources_recap <> "" then
-              msgs :=
-                !msgs
-                @ [ `Assoc
-                      [ ("role", `String "system")
-                      ; ("content", `String ("Previous sources recap:\n" ^ s.last_sources_recap))
-                      ]
-                  ];
-            msgs :=
-              !msgs
+            (s.tail, s.history_summary, s.sources_summary, s.last_sources_recap))
+        in
+
+        let q_embedding =
+          match ollama_embed ~client ~sw ~text:question with
+          | Ok v -> l2_normalize v
+          | Error msg ->
+              let body = Printf.sprintf "ollama embed error: %s\n" msg in
+              raise (Failure body)
+        in
+
+        let retrieval_body =
+          `Assoc
+            [ ("embedding", `List (List.map (fun f -> `Float f) q_embedding))
+            ; ("top_k", `Int top_k)
+            ]
+          |> Yojson.Safe.to_string
+        in
+        let resp_r, resp_r_body =
+          forward_json ~client ~sw ~path:"/query_embedded" ~body_json:retrieval_body
+        in
+        let status_r = Http.Response.status resp_r in
+        if not (is_ok_status status_r) then
+          Cohttp_eio.Server.respond_string ~status:status_r ~body:resp_r_body ~headers:json_headers ()
+        else (
+          let sources_json =
+            try
+              let json = Yojson.Safe.from_string resp_r_body in
+              match json with
+              | `Assoc kv -> (
+                  match List.assoc_opt "sources" kv with
+                  | Some s -> s
+                  | None -> `List [])
+              | _ -> `List []
+            with _ -> `List []
+          in
+
+          let evidence_msg =
+            let excerpt (s : string) =
+              let max_len = 800 in
+              if String.length s <= max_len then s else String.sub s 0 max_len
+            in
+            let lines =
+              match sources_json with
+              | `List ys ->
+                  ys
+                  |> List.mapi (fun i v ->
+                         let getf name =
+                           match v with
+                           | `Assoc kv -> List.assoc_opt name kv
+                           | _ -> None
+                         in
+                         let doc_id =
+                           match getf "doc_id" with
+                           | Some (`String s) -> s
+                           | _ -> ""
+                         in
+                         let md =
+                           match getf "metadata" with
+                           | Some m -> m
+                           | _ -> `Assoc []
+                         in
+                         let get_md key =
+                           match md with
+                           | `Assoc kv -> (
+                               match List.assoc_opt key kv with
+                               | Some (`String s) -> String.trim s
+                               | _ -> "")
+                           | _ -> ""
+                         in
+                         let from_ = get_md "from" in
+                         let subject = get_md "subject" in
+                         let date_ = get_md "date" in
+                         let text =
+                           match getf "text" with
+                           | Some (`String s) -> s
+                           | _ -> ""
+                         in
+                         Printf.sprintf "[Source %d] doc_id=%s date=%s from=%s subject=%s\n%s"
+                           (i + 1) doc_id date_ from_ subject (excerpt (String.trim text)))
+              | _ -> []
+            in
+            String.concat "\n\n" lines
+          in
+
+          let system_prompt =
+            "You are a careful assistant in an ongoing multi-turn chat. "
+            ^ "Treat the previous user/assistant turns as conversation context. "
+            ^ "Answer ONLY the last user message. "
+            ^ "After the current user request, you may receive a system message containing RETRIEVED EVIDENCE for that request; use it to answer the most recent user message. "
+            ^ "Do not greet, do not restate the user's request, and do not narrate your process. "
+            ^ "Do not invent email facts; use the provided evidence and cite sources as [Source N] when relying on them. "
+            ^ "If the user refers to 'the second one you listed', resolve it against your most recent numbered list."
+          in
+
+          let messages =
+            let base =
+              [ `Assoc [ ("role", `String "system"); ("content", `String system_prompt) ] ]
+            in
+            let with_summaries =
+              let add_if_nonempty label v acc =
+                if String.trim v = "" then acc
+                else
+                  acc
+                  @ [ `Assoc
+                        [ ("role", `String "system")
+                        ; ("content", `String (label ^ "\n" ^ v))
+                        ]
+                    ]
+              in
+              base
+              |> add_if_nonempty "SESSION SUMMARY:" history_summary
+              |> add_if_nonempty "SOURCES SUMMARY:" sources_summary
+              |> add_if_nonempty "PREVIOUS SOURCES RECAP:" last_sources_recap
+            in
+            let with_tail =
+              with_summaries
               @ List.map
                   (fun m ->
                     `Assoc
                       [ ("role", `String m.role)
                       ; ("content", `String m.content)
                       ])
-                  s.tail;
-            `List !msgs)
-        in
-        let python_body =
-          `Assoc
-            [ ("question", `String question)
-            ; ("top_k", `Int top_k)
-            ; ("mode", `String mode)
-            ; ("history", python_history_json)
-            ]
-          |> Yojson.Safe.to_string
-        in
-        let resp, resp_body = forward_json ~client ~sw ~path:"/query" ~body_json:python_body in
-        let status = Http.Response.status resp in
+                  tail_snapshot
+            in
+            let with_question =
+              with_tail
+              @ [ `Assoc [ ("role", `String "user"); ("content", `String question) ] ]
+            in
+            if String.trim evidence_msg = "" then with_question
+            else
+              with_question
+              @ [ `Assoc
+                    [ ("role", `String "system")
+                    ; ("content", `String ("RETRIEVED EMAILS THAT MAY BE RELEVANT TO REPLY TO THE ABOVE USER REQUEST:\n" ^ evidence_msg))
+                    ]
+                ]
+          in
 
-        if is_ok_status status then (
-          match (answer_of_query_response resp_body, sources_recap_of_query_response resp_body) with
-          | Some answer, Some recap ->
-              Eio.Mutex.use_rw ~protect:true s.mu (fun () ->
-                let add_msg role content =
-                  s.tail <- s.tail @ [ { role; content } ];
-                  let max_tail = 24 in
-                  if List.length s.tail > max_tail then s.tail <- take_last max_tail s.tail
-                in
+          let answer =
+            match ollama_chat ~client ~sw ~messages with
+            | Ok s -> String.trim s
+            | Error msg -> "ollama chat error: " ^ msg
+          in
 
-                add_msg "user" question;
-                add_msg "assistant" answer;
+          let recap = sources_recap_of_sources_json sources_json in
+          Eio.Mutex.use_rw ~protect:true s.mu (fun () ->
+            let add_msg role content =
+              s.tail <- s.tail @ [ { role; content } ];
+              let max_tail = 24 in
+              if List.length s.tail > max_tail then s.tail <- take_last max_tail s.tail
+            in
+            add_msg "user" question;
+            add_msg "assistant" answer;
 
-                if String.trim s.last_sources_recap <> "" then (
-                  if String.trim s.sources_summary = "" then s.sources_summary <- s.last_sources_recap
-                  else s.sources_summary <- s.sources_summary ^ "\n\n" ^ s.last_sources_recap);
-                s.last_sources_recap <- recap;
+            if String.trim s.last_sources_recap <> "" then (
+              if String.trim s.sources_summary = "" then s.sources_summary <- s.last_sources_recap
+              else s.sources_summary <- s.sources_summary ^ "\n\n" ^ s.last_sources_recap);
+            s.last_sources_recap <- recap;
 
-                maybe_summarize_session ~client ~sw s)
-          | _ -> ());
+            maybe_summarize_session ~client ~sw s);
 
-        Cohttp_eio.Server.respond_string ~status ~body:resp_body ~headers:json_headers ())
+          let body =
+            `Assoc [ ("answer", `String answer); ("sources", sources_json) ]
+            |> Yojson.Safe.to_string
+          in
+          Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()))
   | `POST, "/admin/delete" ->
       let delete_body = read_all body in
       let resp, resp_body = forward_json ~client ~sw ~path:"/admin/delete" ~body_json:delete_body in
