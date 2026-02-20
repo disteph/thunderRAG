@@ -279,7 +279,8 @@ let load_prompts_json () : Yojson.Safe.t option =
     None)
 
 (* Look up a prompt string by key from prompts.json.  Returns the raw string
-   (with {{…}} meta-variables still in place) or the provided default. *)
+   (with {{…}} meta-variables still in place) or the provided default.
+   Accepts both a plain string and an array of strings (joined with "\n"). *)
 let get_prompt_raw (key : string) ~(default : string) : string =
   match load_prompts_json () with
   | Some json -> (
@@ -287,6 +288,9 @@ let get_prompt_raw (key : string) ~(default : string) : string =
       | `Assoc kv -> (
           match List.assoc_opt key kv with
           | Some (`String s) -> s
+          | Some (`List items) ->
+              let lines = List.filter_map (function `String s -> Some s | _ -> None) items in
+              String.concat "\n" lines
           | _ -> default)
       | _ -> default)
   | None -> default

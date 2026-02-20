@@ -849,18 +849,53 @@ let renumber_cited_sources ~(answer : string) ~(sources_json : Yojson.Safe.t) : 
   ) citations;
   Buffer.add_string buf (String.sub answer !last (String.length answer - !last));
   let renumbered = Buffer.contents buf in
-  (* Build cited-only recap with renumbered labels. *)
+  (* Build cited-only recap with renumbered labels and full metadata. *)
   let get_field name = function `Assoc kv -> List.assoc_opt name kv | _ -> None in
   let get_md_str md key = match get_field key md with Some (`String s) -> String.trim s | _ -> "" in
+  let get_md_int md key = match get_field key md with Some (`Int n) -> Some n | _ -> None in
+  let get_md_bool md key = match get_field key md with Some (`Bool b) -> Some b | _ -> None in
+  let get_md_attachments md =
+    match get_field "attachments" md with
+    | Some (`List ys) ->
+        ys |> List.filter_map (function
+          | `String s when String.trim s <> "" -> Some (String.trim s)
+          | _ -> None)
+    | _ -> []
+  in
   let recap_lines =
     List.mapi (fun new_i orig_idx ->
       let v = List.nth sources_list orig_idx in
-      let doc_id = match get_field "doc_id" v with Some (`String s) -> s | _ -> "" in
       let md = match get_field "metadata" v with Some m -> m | _ -> `Assoc [] in
-      let from_ = get_md_str md "from" in
-      let subject = get_md_str md "subject" in
       let date_ = get_md_str md "date" in
-      Printf.sprintf "[Email %d] doc_id=%s from=%s subject=%s date=%s" (new_i + 1) doc_id from_ subject date_
+      let from_ = get_md_str md "from" in
+      let to_ = get_md_str md "to" in
+      let cc_ = get_md_str md "cc" in
+      let subject = get_md_str md "subject" in
+      let atts = get_md_attachments md in
+      let action = get_md_int md "action_score" in
+      let importance = get_md_int md "importance_score" in
+      let reply_by = get_md_str md "reply_by" in
+      let processed = get_md_bool md "processed" in
+      let triage_parts = ref [] in
+      (match action, importance with
+       | Some a, Some imp ->
+           triage_parts := !triage_parts @ [ Printf.sprintf "action=%d/100 importance=%d/100" a imp ];
+           if reply_by <> "" && reply_by <> "none" then
+             triage_parts := !triage_parts @ [ Printf.sprintf "reply_by=%s" reply_by ]
+       | _ -> ());
+      (match processed with Some true -> triage_parts := !triage_parts @ [ "processed=true" ] | _ -> ());
+      let parts =
+        [ Printf.sprintf "[Email %d]" (new_i + 1)
+        ; Printf.sprintf "date=%s" date_
+        ; Printf.sprintf "from=%s" from_
+        ]
+        @ (if String.trim to_ <> "" then [ Printf.sprintf "to=%s" to_ ] else [])
+        @ (if String.trim cc_ <> "" then [ Printf.sprintf "cc=%s" cc_ ] else [])
+        @ [ Printf.sprintf "subject=%s" subject ]
+        @ (if atts <> [] then [ Printf.sprintf "attachments=[%s]" (String.concat "; " atts) ] else [])
+        @ (if !triage_parts <> [] then [ String.concat " " !triage_parts ] else [])
+      in
+      String.concat " " parts
     ) cited_indices
   in
   let recap = String.concat "\n" recap_lines in
@@ -2566,7 +2601,7 @@ let handler ~client ~sw ~clock _socket request body =
                   | Error msg -> "ollama chat error: " ^ msg
                 in
 
-                let renumbered_answer, _cited_recap =
+                let renumbered_answer, cited_recap =
                   renumber_cited_sources ~answer ~sources_json
                 in
                 Eio.Mutex.use_rw ~protect:true s.mu (fun () ->
@@ -2577,8 +2612,8 @@ let handler ~client ~sw ~clock _socket request body =
                   in
                   add_msg "user" p.question;
                   let answer_with_refs =
-                    if String.trim sources_index_msg <> "" then
-                      renumbered_answer ^ "\n\nEMAILS REFERENCED ABOVE:\n" ^ sources_index_msg
+                    if String.trim cited_recap <> "" then
+                      renumbered_answer ^ "\n\nEMAILS REFERENCED ABOVE:\n" ^ cited_recap
                     else renumbered_answer
                   in
                   add_msg "assistant" answer_with_refs;
