@@ -1,0 +1,31 @@
+{
+  "ollama": {
+    "base_url": "http://127.0.0.1:11434",
+    "embed_model": "nomic-embed-text",
+    "llm_model": "llama3"
+  },
+  "rag": {
+    "max_evidence_sources": 8,
+    "max_evidence_chars_per_email": 4000,
+    "quoted_context": {
+      "summarize": false,
+      "max_lines": 100,
+      "max_chars": 4000,
+      "max_input_chars": 20000
+    },
+    "attachments": {
+      "summarize": false,
+      "max_attachments": 4,
+      "max_chars": 1500,
+      "max_input_chars": 20000,
+      "max_bytes": 5000000,
+      "use_pdftotext": false,
+      "use_pandoc": false
+    }
+  },
+  "debug": {
+    "ollama_embed": false,
+    "ollama_chat": false,
+    "retrieval": false
+  }
+}

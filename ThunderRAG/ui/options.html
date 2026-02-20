@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>ThunderRAG Options</title>
+  <style>
+    :root {
+      --bg: #1e1e2e;
+      --surface: #282840;
+      --text: #e0e0e8;
+      --muted: #9090a8;
+      --accent: #7c7cf0;
+      --border: #3a3a54;
+      --input-bg: #1a1a2a;
+      --success: #5cb85c;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 24px 32px;
+      min-width: 420px;
+    }
+    h1 {
+      font-size: 1.3rem;
+      margin-bottom: 20px;
+      font-weight: 600;
+    }
+    .field {
+      margin-bottom: 16px;
+    }
+    label {
+      display: block;
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    input[type="text"], textarea {
+      width: 100%;
+      max-width: 420px;
+      padding: 8px 10px;
+      font-size: 0.95rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--input-bg);
+      color: var(--text);
+      outline: none;
+    }
+    input[type="text"]:focus, textarea:focus {
+      border-color: var(--accent);
+    }
+    textarea {
+      resize: vertical;
+      min-height: 60px;
+      font-family: inherit;
+    }
+    .hint {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+    .status {
+      margin-top: 12px;
+      font-size: 0.85rem;
+      color: var(--success);
+      min-height: 1.2em;
+    }
+  </style>
+</head>
+<body>
+  <h1>ThunderRAG Settings</h1>
+
+  <div class="field">
+    <label for="serverUrl">OCaml server URL</label>
+    <input id="serverUrl" type="text" placeholder="http://localhost:8080" />
+    <div class="hint">
+      Base URL of the ThunderRAG OCaml server (used for chat, ingestion status,
+      right-click actions, etc.). The filter action URL is configured separately
+      in the filter rule.
+    </div>
+  </div>
+
+  <div class="field">
+    <label for="whoAmI">Who am I (used for email triage)</label>
+    <textarea id="whoAmI" rows="3" placeholder="e.g. John Doe, john@example.com, software engineer at Acme Corp"></textarea>
+    <div class="hint">
+      Free-text description of yourself: name, email addresses, role, etc.
+      Used by the LLM to evaluate email importance and required actions during ingestion.
+    </div>
+  </div>
+
+  <div class="field">
+    <label for="defaultTopK">Default number of sources</label>
+    <input id="defaultTopK" type="number" min="1" max="50" value="20"
+           style="width:80px; max-width:80px; padding:8px 10px; font-size:0.95rem;
+                  border:1px solid var(--border); border-radius:6px;
+                  background:var(--input-bg); color:var(--text); outline:none;" />
+    <div class="hint">
+      Number of emails retrieved from the RAG index per query (top-K).
+      Can be overridden per query in the chat window. Default: 20.
+    </div>
+  </div>
+
+  <div class="field" style="margin-top:24px;">
+    <label style="font-size:0.95rem; color:var(--text); font-weight:600; margin-bottom:8px;">Filter action endpoints</label>
+    <div class="hint" style="line-height:1.6;">
+      Thunderbird message filters can trigger ThunderRAG actions using the
+      <strong>ThunderRAG: forward to endpoint</strong> filter action.
+      Enter the full URL as the action value. The two most useful endpoints are:
+      <br/><br/>
+      <strong style="color:var(--text);">Ingest</strong> &mdash;
+      <code style="background:var(--input-bg); padding:2px 6px; border-radius:4px;">http://localhost:8080/ingest</code><br/>
+      Ingests the email into the RAG index (extracts body, embeds, stores).
+      Use this to auto-ingest emails matching a filter (e.g. all incoming mail).
+      <br/><br/>
+      <strong style="color:var(--text);">Mark as processed</strong> &mdash;
+      <code style="background:var(--input-bg); padding:2px 6px; border-radius:4px;">http://localhost:8080/admin/mark_processed</code><br/>
+      Marks an already-ingested email as processed.
+      Use this to flag emails that have been triaged by a filter rule
+      (e.g. moved to a specific folder, tagged, etc.).
+      <br/><br/>
+      Replace <code style="background:var(--input-bg); padding:2px 6px; border-radius:4px;">localhost:8080</code>
+      with your server URL if different.
+    </div>
+  </div>
+
+  <div class="status" id="status"></div>
+
+  <script src="options.js"></script>
+</body>
+</html>

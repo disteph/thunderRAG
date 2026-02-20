@@ -1,352 +1,234 @@
+(*
+  ThunderRAG OCaml server
+
+  Role in the system
+  - Acts as the authoritative orchestrator for the RAG email assistant.
+  - Owns session state (conversation tail + summaries), prompt construction, and calls to Ollama.
+  - Performs a 2-phase query flow so that Thunderbird (not OCaml) fetches full email bodies/attachments.
+
+  High-level flows
+  - Ingestion:
+    - Accept raw emails (RFC822), extract text (text/plain or HTML->text), build a "text_for_index" payload,
+      embed chunks via Ollama /api/embeddings, and forward embeddings + metadata to the python-engine.
+  - Query (2-phase):
+    1) POST /query
+       - Runs vector retrieval via python-engine.
+       - Returns status=need_messages + request_id + message_ids + sources metadata.
+    2) POST /query/evidence
+       - Thunderbird uploads message/rfc822 evidence for each message id (header X-Thunderbird-Message-Id).
+    3) POST /query/complete
+       - Extracts body text again (same normalization as ingestion), builds the final prompt, calls
+         Ollama /api/chat, updates session state, returns answer + metadata-only sources for UI.
+
+  Key environment variables
+  - OLLAMA_BASE_URL, OLLAMA_EMBED_MODEL, OLLAMA_LLM_MODEL
+  - RAG_MAX_EVIDENCE_SOURCES, RAG_MAX_EVIDENCE_CHARS_PER_EMAIL
+  - RAG_DEBUG_OLLAMA_EMBED=1: print Ollama /api/embeddings request JSON (ingestion + query-time)
+  - RAG_DEBUG_RETRIEVAL=1: print retrieval payloads (/api/embeddings + /query_embedded) and response summary
+  - RAG_DEBUG_OLLAMA_CHAT=1: print Ollama /api/chat request JSON (final generation prompt)
+*)
+
 open Eio.Std
 
 let () = Tool_check.ensure ()
 
+open Rag_lib.Config
+
+let () = ensure_dir (thunderrag_config_dir ())
+
+(*
+  Ingested-IDs ledger (deduplication)
+
+  A flat text file tracks which messages have been successfully ingested.
+  Each line is: doc_id<TAB>embed_model
+  (Legacy lines without a tab are treated as doc_id with unknown model.)
+  On startup, the file is loaded into a hash table (doc_id → embed_model).
+  After each successful ingestion (no [ERROR:] markers), the entry is
+  appended.  This prevents re-embedding the same email across restarts.
+
+  Metadata is stored locally in a lightweight JSONL file (doc_id + embed_model
+  + metadata, NO body_text).  This is the single source of truth for email
+  metadata — the python-engine is a pure vector index and stores no metadata.
+*)
+let ingested_ids_path () : string = Filename.concat (thunderrag_config_dir ()) "ingested_ids.txt"
+let ingested_details_path () : string = Filename.concat (thunderrag_config_dir ()) "ingested_details.jsonl"
+
+(* doc_id → embed_model *)
+let ingested_ids_tbl : (string, string) Hashtbl.t = Hashtbl.create 4096
+(* doc_id → JSON detail (doc_id, embed_model, metadata) *)
+let ingested_details_tbl : (string, Yojson.Safe.t) Hashtbl.t = Hashtbl.create 4096
+
+open Rag_lib.Text_util
+
+let body_text_has_error_marker (body_text : string) : bool =
+  contains_substring ~sub:"[ERROR:" body_text
+
+let load_ingested_ids () : unit =
+  let path = ingested_ids_path () in
+  try
+    if not (Sys.file_exists path) then ()
+    else
+      let ic = open_in path in
+      Fun.protect
+        ~finally:(fun () -> close_in_noerr ic)
+        (fun () ->
+          (try
+             while true do
+               let line = input_line ic |> String.trim in
+               if line <> "" then
+                 match String.index_opt line '\t' with
+                 | Some i ->
+                     let doc_id = String.sub line 0 i |> String.trim in
+                     let model = String.sub line (i + 1) (String.length line - i - 1) |> String.trim in
+                     if doc_id <> "" then Hashtbl.replace ingested_ids_tbl doc_id model
+                 | None ->
+                     (* Legacy line: doc_id only, no model *)
+                     Hashtbl.replace ingested_ids_tbl line ""
+             done
+           with End_of_file -> ()))
+  with _ -> ()
+
+let load_ingested_details () : unit =
+  let path = ingested_details_path () in
+  try
+    if not (Sys.file_exists path) then ()
+    else
+      let ic = open_in path in
+      Fun.protect
+        ~finally:(fun () -> close_in_noerr ic)
+        (fun () ->
+          (try
+             while true do
+               let line = input_line ic |> String.trim in
+               if line <> "" then
+                 try
+                   let json = Yojson.Safe.from_string line in
+                   match json with
+                   | `Assoc kv -> (
+                       match List.assoc_opt "doc_id" kv with
+                       | Some (`String id) when String.trim id <> "" ->
+                           Hashtbl.replace ingested_details_tbl (String.trim id) json
+                       | _ -> ())
+                   | _ -> ()
+                 with _ -> ()
+             done
+           with End_of_file -> ()))
+  with _ -> ()
+
+let append_ingested_id ~(embed_model : string) (doc_id : string) : unit =
+  try
+    let oc =
+      open_out_gen
+        [ Open_creat; Open_text; Open_append ]
+        0o600
+        (ingested_ids_path ())
+    in
+    Fun.protect
+      ~finally:(fun () -> close_out_noerr oc)
+      (fun () -> output_string oc (doc_id ^ "\t" ^ embed_model ^ "\n"))
+  with _ -> ()
+
+let append_ingested_detail (json : Yojson.Safe.t) : unit =
+  try
+    let oc =
+      open_out_gen
+        [ Open_creat; Open_text; Open_append ]
+        0o600
+        (ingested_details_path ())
+    in
+    Fun.protect
+      ~finally:(fun () -> close_out_noerr oc)
+      (fun () -> output_string oc (Yojson.Safe.to_string json ^ "\n"))
+  with _ -> ()
+
+let sanitize_doc_id_for_ledger (doc_id : string) : string =
+  let doc_id = String.trim doc_id in
+  if doc_id = "" then ""
+  else
+    let buf = Buffer.create (String.length doc_id) in
+    String.iter
+      (fun c -> if c = '\n' || c = '\r' || c = '\t' then () else Buffer.add_char buf c)
+      doc_id;
+    Buffer.contents buf |> String.trim
+
+let mark_ingested_success ~(metadata : Yojson.Safe.t) (doc_id : string) : unit =
+  let doc_id = sanitize_doc_id_for_ledger doc_id in
+  if doc_id = "" then ()
+  else (
+    let model = ollama_embed_model in
+    let prev = Hashtbl.find_opt ingested_ids_tbl doc_id in
+    if prev = None || prev <> Some model then (
+      Hashtbl.replace ingested_ids_tbl doc_id model;
+      append_ingested_id ~embed_model:model doc_id);
+    let detail =
+      `Assoc
+        [ ("doc_id", `String doc_id)
+        ; ("embed_model", `String model)
+        ; ("triage_model", `String ollama_triage_model)
+        ; ("metadata", metadata)
+        ]
+    in
+    Hashtbl.replace ingested_details_tbl doc_id detail;
+    append_ingested_detail detail)
+
+let () = load_ingested_ids ()
+let () = load_ingested_details ()
+
+(* Update the "processed" flag inside an ingested detail's metadata.
+   Mutates the in-memory table and appends the updated entry to the JSONL
+   (last-entry-wins semantics on reload).  Returns true if the doc was found. *)
+let set_processed_flag (doc_id : string) (value : bool) : bool =
+  let doc_id = sanitize_doc_id_for_ledger doc_id in
+  if doc_id = "" then false
+  else
+    (* Try bare, <bracketed>, and unbracketed forms *)
+    let bare =
+      if String.length doc_id > 1 && doc_id.[0] = '<' && doc_id.[String.length doc_id - 1] = '>'
+      then String.sub doc_id 1 (String.length doc_id - 2) else doc_id
+    in
+    let bracketed =
+      if String.length doc_id > 0 && doc_id.[0] = '<' then doc_id else "<" ^ doc_id ^ ">"
+    in
+    let key =
+      if Hashtbl.mem ingested_details_tbl doc_id then Some doc_id
+      else if Hashtbl.mem ingested_details_tbl bracketed then Some bracketed
+      else if Hashtbl.mem ingested_details_tbl bare then Some bare
+      else None
+    in
+    match key with
+    | None -> false
+    | Some k ->
+        let detail = Hashtbl.find ingested_details_tbl k in
+        let updated =
+          match detail with
+          | `Assoc kv ->
+              let metadata =
+                match List.assoc_opt "metadata" kv with
+                | Some (`Assoc md) ->
+                    let md' = List.filter (fun (k, _) -> k <> "processed" && k <> "processed_at") md in
+                    if value then
+                      `Assoc (md' @ [ ("processed", `Bool true); ("processed_at", `String (now_utc_iso8601 ())) ])
+                    else
+                      `Assoc (md' @ [ ("processed", `Bool false) ])
+                | other -> (match other with Some v -> v | None -> `Assoc [])
+              in
+              `Assoc (List.map (fun (k, v) -> if k = "metadata" then (k, metadata) else (k, v)) kv)
+          | _ -> detail
+        in
+        Hashtbl.replace ingested_details_tbl k updated;
+        append_ingested_detail updated;
+        true
+
 let bulk_ingest_build_tag = "progress_bytes_v1"
 
-let normalize_newlines_for_parsing (s : string) : string =
-  if not (String.contains s '\r') then s
-  else
-    let len = String.length s in
-    let b = Bytes.create len in
-    let rec loop i j =
-      if i >= len then Bytes.sub_string b 0 j
-      else
-        match s.[i] with
-        | '\r' ->
-            if i + 1 < len && s.[i + 1] = '\n' then (
-              Bytes.set b j '\n';
-              loop (i + 2) (j + 1))
-            else (
-              Bytes.set b j '\n';
-              loop (i + 1) (j + 1))
-        | c ->
-            Bytes.set b j c;
-            loop (i + 1) (j + 1)
-    in
-    loop 0 0
+open Rag_lib.Mime
 
-let sanitize_utf8 (s : string) : string =
-  let len = String.length s in
-  let buf = Buffer.create len in
-  let is_cont b = b land 0xC0 = 0x80 in
-  let get i = int_of_char s.[i] in
-  let add_byte i = Buffer.add_char buf s.[i] in
-  let add_repl () = Buffer.add_char buf '?' in
-  let rec loop i =
-    if i >= len then ()
-    else
-      let b0 = get i in
-      if b0 < 0x80 then (
-        if b0 = 0 then Buffer.add_char buf ' ' else add_byte i;
-        loop (i + 1))
-      else if b0 >= 0xC2 && b0 <= 0xDF then
-        if i + 1 < len then (
-          let b1 = get (i + 1) in
-          if is_cont b1 then (
-            add_byte i;
-            add_byte (i + 1);
-            loop (i + 2))
-          else (
-            add_repl ();
-            loop (i + 1)))
-        else (
-          add_repl ();
-          loop (i + 1))
-      else if b0 >= 0xE0 && b0 <= 0xEF then
-        if i + 2 < len then (
-          let b1 = get (i + 1) in
-          let b2 = get (i + 2) in
-          let ok =
-            is_cont b1 && is_cont b2
-            && (if b0 = 0xE0 then b1 >= 0xA0 else true)
-            && (if b0 = 0xED then b1 < 0xA0 else true)
-          in
-          if ok then (
-            add_byte i;
-            add_byte (i + 1);
-            add_byte (i + 2);
-            loop (i + 3))
-          else (
-            add_repl ();
-            loop (i + 1)))
-        else (
-          add_repl ();
-          loop (i + 1))
-      else if b0 >= 0xF0 && b0 <= 0xF4 then
-        if i + 3 < len then (
-          let b1 = get (i + 1) in
-          let b2 = get (i + 2) in
-          let b3 = get (i + 3) in
-          let ok =
-            is_cont b1 && is_cont b2 && is_cont b3
-            && (if b0 = 0xF0 then b1 >= 0x90 else true)
-            && (if b0 = 0xF4 then b1 <= 0x8F else true)
-          in
-          if ok then (
-            add_byte i;
-            add_byte (i + 1);
-            add_byte (i + 2);
-            add_byte (i + 3);
-            loop (i + 4))
-          else (
-            add_repl ();
-            loop (i + 1)))
-        else (
-          add_repl ();
-          loop (i + 1))
-      else (
-        add_repl ();
-        loop (i + 1))
-  in
-  loop 0;
-  Buffer.contents buf
+(*
+  I/O and HTTP helpers
 
-let hex_value (c : char) : int option =
-  if c >= '0' && c <= '9' then Some (Char.code c - Char.code '0')
-  else if c >= 'A' && c <= 'F' then Some (10 + Char.code c - Char.code 'A')
-  else if c >= 'a' && c <= 'f' then Some (10 + Char.code c - Char.code 'a')
-  else None
-
-let percent_decode (s : string) : string =
-  let len = String.length s in
-  let buf = Buffer.create len in
-  let rec loop i =
-    if i >= len then ()
-    else
-      match s.[i] with
-      | '%' when i + 2 < len -> (
-          match (hex_value s.[i + 1], hex_value s.[i + 2]) with
-          | Some a, Some b ->
-              Buffer.add_char buf (Char.chr ((a lsl 4) lor b));
-              loop (i + 3)
-          | _ ->
-              Buffer.add_char buf s.[i];
-              loop (i + 1))
-      | c ->
-          Buffer.add_char buf c;
-          loop (i + 1)
-  in
-  loop 0;
-  Buffer.contents buf
-
-let strip_quotes (s : string) : string =
-  let s = String.trim s in
-  let n = String.length s in
-  if n >= 2 && s.[0] = '"' && s.[n - 1] = '"' then String.sub s 1 (n - 2) else s
-
-let decode_rfc2231_value (v : string) : string =
-  let v = strip_quotes (String.trim v) in
-  match String.split_on_char '\'' v with
-  | charset :: _lang :: value :: _rest ->
-      let charset = String.lowercase_ascii (String.trim charset) in
-      if charset = "utf-8" || charset = "utf8" then percent_decode value else percent_decode value
-  | _ -> percent_decode v
-
-let find_param ~(name : string) (header_value : string) : string option =
-  let parts = String.split_on_char ';' header_value |> List.map String.trim in
-  let name_l = String.lowercase_ascii name in
-  let rec loop = function
-    | [] -> None
-    | p :: rest ->
-        let p_l = String.lowercase_ascii p in
-        if String.length p_l >= String.length name_l + 1
-           && String.sub p_l 0 (String.length name_l + 1) = name_l ^ "="
-        then
-          let v = String.sub p (String.length name_l + 1) (String.length p - (String.length name_l + 1)) in
-          Some (String.trim v)
-        else loop rest
-  in
-  loop parts
-
-let decode_q_encoded (s : string) : string =
-  let len = String.length s in
-  let buf = Buffer.create len in
-  let rec loop i =
-    if i >= len then ()
-    else
-      match s.[i] with
-      | '_' ->
-          Buffer.add_char buf ' ';
-          loop (i + 1)
-      | '=' when i + 2 < len -> (
-          match (hex_value s.[i + 1], hex_value s.[i + 2]) with
-          | Some a, Some b ->
-              Buffer.add_char buf (Char.chr ((a lsl 4) lor b));
-              loop (i + 3)
-          | _ ->
-              Buffer.add_char buf s.[i];
-              loop (i + 1))
-      | c ->
-          Buffer.add_char buf c;
-          loop (i + 1)
-  in
-  loop 0;
-  Buffer.contents buf
-
-let base64_value (c : char) : int option =
-  if c >= 'A' && c <= 'Z' then Some (Char.code c - Char.code 'A')
-  else if c >= 'a' && c <= 'z' then Some (26 + Char.code c - Char.code 'a')
-  else if c >= '0' && c <= '9' then Some (52 + Char.code c - Char.code '0')
-  else if c = '+' then Some 62
-  else if c = '/' then Some 63
-  else None
-
-let decode_base64 (s : string) : string option =
-  let len = String.length s in
-  let buf = Buffer.create (len * 3 / 4) in
-  let rec next_non_ws i =
-    if i >= len then i
-    else
-      match s.[i] with
-      | ' ' | '\t' | '\r' | '\n' -> next_non_ws (i + 1)
-      | _ -> i
-  in
-  let rec loop i =
-    let i = next_non_ws i in
-    if i >= len then Some (Buffer.contents buf)
-    else if i + 3 >= len then None
-    else
-      let c0 = s.[i] in
-      let c1 = s.[i + 1] in
-      let c2 = s.[i + 2] in
-      let c3 = s.[i + 3] in
-      let v0 = base64_value c0 in
-      let v1 = base64_value c1 in
-      let v2 = if c2 = '=' then Some 0 else base64_value c2 in
-      let v3 = if c3 = '=' then Some 0 else base64_value c3 in
-      match (v0, v1, v2, v3) with
-      | Some a, Some b, Some c, Some d ->
-          let triple = (a lsl 18) lor (b lsl 12) lor (c lsl 6) lor d in
-          Buffer.add_char buf (Char.chr ((triple lsr 16) land 0xFF));
-          if c2 <> '=' then Buffer.add_char buf (Char.chr ((triple lsr 8) land 0xFF));
-          if c3 <> '=' then Buffer.add_char buf (Char.chr (triple land 0xFF));
-          loop (i + 4)
-      | _ -> None
-  in
-  loop 0
-
-let decode_rfc2047 (s : string) : string =
-  let len = String.length s in
-  let buf = Buffer.create len in
-  let is_prefix i pref =
-    let l = String.length pref in
-    i + l <= len && String.sub s i l = pref
-  in
-  let find_from i ch =
-    let rec loop j =
-      if j >= len then None
-      else if s.[j] = ch then Some j
-      else loop (j + 1)
-    in
-    loop i
-  in
-  let rec loop i =
-    if i >= len then ()
-    else if is_prefix i "=?" then (
-      match find_from (i + 2) '?' with
-      | None ->
-          Buffer.add_char buf s.[i];
-          loop (i + 1)
-      | Some j1 -> (
-          match find_from (j1 + 1) '?' with
-          | None ->
-              Buffer.add_char buf s.[i];
-              loop (i + 1)
-          | Some j2 -> (
-              match find_from (j2 + 1) '?' with
-              | None ->
-                  Buffer.add_char buf s.[i];
-                  loop (i + 1)
-              | Some j3 ->
-                  if j3 + 1 < len && s.[j3 + 1] = '=' then (
-                    let charset =
-                      String.sub s (i + 2) (j1 - (i + 2)) |> String.lowercase_ascii
-                    in
-                    let enc =
-                      String.sub s (j1 + 1) (j2 - (j1 + 1)) |> String.lowercase_ascii
-                    in
-                    let payload = String.sub s (j2 + 1) (j3 - (j2 + 1)) in
-                    let decoded_opt =
-                      if charset = "utf-8" || charset = "utf8" then
-                        if enc = "q" then Some (decode_q_encoded payload)
-                        else if enc = "b" then decode_base64 payload
-                        else None
-                      else None
-                    in
-                    (match decoded_opt with
-                    | Some d -> Buffer.add_string buf d
-                    | None -> Buffer.add_string buf (String.sub s i (j3 + 2 - i)));
-                    loop (j3 + 2))
-                  else (
-                    Buffer.add_char buf s.[i];
-                    loop (i + 1)))))
-    else (
-      Buffer.add_char buf s.[i];
-      loop (i + 1))
-  in
-  loop 0;
-  Buffer.contents buf
-
-let extract_attachment_filenames (raw : string) : string list =
-  let raw = normalize_newlines_for_parsing raw in
-  let lines = String.split_on_char '\n' raw |> Array.of_list in
-  let acc = Hashtbl.create 16 in
-  let add_name (v : string) : unit =
-    let v = v |> decode_rfc2231_value |> decode_rfc2047 |> sanitize_utf8 |> String.trim in
-    if v <> "" then Hashtbl.replace acc v ()
-  in
-  let n = Array.length lines in
-  let collect_folded (start_idx : int) (prefix_len : int) : (string * int) =
-    let buf = Buffer.create 128 in
-    let first = String.trim lines.(start_idx) in
-    let rest =
-      if String.length first > prefix_len then String.sub first prefix_len (String.length first - prefix_len)
-      else ""
-    in
-    Buffer.add_string buf (String.trim rest);
-    let j = ref (start_idx + 1) in
-    let continue = ref true in
-    while !continue && !j < n do
-      let l = lines.(!j) in
-      if String.length l > 0 && (l.[0] = ' ' || l.[0] = '\t') then (
-        Buffer.add_char buf ' ';
-        Buffer.add_string buf (String.trim l);
-        incr j)
-      else continue := false
-    done;
-    (Buffer.contents buf, !j)
-  in
-  let rec loop i =
-    if i >= n then ()
-    else
-      let trimmed = String.trim lines.(i) in
-      if trimmed = "" then loop (i + 1)
-      else
-        let lower = String.lowercase_ascii trimmed in
-        if String.length lower >= 19 && String.sub lower 0 19 = "content-disposition:" then (
-          let hv, j = collect_folded i 19 in
-          (match find_param ~name:"filename*" hv with
-          | Some v -> add_name v
-          | None -> (
-              match find_param ~name:"filename" hv with
-              | Some v -> add_name v
-              | None -> ()));
-          loop j)
-        else if String.length lower >= 13 && String.sub lower 0 13 = "content-type:" then (
-          let hv, j = collect_folded i 13 in
-          (match find_param ~name:"name*" hv with
-          | Some v -> add_name v
-          | None -> (
-              match find_param ~name:"name" hv with
-              | Some v -> add_name v
-              | None -> ()));
-          loop j)
-        else loop (i + 1)
-  in
-  loop 0;
-  Hashtbl.to_seq_keys acc |> List.of_seq
-
+  read_all: drain an Eio flow into a string (used for request/response bodies).
+  post_json_uri: low-level HTTP POST with JSON content-type.
+*)
 let read_all (flow : Eio.Flow.source_ty Eio.Resource.t) : string =
   let buf = Buffer.create 16384 in
   let tmp = Cstruct.create 16384 in
@@ -360,134 +242,13 @@ let read_all (flow : Eio.Flow.source_ty Eio.Resource.t) : string =
   loop ();
   Buffer.contents buf
 
-let parse_headers (raw : string) : (string, string) Hashtbl.t =
-  let raw = normalize_newlines_for_parsing raw in
-  let len = String.length raw in
-  let find_sub ~sub =
-    let sublen = String.length sub in
-    let rec loop i =
-      if i + sublen > len then None
-      else if String.sub raw i sublen = sub then Some i
-      else loop (i + 1)
-    in
-    loop 0
-  in
-  let header_end =
-    match find_sub ~sub:"\n\n" with
-    | Some i -> Some (i, 2)
-    | None -> None
-  in
-  let header_text =
-    match header_end with
-    | Some (i, _sep_len) -> String.sub raw 0 i
-    | None -> raw
-  in
-  let lines =
-    header_text
-    |> String.split_on_char '\n'
-    |> List.map (fun s ->
-           let s =
-             if String.length s > 0 && s.[String.length s - 1] = '\r' then
-               String.sub s 0 (String.length s - 1)
-             else s
-           in
-           s)
-  in
-  let unfolded =
-    let rec loop acc current_name current_value = function
-      | [] -> (
-          match current_name with
-          | None -> List.rev acc
-          | Some n -> List.rev ((n, current_value) :: acc))
-      | line :: rest -> (
-          match (line, current_name) with
-          | "", _ ->
-              (* End of headers. *)
-              loop acc current_name current_value []
-          | ( _
-            , Some _ )
-            when String.length line > 0
-                 && (line.[0] = ' ' || line.[0] = '\t') ->
-              let v = current_value ^ " " ^ String.trim line in
-              loop acc current_name v rest
-          | _ -> (
-              let acc =
-                match current_name with
-                | None -> acc
-                | Some n -> (n, current_value) :: acc
-              in
-              match String.index_opt line ':' with
-              | None -> loop acc None "" rest
-              | Some idx ->
-                  let name = String.sub line 0 idx |> String.lowercase_ascii in
-                  let value =
-                    String.sub line (idx + 1) (String.length line - idx - 1)
-                    |> String.trim
-                  in
-                  loop acc (Some name) value rest))
-    in
-    loop [] None "" lines
-  in
-  let tbl = Hashtbl.create 16 in
-  let add name value =
-    match Hashtbl.find_opt tbl name with
-    | None -> Hashtbl.add tbl name value
-    | Some existing -> Hashtbl.replace tbl name (existing ^ ", " ^ value)
-  in
-  List.iter (fun (k, v) -> add k v) unfolded;
-  tbl
+open Rag_lib.Html
+open Rag_lib.Body_extract
 
-let header_or_empty (headers : (string, string) Hashtbl.t) (name : string) :
-    string =
-  match Hashtbl.find_opt headers (String.lowercase_ascii name) with
-  | Some v -> v
-  | None -> ""
-
-let is_text_plain (header : Mrmime.Header.t) : bool =
-  let ct = Mrmime.Header.content_type header in
-  let ty = Mrmime.Content_type.ty ct in
-  let subty = Mrmime.Content_type.subty ct |> Mrmime.Content_type.Subtype.to_string in
-  match ty with
-  | `Text -> String.lowercase_ascii subty = "plain"
-  | _ -> false
-
-let extract_text_plain_parts (raw : string) : string =
-  let raw = normalize_newlines_for_parsing raw in
-  let buf = Buffer.create 4096 in
-  let emitters (header : Mrmime.Header.t) =
-    if is_text_plain header then
-      let emitter = function
-        | None -> ()
-        | Some chunk -> Buffer.add_string buf chunk
-      in
-      (emitter, ())
-    else
-      let emitter = function
-        | None -> ()
-        | Some _chunk -> ()
-      in
-      (emitter, ())
-  in
-  match Angstrom.parse_string ~consume:All (Mrmime.Mail.stream emitters) raw with
-  | Ok _ -> Buffer.contents buf
-  | Error _msg -> ""
-
-let python_engine_base = "http://127.0.0.1:8000"
-
-let ollama_base_url =
-  match Sys.getenv_opt "OLLAMA_BASE_URL" with
-  | Some s when String.trim s <> "" -> String.trim s
-  | _ -> "http://127.0.0.1:11434"
-
-let ollama_embed_model =
-  match Sys.getenv_opt "OLLAMA_EMBED_MODEL" with
-  | Some s when String.trim s <> "" -> String.trim s
-  | _ -> "nomic-embed-text"
-
-let ollama_llm_model =
-  match Sys.getenv_opt "OLLAMA_LLM_MODEL" with
-  | Some s when String.trim s <> "" -> String.trim s
-  | _ -> "llama3"
+(* Eio timeout wrapper, initialised at server start once the clock is available.
+   Must be a ref due to the OCaml value restriction. *)
+let global_with_timeout : (float -> (unit -> 'a) -> 'a) ref =
+  ref (fun _seconds fn -> fn ())
 
 let is_ok_status (status : Http.Status.t) : bool =
   let code = Cohttp.Code.code_of_status status in
@@ -497,22 +258,41 @@ let json_headers =
   Http.Header.init_with "content-type" "application/json"
   |> fun h -> Http.Header.add h "connection" "close"
 
-let post_json_uri ~client ~sw ~(uri : Uri.t) ~(body_json : string) : (Http.Response.t * string) =
+let post_json_uri ~client ~sw:_ ~(uri : Uri.t) ~(body_json : string) : (Http.Response.t * string) =
+  Eio.Switch.run @@ fun sw ->
   let body = Cohttp_eio.Body.of_string body_json in
-  let _ = sw in
-  Eio.Switch.run (fun inner_sw ->
-    let resp, resp_body =
-      Cohttp_eio.Client.call client ~sw:inner_sw ~headers:json_headers ~body `POST uri
-    in
-    (resp, read_all resp_body))
+  let resp, resp_body =
+    Cohttp_eio.Client.call client ~sw ~headers:json_headers ~body `POST uri
+  in
+  (resp, read_all resp_body)
 
+let get_uri ~client ~sw:_ ~(uri : Uri.t) : (Http.Response.t * string) =
+  Eio.Switch.run @@ fun sw ->
+  let resp, resp_body =
+    Cohttp_eio.Client.call client ~sw `GET uri
+  in
+  (resp, read_all resp_body)
+
+(*
+  Ollama integration
+
+  - ollama_embed: used during ingestion (embedding chunks) and during retrieval (embedding the query).
+  - ollama_chat: used only for final generation once all evidence has been uploaded.
+
+  Debugging
+  - RAG_DEBUG_OLLAMA_EMBED=1 prints the exact embeddings request JSON.
+  - RAG_DEBUG_OLLAMA_CHAT=1 prints the exact chat request JSON.
+*)
 let ollama_embed ~client ~sw ~(text : string) : (float list, string) result =
   let uri = Uri.of_string (ollama_base_url ^ "/api/embeddings") in
-  let body_json =
+  let body_obj : Yojson.Safe.t =
     `Assoc [ ("model", `String ollama_embed_model); ("prompt", `String text) ]
-    |> Yojson.Safe.to_string
   in
-  let resp, resp_body = post_json_uri ~client ~sw ~uri ~body_json in
+  if rag_debug_ollama_embed then
+    Printf.printf "\n[ollama.embed.request]\n%s\n%!" (Yojson.Safe.pretty_to_string body_obj);
+  let body_json = Yojson.Safe.to_string body_obj in
+  let call () = post_json_uri ~client ~sw ~uri ~body_json in
+  let resp, resp_body = !global_with_timeout ollama_timeout_seconds call in
   if not (is_ok_status (Http.Response.status resp)) then Error resp_body
   else
     try
@@ -537,21 +317,21 @@ let ollama_embed ~client ~sw ~(text : string) : (float list, string) result =
       | _ -> Error "bad embedding response"
     with ex -> Error (Printexc.to_string ex)
 
-let ollama_chat ~client ~sw ~(messages : Yojson.Safe.t list) : (string, string) result =
+let ollama_chat ~client ~sw ?(model = "") ~(messages : Yojson.Safe.t list) () : (string, string) result =
+  let effective_model = if String.trim model <> "" then String.trim model else ollama_llm_model in
   let uri = Uri.of_string (ollama_base_url ^ "/api/chat") in
   let body_obj : Yojson.Safe.t =
     `Assoc
-      [ ("model", `String ollama_llm_model)
+      [ ("model", `String effective_model)
       ; ("messages", `List messages)
       ; ("stream", `Bool false)
       ]
   in
-  (match Sys.getenv_opt "RAG_DEBUG_OLLAMA_CHAT" with
-  | Some v when String.trim v = "1" ->
-      Printf.printf "\n[ollama.chat.request]\n%s\n%!" (Yojson.Safe.pretty_to_string body_obj)
-  | _ -> ());
+  if rag_debug_ollama_chat then
+    Printf.printf "\n[ollama.chat.request]\n%s\n%!" (Yojson.Safe.pretty_to_string body_obj);
   let body_json = Yojson.Safe.to_string body_obj in
-  let resp, resp_body = post_json_uri ~client ~sw ~uri ~body_json in
+  let call () = post_json_uri ~client ~sw ~uri ~body_json in
+  let resp, resp_body = !global_with_timeout ollama_timeout_seconds call in
   if not (is_ok_status (Http.Response.status resp)) then Error resp_body
   else
     try
@@ -567,37 +347,390 @@ let ollama_chat ~client ~sw ~(messages : Yojson.Safe.t list) : (string, string) 
       | _ -> Error "bad chat response"
     with ex -> Error (Printexc.to_string ex)
 
-let l2_normalize (vec : float list) : float list =
-  let s =
-    List.fold_left
-      (fun acc v -> acc +. (v *. v))
-      0.0 vec
-  in
-  if s <= 0.0 then vec
+let summarize_quoted_context ~client ~sw ~(quoted_text : string) : string option =
+  if (not rag_quoted_context_summarize) || String.trim quoted_text = "" then None
   else
-    let inv = 1.0 /. sqrt s in
-    List.map (fun v -> v *. inv) vec
-
-let chunk_text (text : string) : string list =
-  let chunk_size = 1500 in
-  let overlap = 200 in
-  let cleaned = String.trim text in
-  let n = String.length cleaned in
-  let rec loop start acc =
-    if start >= n then List.rev acc
+    let quoted_clean = String.trim quoted_text in
+    if String.length quoted_clean < 40 then None
     else
-      let end_ = min n (start + chunk_size) in
-      let chunk = String.sub cleaned start (end_ - start) |> String.trim in
-      let acc = if chunk = "" then acc else chunk :: acc in
-      if end_ >= n then List.rev acc else loop (max 0 (end_ - overlap)) acc
+    let max_lines = rag_quoted_context_max_lines in
+    let max_input = rag_quoted_context_max_input_chars in
+    let strip_summary_preamble (s : string) : string =
+      let lines = String.split_on_char '\n' s in
+      let is_preamble_line (l : string) : bool =
+        let t = String.trim l in
+        if t = "" then true
+        else
+          let lower = String.lowercase_ascii t in
+          starts_with "here is" lower
+          || starts_with "here's" lower
+          || starts_with "summary" lower
+          || starts_with "summarized quoted" lower
+          || starts_with "quoted context" lower
+      in
+      let rec drop = function
+        | [] -> []
+        | l :: rest -> if is_preamble_line l then drop rest else l :: rest
+      in
+      String.concat "\n" (drop lines)
+    in
+    let summarize_one (text : string) : string option =
+      let input = truncate_chars text ~max_chars:max_input in
+      let system =
+        Printf.sprintf
+          "You are compressing quoted email thread history. Summarize ONLY the quoted context below. Write entirely in the THIRD PERSON — attribute statements to the person who wrote them (e.g. 'John Smith said X', 'Alice replied that Y'). NEVER use first person ('I', 'me', 'my', 'we', 'our'). If the author's name is not clear from the text, use a neutral reference such as 'the sender' or 'one participant'. Preserve concrete facts (names, dates, numbers, decisions, questions). Do not invent. Output plain text only. IMPORTANT: Output MUST start immediately with the first fact line (no preamble such as 'Here is', 'Summary:', 'The quoted context', no title line, no leading colon line). If you add any preamble, the output will be discarded. Maximum %d lines."
+          max_lines
+      in
+      let messages : Yojson.Safe.t list =
+        [ `Assoc [ ("role", `String "system"); ("content", `String system) ]
+        ; `Assoc [ ("role", `String "user"); ("content", `String input) ]
+        ]
+      in
+      match ollama_chat ~client ~sw ~model:ollama_summarize_model ~messages () with
+      | Ok s ->
+          if rag_debug_ollama_chat then Printf.printf "\n[quoted_context.summary.response]\n%s\n%!" s;
+          let s = strip_summary_preamble s |> String.trim in
+          let s = truncate_lines s ~max_lines |> String.trim in
+          let s = truncate_chars s ~max_chars:rag_quoted_context_max_chars |> String.trim in
+          let lower = String.lowercase_ascii s in
+          if s = "" then (
+            Printf.eprintf "[quoted_context.summary.error] empty response from ollama\n%!";
+            Some "[ERROR: quoted-context summary failed: empty response]")
+          else if starts_with "no quoted context" lower || starts_with "no quoted" lower || starts_with "please provide" lower then (
+            Printf.eprintf "[quoted_context.summary.error] ollama claimed no quoted context (unexpected)\n%!";
+            Some "[ERROR: quoted-context summary failed: model claimed no quoted context]" )
+          else Some s
+      | Error err ->
+          let err = String.trim err in
+          let err = if err = "" then "unknown error" else err in
+          let err = truncate_chars err ~max_chars:400 |> String.trim in
+          Printf.eprintf "[quoted_context.summary.error] %s\n%!" err;
+          Some ("[ERROR: quoted-context summary failed: " ^ err ^ "]")
+    in
+    let split_into_chunks text chunk_size =
+      let len = String.length text in
+      let rec loop pos acc =
+        if pos >= len then List.rev acc
+        else
+          let remaining = len - pos in
+          let raw_end = pos + min chunk_size remaining in
+          let chunk_end =
+            if raw_end >= len then len
+            else
+              let last_nl = ref raw_end in
+              let found = ref false in
+              for i = raw_end - 1 downto (max pos (raw_end - 200)) do
+                if (not !found) && String.get text i = '\n' then (
+                  last_nl := i + 1;
+                  found := true)
+              done;
+              if !found then !last_nl else raw_end
+          in
+          let chunk = String.sub text pos (chunk_end - pos) in
+          loop chunk_end (chunk :: acc)
+      in
+      loop 0 []
+    in
+    let rec chunk_and_summarize text depth =
+      if depth > 4 then (
+        Printf.eprintf "[quoted_context.summary.warning] recursion depth limit reached, summarizing truncated\n%!";
+        summarize_one text)
+      else if String.length text <= max_input then
+        summarize_one text
+      else
+        let chunks = split_into_chunks text max_input in
+        let n = List.length chunks in
+        Printf.printf "[quoted_context.summary] depth=%d chunks=%d total_chars=%d\n%!" depth n (String.length text);
+        let summaries = List.filter_map summarize_one chunks in
+        match summaries with
+        | [] -> None
+        | _ ->
+            let combined = String.concat "\n\n" summaries in
+            chunk_and_summarize combined (depth + 1)
+    in
+    chunk_and_summarize quoted_clean 0
+
+(*
+  Email triage via LLM
+
+  At ingestion time, score each email for actionability and importance, and
+  extract a reply-by deadline (if any).  The triage model is configurable
+  via ollama.triage_model in settings.json.  Results are stored in metadata
+  and appended to the embedding text so that vector search can match
+  queries like "urgent emails I need to reply to".
+*)
+type triage_result =
+  { action_score      : int     (* 0–100: does this email require action from me? *)
+  ; importance_score  : int     (* 0–100: how important is this email? *)
+  ; reply_by          : string  (* ISO 8601 date/time or "none" *)
+  }
+
+let triage_email ~client ~sw ~(whoami : string)
+    ~(from_ : string) ~(to_ : string) ~(cc_ : string) ~(bcc_ : string)
+    ~(subject : string) ~(date_ : string) ~(body_text : string)
+    : triage_result option =
+  if String.trim whoami = "" then (
+    Printf.eprintf "[triage] skipped: whoami is empty\n%!";
+    None)
+  else
+  let body_excerpt = truncate_chars body_text ~max_chars:4000 |> String.trim in
+  let system =
+    "You are an email triage assistant. Given information about the recipient and \
+     an email, evaluate three things:\n\n\
+     1. action_score (integer 0-100): How much does this email require an action \
+     or response from the recipient? 0 = purely informational / no action needed, \
+     100 = urgent action required.\n\n\
+     2. importance_score (integer 0-100): How important is this email to the \
+     recipient? 0 = spam/irrelevant, 100 = critical.\n\n\
+     3. reply_by (string, YYYY-MM-DD format): The date by which the recipient \
+     should reply or take action. This is the MOST IMPORTANT field. Rules:\n\
+     - If there is an explicit deadline in the email, use it.\n\
+     - If there is NO explicit deadline but the email still expects a reply or \
+       action, you MUST make a best-effort guess based on:\n\
+       * Urgency cues (\"ASAP\", \"urgent\", exclamation marks, etc.)\n\
+       * Social and professional norms (e.g. a colleague's question → 1-2 \
+         business days; a meeting invite → before the meeting date; a job \
+         application acknowledgment → 1 week)\n\
+       * The email's send date (use it as the reference point for relative \
+         deadlines)\n\
+     - Output \"none\" ONLY if you are confident the email requires NO reply \
+       and NO action at all (e.g. automated notifications, FYI-only messages \
+       where the recipient is in Cc/Bcc, spam, newsletters).\n\
+     - When in doubt, prefer a date over \"none\". The recipient will use this \
+       field to sort and prioritise emails, so a reasonable guess is far more \
+       useful than \"none\".\n\n\
+     Consider:\n\
+     - Whether the recipient's address is in To (direct) vs Cc/Bcc (FYI)\n\
+     - The subject and body content\n\
+     - Any explicit deadlines or urgency cues\n\
+     - The email's Date header as the reference point for relative deadlines\n\n\
+     Respond with ONLY a JSON object, no markdown, no explanation:\n\
+     {\"action_score\": <int>, \"importance_score\": <int>, \"reply_by\": \"YYYY-MM-DD or none\"}"
   in
-  if cleaned = "" then [] else loop 0 []
+  let user_msg =
+    Printf.sprintf
+      "RECIPIENT INFO:\n%s\n\n\
+       EMAIL HEADERS:\n\
+       From: %s\nTo: %s\nCc: %s\nBcc: %s\nSubject: %s\nDate: %s\n\n\
+       BODY:\n%s"
+      whoami from_ to_ cc_ bcc_ subject date_ body_excerpt
+  in
+  let messages : Yojson.Safe.t list =
+    [ `Assoc [ ("role", `String "system"); ("content", `String system) ]
+    ; `Assoc [ ("role", `String "user"); ("content", `String user_msg) ]
+    ]
+  in
+  match ollama_chat ~client ~sw ~model:ollama_triage_model ~messages () with
+  | Ok raw_resp ->
+      if rag_debug_ollama_chat then Printf.printf "\n[triage.response]\n%s\n%!" raw_resp;
+      (* Strip markdown code fences if the model wraps its JSON *)
+      let trimmed =
+        let s = String.trim raw_resp in
+        let s = if starts_with "```json" s then
+          let after = String.sub s 7 (String.length s - 7) in
+          if ends_with "```" after then String.sub after 0 (String.length after - 3) else after
+        else if starts_with "```" s then
+          let after = String.sub s 3 (String.length s - 3) in
+          if ends_with "```" after then String.sub after 0 (String.length after - 3) else after
+        else s
+        in String.trim s
+      in
+      (try
+        let json = Yojson.Safe.from_string trimmed in
+        let get_int key = match json with
+          | `Assoc kv -> (match List.assoc_opt key kv with
+              | Some (`Int n) -> n
+              | Some (`Float f) -> int_of_float f
+              | Some (`String s) -> (try int_of_string (String.trim s) with _ -> -1)
+              | _ -> -1)
+          | _ -> -1
+        in
+        let get_str key = match json with
+          | `Assoc kv -> (match List.assoc_opt key kv with
+              | Some (`String s) -> String.trim s
+              | _ -> "none")
+          | _ -> "none"
+        in
+        let action = max 0 (min 100 (get_int "action_score")) in
+        let importance = max 0 (min 100 (get_int "importance_score")) in
+        let reply_by = get_str "reply_by" in
+        Printf.printf "[triage] action=%d importance=%d reply_by=%s\n%!" action importance reply_by;
+        Some { action_score = action; importance_score = importance; reply_by }
+      with ex ->
+        Printf.eprintf "[triage.parse_error] %s — raw: %s\n%!" (Printexc.to_string ex)
+          (truncate_chars raw_resp ~max_chars:200 |> String.trim);
+        None)
+  | Error err ->
+      Printf.eprintf "[triage.error] %s\n%!" (truncate_chars err ~max_chars:400 |> String.trim);
+      None
+
+(*
+  Attachment extraction and summarization
+
+  Attachments are extracted from MIME leaf parts, decoded (base64/QP),
+  converted to text (pdftotext, pandoc, or strip_html), and optionally
+  summarized by Ollama.  Results are stored as JSON in metadata and
+  rendered into the index string as ATTACHMENTS (summaries).
+*)
+let run_shell_capture_stdout (cmd : string) : string option =
+  try
+    let ic = Unix.open_process_in cmd in
+    let buf = Buffer.create 4096 in
+    (try
+       while true do
+         let line = input_line ic in
+         Buffer.add_string buf line;
+         Buffer.add_char buf '\n'
+       done
+     with End_of_file -> ());
+    match Unix.close_process_in ic with
+    | Unix.WEXITED 0 -> Some (Buffer.contents buf)
+    | _ -> None
+  with _ -> None
+
+let decode_part_body (headers : (string, string) Hashtbl.t) (body : string) : string option =
+  let cte = String.lowercase_ascii (header_or_empty headers "content-transfer-encoding") |> String.trim in
+  let raw = body |> String.trim in
+  if raw = "" then None
+  else if cte = "base64" then decode_base64 raw
+  else if cte = "quoted-printable" then Some (decode_quoted_printable raw)
+  else Some raw
+
+let attachment_text_of_part ~(filename : string) ~(content_type : string) ~(decoded : string) : string option =
+  let ct_lower = String.lowercase_ascii (String.trim content_type) in
+  let decoded =
+    if String.length decoded > rag_attachment_max_bytes then String.sub decoded 0 rag_attachment_max_bytes
+    else decoded
+  in
+  if starts_with "text/plain" ct_lower then Some (sanitize_utf8 decoded |> String.trim)
+  else if starts_with "text/html" ct_lower then Some (strip_html decoded |> sanitize_utf8 |> String.trim)
+  else if rag_attachment_use_pdftotext && (ends_with ".pdf" (String.lowercase_ascii filename) || starts_with "application/pdf" ct_lower)
+  then (
+    try
+      let tmp = Filename.temp_file "rag_att_" ".pdf" in
+      let oc = open_out_bin tmp in
+      output_string oc decoded;
+      close_out oc;
+      let cmd = "pdftotext -layout " ^ Filename.quote tmp ^ " -" in
+      let out = run_shell_capture_stdout cmd in
+      (try Sys.remove tmp with _ -> ());
+      Option.map (fun s -> sanitize_utf8 s |> String.trim) out
+    with _ -> None)
+  else if rag_attachment_use_pandoc && (
+    ends_with ".docx" (String.lowercase_ascii filename)
+    || ends_with ".md" (String.lowercase_ascii filename)
+    || ends_with ".rtf" (String.lowercase_ascii filename)
+    || ends_with ".html" (String.lowercase_ascii filename)
+  ) then (
+    try
+      let tmp = Filename.temp_file "rag_att_" "" in
+      let oc = open_out_bin tmp in
+      output_string oc decoded;
+      close_out oc;
+      let cmd = "pandoc -t plain --wrap=none " ^ Filename.quote tmp in
+      let out = run_shell_capture_stdout cmd in
+      (try Sys.remove tmp with _ -> ());
+      Option.map (fun s -> sanitize_utf8 s |> String.trim) out
+    with _ -> None)
+  else None
+
+let summarize_attachment ~client ~sw ~(filename : string) ~(text : string) : string option =
+  if (not rag_attachment_summarize) || String.trim text = "" then None
+  else
+    let input = truncate_chars text ~max_chars:rag_attachment_max_input_chars in
+    let system =
+      Printf.sprintf
+        "You are summarizing an email attachment for retrieval and question answering. Do not invent. Preserve key facts, numbers, dates, names, decisions, and action items. Output plain text only, no greeting. Keep under %d characters."
+        rag_attachment_max_chars
+    in
+    let messages : Yojson.Safe.t list =
+      [ `Assoc [ ("role", `String "system"); ("content", `String system) ]
+      ; `Assoc
+          [ ("role", `String "user")
+          ; ("content", `String (Printf.sprintf "Filename: %s\n\n%s" filename input))
+          ]
+      ]
+    in
+    match ollama_chat ~client ~sw ~model:ollama_summarize_model ~messages () with
+    | Ok s ->
+        let s = String.trim s |> truncate_chars ~max_chars:rag_attachment_max_chars |> String.trim in
+        if s = "" then None else Some s
+    | Error _ -> None
+
+let attachment_summaries_of_raw ~client ~sw ~(raw : string) : Yojson.Safe.t list =
+  let parts = collect_mime_leaf_parts raw in
+  let items =
+    parts
+    |> List.filter_map (fun p ->
+           if not (is_attachment_part p.headers) then None
+           else
+             let filename =
+               match filename_of_part_headers p.headers with
+               | Some s -> s
+               | None -> "attachment"
+             in
+             let ct = header_or_empty p.headers "content-type" in
+             match decode_part_body p.headers p.body with
+             | None -> None
+             | Some decoded -> (
+                 match attachment_text_of_part ~filename ~content_type:ct ~decoded with
+                 | None -> None
+                 | Some text ->
+                     let text = String.trim text in
+                     if text = "" then None
+                     else
+                       match summarize_attachment ~client ~sw ~filename ~text with
+                       | None -> None
+                       | Some summary ->
+                           Some
+                             (`Assoc
+                               [ ("filename", `String (sanitize_utf8 filename))
+                               ; ("summary", `String (sanitize_utf8 summary))
+                               ])))
+  in
+  if List.length items > rag_attachment_max_attachments then take rag_attachment_max_attachments items
+  else items
+
+let format_attachment_summaries_for_text (summaries : Yojson.Safe.t list) : string =
+  let lines =
+    summaries
+    |> List.filter_map (function
+         | `Assoc kv ->
+             let fn =
+               match List.assoc_opt "filename" kv with
+               | Some (`String s) -> String.trim s
+               | _ -> ""
+             in
+             let sm =
+               match List.assoc_opt "summary" kv with
+               | Some (`String s) -> String.trim s
+               | _ -> ""
+             in
+             if fn = "" || sm = "" then None else Some (Printf.sprintf "- %s\n%s" fn sm)
+         | _ -> None)
+  in
+  if lines = [] then "" else "ATTACHMENTS (summaries):\n" ^ String.concat "\n\n" lines
+
+let debug_retrieval_enabled () : bool =
+  rag_debug_retrieval
 
 type chat_message =
   { role : string
   ; content : string
+  ; cited_recap : string
   }
 
+(*
+  Session state
+
+  Each session_id maps to a session_state holding:
+  - tail: the most recent user/assistant turns (kept short to limit prompt growth)
+  - history_summary: rolling summary of older conversation
+  - sources_summary: rolling summary of sources discussed
+  - last_sources_recap: a recap of the sources used in the previous answer
+
+  The goal is continuity without repeatedly sending entire historical evidence.
+*)
 type session_state =
   { mu : Eio.Mutex.t
   ; mutable history_summary : string
@@ -606,8 +739,24 @@ type session_state =
   ; mutable last_sources_recap : string
   }
 
+type pending_query =
+  { mu : Eio.Mutex.t
+  ; session_id : string
+  ; question : string
+  ; message_ids : string list
+  ; sources_json : Yojson.Safe.t
+  ; evidence_by_id : (string, string) Hashtbl.t
+  }
+
 let session_tbl : (string, session_state) Hashtbl.t = Hashtbl.create 64
 let session_tbl_mu : Eio.Mutex.t = Eio.Mutex.create ()
+
+let pending_tbl : (string, pending_query) Hashtbl.t = Hashtbl.create 64
+let pending_tbl_mu : Eio.Mutex.t = Eio.Mutex.create ()
+
+let fresh_request_id (session_id : string) (question : string) : string =
+  Digest.to_hex
+    (Digest.string (session_id ^ "|" ^ question ^ "|" ^ string_of_float (Unix.gettimeofday ())))
 
 let get_or_create_session (session_id : string) : session_state =
   Eio.Mutex.use_rw ~protect:true session_tbl_mu (fun () ->
@@ -642,117 +791,236 @@ let render_messages (msgs : chat_message list) : string =
          Printf.sprintf "%s: %s" label (String.trim m.content))
   |> String.concat "\n"
 
-let take (n : int) (xs : 'a list) : 'a list =
-  let rec loop k acc = function
-    | [] -> List.rev acc
-    | _ when k <= 0 -> List.rev acc
-    | y :: ys -> loop (k - 1) (y :: acc) ys
+(*
+  Sources recap and session summarization
+
+  The UI and the final generation prompt benefit from having a compact recap of
+  what sources were used recently.
+
+  Two representations exist:
+  - sources_json: structured JSON from python-engine /query_embedded
+  - sources recap text: compact, stable, human-readable lines like
+    [Email N] doc_id=... from=... subject=... date=...
+
+  The recap text is also used to build/update session fields:
+  - sources_summary: rolling summary of sources discussed across the session
+  - last_sources_recap: recap of the sources used in the most recent answer
+*)
+let format_source_recap_lines (xs : Yojson.Safe.t list) : string =
+  let xs = if List.length xs > 12 then take 12 xs else xs in
+  let get_field name = function
+    | `Assoc kv -> List.assoc_opt name kv
+    | _ -> None
   in
-  if n <= 0 then [] else loop n [] xs
-
-let take_last (n : int) (xs : 'a list) : 'a list =
-  if n <= 0 then []
-  else
-    let len = List.length xs in
-    let drop = len - n in
-    let rec loop i = function
-      | [] -> []
-      | y :: ys -> if i <= 0 then y :: ys else loop (i - 1) ys
-    in
-    if drop <= 0 then xs else loop drop xs
-
-let drop_last (n : int) (xs : 'a list) : 'a list =
-  if n <= 0 then xs
-  else
-    let len = List.length xs in
-    let keep = len - n in
-    let rec loop i = function
-      | [] -> []
-      | y :: ys -> if i <= 0 then [] else y :: loop (i - 1) ys
-    in
-    if keep <= 0 then [] else loop keep xs
+  let get_md_str md key =
+    match get_field key md with
+    | Some (`String s) -> String.trim s
+    | _ -> ""
+  in
+  xs
+  |> List.mapi (fun i v ->
+         let doc_id = match get_field "doc_id" v with Some (`String s) -> s | _ -> "" in
+         let md = match get_field "metadata" v with Some m -> m | _ -> `Assoc [] in
+         let from_ = get_md_str md "from" in
+         let subject = get_md_str md "subject" in
+         let date_ = get_md_str md "date" in
+         let atts =
+           match get_field "attachments" md with
+           | Some (`List ys) ->
+               ys
+               |> List.filter_map (function
+                    | `String s when String.trim s <> "" -> Some (String.trim s)
+                    | _ -> None)
+               |> String.concat ", "
+           | _ -> ""
+         in
+         let att_part = if atts = "" then "" else Printf.sprintf " attachments=%s" atts in
+         Printf.sprintf "[Email %d] doc_id=%s from=%s subject=%s date=%s%s"
+           (i + 1) doc_id from_ subject date_ att_part)
+  |> String.concat "\n"
 
 let sources_recap_of_query_response (resp_body : string) : string option =
   try
     let json = Yojson.Safe.from_string resp_body in
-    let assoc =
-      match json with
-      | `Assoc kv -> kv
-      | _ -> []
-    in
-    match List.assoc_opt "sources" assoc with
-    | Some (`List xs) ->
-        let xs = if List.length xs > 12 then take 12 xs else xs in
-        let lines =
-          xs
-          |> List.mapi (fun i v ->
-                 let get_field name =
-                   match v with
-                   | `Assoc kv -> List.assoc_opt name kv
-                   | _ -> None
-                 in
-                 let doc_id =
-                   match get_field "doc_id" with
-                   | Some (`String s) -> s
-                   | _ -> ""
-                 in
-                 let md =
-                   match get_field "metadata" with
-                   | Some (`Assoc kv) -> kv
-                   | _ -> []
-                 in
-                 let get_md_str key =
-                   match List.assoc_opt key md with
-                   | Some (`String s) -> String.trim s
-                   | _ -> ""
-                 in
-                 let from_ = get_md_str "from" in
-                 let subject = get_md_str "subject" in
-                 let date_ = get_md_str "date" in
-                 let atts =
-                   match List.assoc_opt "attachments" md with
-                   | Some (`List ys) ->
-                       ys
-                       |> List.filter_map (function
-                            | `String s when String.trim s <> "" -> Some (String.trim s)
-                            | _ -> None)
-                       |> String.concat ", "
-                   | _ -> ""
-                 in
-                 let att_part = if atts = "" then "" else Printf.sprintf " attachments=%s" atts in
-                 Printf.sprintf
-                   "[Source %d] doc_id=%s from=%s subject=%s date=%s%s"
-                   (i + 1) doc_id from_ subject date_ att_part)
-        in
-        Some (String.concat "\n" lines)
+    match json with
+    | `Assoc kv -> (
+        match List.assoc_opt "sources" kv with
+        | Some (`List xs) -> Some (format_source_recap_lines xs)
+        | _ -> Some "")
     | _ -> Some ""
   with _ -> None
 
-let answer_of_query_response (resp_body : string) : string option =
-  try
-    let json = Yojson.Safe.from_string resp_body in
-    match json with
-    | `Assoc kv -> (
-        match List.assoc_opt "answer" kv with
-        | Some (`String s) -> Some s
-        | _ -> None)
-    | _ -> None
-  with _ -> None
+(* Extract cited [Email N] indices from LLM answer, renumber sequentially,
+   and build a cited-only recap.  Returns (renumbered_answer, cited_recap).
+   Uses a simple character-level scan (no external regex library needed). *)
+let renumber_cited_sources ~(answer : string) ~(sources_json : Yojson.Safe.t) : (string * string) =
+  let sources_list = match sources_json with `List xs -> xs | _ -> [] in
+  let n_sources = List.length sources_list in
+  let prefix = "[Email " in
+  let plen = String.length prefix in
+  (* Scan for all [Email N] occurrences, return list of (start, end_, orig_1based). *)
+  let find_citations text =
+    let len = String.length text in
+    let results = ref [] in
+    let i = ref 0 in
+    while !i <= len - plen - 2 do (* at least "[Email N]" = plen + 1 digit + 1 bracket *)
+      if String.sub text !i plen = prefix then (
+        let j = ref (!i + plen) in
+        while !j < len && text.[!j] >= '0' && text.[!j] <= '9' do incr j done;
+        if !j > !i + plen && !j < len && text.[!j] = ']' then (
+          let num_str = String.sub text (!i + plen) (!j - !i - plen) in
+          (try
+             let n = int_of_string num_str in
+             results := (!i, !j + 1, n) :: !results
+           with _ -> ());
+          i := !j + 1)
+        else i := !i + 1)
+      else i := !i + 1
+    done;
+    List.rev !results
+  in
+  let citations = find_citations answer in
+  (* Collect unique cited 0-based indices in order of first appearance. *)
+  let cited_indices = ref [] in
+  let seen = Hashtbl.create 16 in
+  List.iter (fun (_start, _end, orig_n) ->
+    let idx = orig_n - 1 in
+    if idx >= 0 && idx < n_sources && not (Hashtbl.mem seen idx) then (
+      Hashtbl.replace seen idx (List.length !cited_indices + 1);
+      cited_indices := idx :: !cited_indices)
+  ) citations;
+  let cited_indices = List.rev !cited_indices in
+  (* Renumber [Email N] in the answer text. *)
+  let buf = Buffer.create (String.length answer) in
+  let last = ref 0 in
+  List.iter (fun (start, end_, orig_n) ->
+    let idx = orig_n - 1 in
+    Buffer.add_string buf (String.sub answer !last (start - !last));
+    (match Hashtbl.find_opt seen idx with
+     | Some new_n -> Buffer.add_string buf (Printf.sprintf "[Email %d]" new_n)
+     | None -> Buffer.add_string buf (String.sub answer start (end_ - start)));
+    last := end_
+  ) citations;
+  Buffer.add_string buf (String.sub answer !last (String.length answer - !last));
+  let renumbered = Buffer.contents buf in
+  (* Build cited-only recap with renumbered labels. *)
+  let get_field name = function `Assoc kv -> List.assoc_opt name kv | _ -> None in
+  let get_md_str md key = match get_field key md with Some (`String s) -> String.trim s | _ -> "" in
+  let recap_lines =
+    List.mapi (fun new_i orig_idx ->
+      let v = List.nth sources_list orig_idx in
+      let doc_id = match get_field "doc_id" v with Some (`String s) -> s | _ -> "" in
+      let md = match get_field "metadata" v with Some m -> m | _ -> `Assoc [] in
+      let from_ = get_md_str md "from" in
+      let subject = get_md_str md "subject" in
+      let date_ = get_md_str md "date" in
+      Printf.sprintf "[Email %d] doc_id=%s from=%s subject=%s date=%s" (new_i + 1) doc_id from_ subject date_
+    ) cited_indices
+  in
+  let recap = String.concat "\n" recap_lines in
+  (renumbered, recap)
 
+(* Replace [Email N] citations with inline "(email from X re: Y)" using the
+   cited_recap lines stored with the message.  Each recap line has the form:
+   [Email N] doc_id=... from=... subject=... date=...
+   We parse from= and subject= to build a short inline reference. *)
+let resolve_citations_inline ~(text : string) ~(recap : string) : string =
+  if String.trim recap = "" then text
+  else
+    (* Build a map: 1-based number → "(email from X re: Y)" *)
+    let map = Hashtbl.create 16 in
+    String.split_on_char '\n' recap
+    |> List.iter (fun line ->
+      let line = String.trim line in
+      (* Parse [Email N] *)
+      let prefix = "[Email " in
+      let plen = String.length prefix in
+      if String.length line > plen && String.sub line 0 plen = prefix then
+        let j = ref plen in
+        while !j < String.length line && line.[!j] >= '0' && line.[!j] <= '9' do incr j done;
+        if !j > plen && !j < String.length line && line.[!j] = ']' then (
+          let n = try int_of_string (String.sub line plen (!j - plen)) with _ -> -1 in
+          if n > 0 then
+            let rest = String.sub line (!j + 1) (String.length line - !j - 1) in
+            let find_field key =
+              let pat = key ^ "=" in
+              match String.split_on_char ' ' (String.trim rest) with
+              | _ ->
+                  (* Simple scan for key=value *)
+                  let parts = String.split_on_char ' ' (String.trim rest) in
+                  let rec find = function
+                    | [] -> ""
+                    | p :: _ when String.length p > String.length pat
+                                  && String.sub p 0 (String.length pat) = pat ->
+                        String.sub p (String.length pat) (String.length p - String.length pat)
+                    | _ :: ps -> find ps
+                  in
+                  find parts
+            in
+            let from_ = find_field "from" in
+            let subject = find_field "subject" in
+            let label =
+              match (from_, subject) with
+              | "", "" -> "(cited email)"
+              | f, "" -> Printf.sprintf "(email from %s)" f
+              | "", s -> Printf.sprintf "(email re: %s)" s
+              | f, s -> Printf.sprintf "(email from %s re: %s)" f s
+            in
+            Hashtbl.replace map n label));
+    (* Now replace [Email N] in the text *)
+    let prefix = "[Email " in
+    let plen = String.length prefix in
+    let len = String.length text in
+    let buf = Buffer.create len in
+    let i = ref 0 in
+    while !i <= len - plen - 2 do
+      if String.sub text !i plen = prefix then (
+        let j = ref (!i + plen) in
+        while !j < len && text.[!j] >= '0' && text.[!j] <= '9' do incr j done;
+        if !j > !i + plen && !j < len && text.[!j] = ']' then (
+          let n = try int_of_string (String.sub text (!i + plen) (!j - !i - plen)) with _ -> -1 in
+          match Hashtbl.find_opt map n with
+          | Some label ->
+              Buffer.add_string buf label;
+              i := !j + 1
+          | None ->
+              Buffer.add_char buf text.[!i];
+              incr i)
+        else (
+          Buffer.add_char buf text.[!i];
+          incr i))
+      else (
+        Buffer.add_char buf text.[!i];
+        incr i)
+    done;
+    while !i < len do
+      Buffer.add_char buf text.[!i];
+      incr i
+    done;
+    Buffer.contents buf
+
+(*
+  Summarization via Ollama
+
+  This is a secondary use of the LLM, separate from final answer generation.
+  It produces:
+  - history summaries (older turns) to control prompt growth
+  - sources summaries (older sources recaps) to preserve continuity
+*)
 let call_ollama_summarize ~client ~sw ~(kind : string) ~(text : string) ~(target_chars : int)
     : string option =
   let instr =
     if kind = "sources" then
       "Summarize the following sources recap so it can be used as context for follow-up questions. Preserve any doc_id/message_id, dates, subjects, senders, and attachment filenames. Do not invent sources."
     else
-      "Summarize the following conversation so it can be used as context for a future assistant reply. Preserve user preferences, decisions, constraints, open questions, and any specific identifiers. Do not invent facts."
+      "Summarize the following conversation so it can be used as context for a future assistant reply. Preserve user preferences, decisions, constraints, open questions, and any specific identifiers. Replace any [Email N] citation references with the actual email subject and sender so the summary is self-contained. Do not invent facts."
   in
   let messages =
     [ `Assoc [ ("role", `String "system"); ("content", `String (instr ^ Printf.sprintf " Target length: at most %d characters. Output plain text." target_chars)) ]
     ; `Assoc [ ("role", `String "user"); ("content", `String text) ]
     ]
   in
-  match ollama_chat ~client ~sw ~messages with
+  match ollama_chat ~client ~sw ~messages () with
   | Ok s -> Some (trim_to_max (String.trim s) target_chars)
   | Error _ -> None
 
@@ -792,75 +1060,42 @@ let maybe_summarize_session ~client ~sw (s : session_state) : unit =
     | None -> ()
 
 let sources_recap_of_sources_json (sources_json : Yojson.Safe.t) : string =
-  let xs =
-    match sources_json with
-    | `List ys -> if List.length ys > 12 then take 12 ys else ys
-    | _ -> []
-  in
-  let get_assoc_field name = function
-    | `Assoc kv -> List.assoc_opt name kv
-    | _ -> None
-  in
-  let get_md_str md key =
-    match md with
-    | `Assoc kv -> (
-        match List.assoc_opt key kv with
-        | Some (`String s) -> String.trim s
-        | _ -> "")
-    | _ -> ""
-  in
-  let lines =
-    xs
-    |> List.mapi (fun i v ->
-           let doc_id =
-             match get_assoc_field "doc_id" v with
-             | Some (`String s) -> s
-             | _ -> ""
-           in
-           let md =
-             match get_assoc_field "metadata" v with
-             | Some m -> m
-             | _ -> `Assoc []
-           in
-           let from_ = get_md_str md "from" in
-           let subject = get_md_str md "subject" in
-           let date_ = get_md_str md "date" in
-           let atts =
-             match md with
-             | `Assoc kv -> (
-                 match List.assoc_opt "attachments" kv with
-                 | Some (`List ys) ->
-                     ys
-                     |> List.filter_map (function
-                          | `String s when String.trim s <> "" -> Some (String.trim s)
-                          | _ -> None)
-                     |> String.concat ", "
-                 | _ -> "")
-             | _ -> ""
-           in
-           let att_part = if atts = "" then "" else Printf.sprintf " attachments=%s" atts in
-           Printf.sprintf
-             "[Source %d] doc_id=%s from=%s subject=%s date=%s%s"
-             (i + 1) doc_id from_ subject date_ att_part)
-  in
-  String.concat "\n" lines
+  match sources_json with
+  | `List ys -> format_source_recap_lines ys
+  | _ -> ""
 
+(*
+  python-engine boundary
+
+  The python-engine owns the vector index + metadata store. This function is the
+  single place where the OCaml server calls into it.
+  - /ingest_embedded: store embeddings + metadata keyed by doc_id
+  - /query_embedded: retrieve a ranked list of doc_ids (plus metadata)
+  - /admin/reset, /admin/delete: maintenance
+*)
 let forward_json ~client ~sw ~(path : string) ~(body_json : string) : (Http.Response.t * string)
     =
   let uri = Uri.of_string (python_engine_base ^ path) in
   let body = Cohttp_eio.Body.of_string body_json in
-  let _ = sw in
-  Eio.Switch.run (fun inner_sw ->
-    let resp, resp_body =
-      Cohttp_eio.Client.call client ~sw:inner_sw ~headers:json_headers ~body `POST uri
-    in
-    (resp, read_all resp_body))
+  let resp, resp_body =
+    Cohttp_eio.Client.call client ~sw ~headers:json_headers ~body `POST uri
+  in
+  (resp, read_all resp_body)
 
 let request_header_or_empty (request : Http.Request.t) (name : string) : string =
   match Http.Header.get (Http.Request.headers request) name with
   | Some v -> v
   | None -> ""
 
+(*
+  Document identity
+
+  doc_id is the stable key under which a message is stored in the index.
+  Resolution order:
+  1. RFC822 Message-Id header (preferred, matches Thunderbird's header)
+  2. X-Thunderbird-Message-Id HTTP header (set by the add-on at /ingest time)
+  3. SHA-256 digest of the raw body (fallback for headerless messages)
+*)
 let doc_id_of_raw (parsed_headers : (string, string) Hashtbl.t) (raw : string) : string =
   let from_rfc822 = header_or_empty parsed_headers "message-id" in
   if from_rfc822 <> "" then from_rfc822 else Digest.to_hex (Digest.string raw)
@@ -873,8 +1108,20 @@ let doc_id_of_ingest (request : Http.Request.t) (parsed_headers : (string, strin
     let from_request = request_header_or_empty request "x-thunderbird-message-id" in
     if from_request <> "" then from_request else Digest.to_hex (Digest.string raw)
 
-let make_ingest_json ~doc_id ~(headers : (string, string) Hashtbl.t) ~(raw : string)
-    ~(body_text : string) : string =
+(*
+  Ingestion payload
+
+  make_ingest_json constructs the JSON payload sent to the python-engine.
+  It includes:
+  - id/doc_id: the Thunderbird message-id (preferred) or a stable hash fallback
+  - metadata: lightweight fields used for UI display and prompt construction
+  - text: the concatenation of headers + normalized body text, which is chunked
+    and embedded.
+*)
+let make_ingest_data ~doc_id ~(headers : (string, string) Hashtbl.t) ~(raw : string)
+    ~(body_text : string)
+    ~(triage : triage_result option)
+    : (string * Yojson.Safe.t) =
   let from_ = header_or_empty headers "from" |> decode_rfc2047 |> sanitize_utf8 in
   let to_ = header_or_empty headers "to" |> decode_rfc2047 |> sanitize_utf8 in
   let cc_ = header_or_empty headers "cc" |> decode_rfc2047 |> sanitize_utf8 in
@@ -886,72 +1133,158 @@ let make_ingest_json ~doc_id ~(headers : (string, string) Hashtbl.t) ~(raw : str
 
   let metadata_json =
     `Assoc
-      [ ("from", `String from_)
-      ; ("to", `String to_)
-      ; ("cc", `String cc_)
-      ; ("bcc", `String bcc_)
-      ; ("subject", `String subject)
-      ; ("date", `String date_)
-      ; ("attachments", `List (List.map (fun f -> `String f) attachments))
-      ; ("message_id", `String doc_id)
-      ]
+      (([ ("from", `String from_)
+        ; ("to", `String to_)
+        ; ("cc", `String cc_)
+        ; ("bcc", `String bcc_)
+        ; ("subject", `String subject)
+        ; ("date", `String date_)
+        ; ("attachments", `List (List.map (fun f -> `String f) attachments))
+        ; ("message_id", `String doc_id)
+        ]
+       @ (match triage with
+          | Some t ->
+              [ ("action_score", `Int t.action_score)
+              ; ("importance_score", `Int t.importance_score)
+              ; ("reply_by", `String t.reply_by)
+              ]
+          | None -> [])
+       @ [ ("processed", `Bool false)
+         ; ("ingested_at", `String (now_utc_iso8601 ()))
+         ]
+       ) : (string * Yojson.Safe.t) list)
   in
   let attachments_line =
     if attachments = [] then "" else Printf.sprintf "\nAttachments: %s" (String.concat ", " attachments)
   in
+  let triage_line =
+    match triage with
+    | Some t ->
+        Printf.sprintf "\nTRIAGE: action_required=%d/100 importance=%d/100 reply_by=%s"
+          t.action_score t.importance_score t.reply_by
+    | None -> ""
+  in
   let text_for_index =
     Printf.sprintf
-      "From: %s\nTo: %s\nCc: %s\nBcc: %s\nSubject: %s\nDate: %s%s\nMessage-Id: %s\n\n%s"
-      from_ to_ cc_ bcc_ subject date_ attachments_line doc_id body_text
+      "From: %s\nTo: %s\nCc: %s\nBcc: %s\nSubject: %s\nDate: %s%s%s\n\n%s"
+      from_ to_ cc_ bcc_ subject date_ attachments_line triage_line body_text
   in
-  `Assoc
-    [ ("id", `String doc_id)
-    ; ("text", `String text_for_index)
-    ; ("metadata", metadata_json)
-    ]
-  |> Yojson.Safe.to_string
+  (text_for_index, metadata_json)
 
-let forward_ingest_raw ~client ~sw ~log ~(doc_id : string) ~(headers : (string, string) Hashtbl.t)
-    ~(raw : string) : (Http.Response.t * string) =
-  let from_ = header_or_empty headers "from" in
-  let to_ = header_or_empty headers "to" in
-  let cc_ = header_or_empty headers "cc" in
-  let bcc_ = header_or_empty headers "bcc" in
-  let subject = header_or_empty headers "subject" in
-  let body_text = extract_text_plain_parts raw in
+(*
+  ingest_text_of_raw is a small helper used in the 2-phase query flow.
 
-  if log then (
-    Printf.printf "From: %s\n" from_;
-    Printf.printf "To: %s\n" to_;
-    Printf.printf "Cc: %s\n" cc_;
-    Printf.printf "Bcc: %s\n" bcc_;
-    Printf.printf "Title: %s\n" subject;
-    Printf.printf "Id: %s\n" doc_id;
-    Printf.printf "Body:\n%s\n" body_text;
-    flush stdout);
+  It rebuilds the same "text_for_index"/metadata representation used at ingestion,
+  but is called at /query/complete time so we can:
+  - build SOURCES INDEX entries (date/from/subject), and
+  - regenerate evidence text consistently with ingestion-time normalization.
+*)
+let ingest_text_of_raw ~(doc_id : string) ~(raw : string) : (string * Yojson.Safe.t) =
+  let headers = parse_headers raw in
+  let parts = extract_body_parts raw in
+  let new_body = String.trim parts.new_text |> sanitize_utf8 in
+  let quoted_raw = String.trim parts.quoted_text |> sanitize_utf8 in
+  let quoted_capped =
+    if String.trim quoted_raw = "" then ""
+    else
+      truncate_lines quoted_raw ~max_lines:rag_quoted_context_max_lines
+      |> truncate_chars ~max_chars:rag_quoted_context_max_input_chars
+      |> String.trim
+  in
+  let body_text =
+    let parts = List.filter (fun s -> s <> "")
+      [ (if quoted_capped = "" then "" else "QUOTED CONTEXT:\n" ^ quoted_capped)
+      ; "NEW CONTENT:\n" ^ new_body
+      ]
+    in
+    String.concat "\n\n" parts
+  in
+  make_ingest_data ~doc_id ~headers ~raw ~body_text ~triage:None
 
-  let ingest_json = make_ingest_json ~doc_id ~headers ~raw ~body_text in
-  let index_text =
-    try
-      let json = Yojson.Safe.from_string ingest_json in
-      match json with
-      | `Assoc kv -> (
-          match List.assoc_opt "text" kv with
-          | Some (`String s) -> s
-          | _ -> "")
+(*
+  forward_ingest_raw
+
+  Full ingestion pipeline for a single raw RFC822 message:
+  - extract normalized body text
+  - build a single index string including selected headers
+  - chunk + embed each chunk (Ollama /api/embeddings)
+  - send embeddings + metadata to python-engine /ingest_embedded
+*)
+let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
+    ~(headers : (string, string) Hashtbl.t) ~(raw : string) : (Http.Response.t * string) =
+  let from_ = header_or_empty headers "from" |> decode_rfc2047 |> sanitize_utf8 in
+  let to_ = header_or_empty headers "to" |> decode_rfc2047 |> sanitize_utf8 in
+  let cc_ = header_or_empty headers "cc" |> decode_rfc2047 |> sanitize_utf8 in
+  let bcc_ = header_or_empty headers "bcc" |> decode_rfc2047 |> sanitize_utf8 in
+  let subject = header_or_empty headers "subject" |> decode_rfc2047 |> sanitize_utf8 in
+  let date_ = header_or_empty headers "date" |> decode_rfc2047 |> sanitize_utf8 in
+  let parts = extract_body_parts raw in
+  let new_body = String.trim parts.new_text |> sanitize_utf8 in
+  let quoted_raw = String.trim parts.quoted_text |> sanitize_utf8 in
+  let attachment_summaries = attachment_summaries_of_raw ~client ~sw ~raw in
+  let attachments_section = format_attachment_summaries_for_text attachment_summaries in
+  let quoted_capped_untrimmed =
+    if String.trim quoted_raw = "" then ""
+    else
+      truncate_lines quoted_raw ~max_lines:rag_quoted_context_max_lines
+      |> truncate_chars ~max_chars:rag_quoted_context_max_input_chars
+  in
+  let quoted_capped = String.trim quoted_capped_untrimmed in
+  let overflow_start = String.length quoted_capped_untrimmed in
+  let has_overflow = overflow_start < String.length quoted_raw in
+  let overflow =
+    if has_overflow then
+      String.sub quoted_raw overflow_start (String.length quoted_raw - overflow_start) |> String.trim
+    else ""
+  in
+  let overflow_summary =
+    if overflow = "" then None
+    else summarize_quoted_context ~client ~sw ~quoted_text:overflow
+  in
+  let body_text =
+    let qs =
+      match overflow_summary with
+      | Some s when String.trim s <> "" -> "QUOTED CONTEXT (older, summarized):\n" ^ String.trim s
       | _ -> ""
-    with _ -> ""
+    in
+    let qc =
+      if quoted_capped = "" then ""
+      else if has_overflow then "QUOTED CONTEXT (recent):\n" ^ quoted_capped
+      else "QUOTED CONTEXT:\n" ^ quoted_capped
+    in
+    let att = if attachments_section = "" then "" else attachments_section in
+    let parts = List.filter (fun s -> s <> "") [qs; qc; att; "NEW CONTENT:\n" ^ new_body] in
+    String.concat "\n\n" parts
   in
-  let metadata_json =
-    try
-      let json = Yojson.Safe.from_string ingest_json in
-      match json with
-      | `Assoc kv -> (
-          match List.assoc_opt "metadata" kv with
-          | Some m -> m
-          | _ -> `Assoc [])
-      | _ -> `Assoc []
-    with _ -> `Assoc []
+  let triage =
+    triage_email ~client ~sw ~whoami ~from_ ~to_ ~cc_ ~bcc_ ~subject ~date_ ~body_text
+  in
+
+  let has_any_content =
+    String.trim new_body <> "" || String.trim quoted_raw <> "" || String.trim attachments_section <> ""
+  in
+
+  if not has_any_content then
+    Printf.printf "[ingest.note] doc_id=%s note=empty_body\n%!" (sanitize_doc_id_for_ledger doc_id);
+  (
+    if body_text_has_error_marker body_text then
+      Printf.printf
+        "[ingest.note] doc_id=%s note=body_text_contains_error_marker\n%!"
+        (sanitize_doc_id_for_ledger doc_id);
+
+    if log then (
+      Printf.printf "\n[email being processed]\n";
+      Printf.printf "From: %s\n" from_;
+      Printf.printf "To: %s\n" to_;
+      Printf.printf "Cc: %s\n" cc_;
+      Printf.printf "Bcc: %s\n" bcc_;
+      Printf.printf "Title: %s\n" subject;
+      Printf.printf "Id: %s\n" doc_id;
+      Printf.printf "Body:\n%s\n" body_text;
+      flush stdout);
+
+  let index_text, metadata_json =
+    make_ingest_data ~doc_id ~headers ~raw ~body_text ~triage
   in
   let chunks = chunk_text index_text in
   let embedded_chunks =
@@ -980,8 +1313,29 @@ let forward_ingest_raw ~client ~sw ~log ~(doc_id : string) ~(headers : (string, 
       ]
     |> Yojson.Safe.to_string
   in
-  forward_json ~client ~sw ~path:"/ingest_embedded" ~body_json
+  let resp, resp_body = forward_json ~client ~sw ~path:"/ingest_embedded" ~body_json in
+  let code = Cohttp.Code.code_of_status (Http.Response.status resp) in
+  let ok = code >= 200 && code < 300 in
+  let strict_ok = ok && not (body_text_has_error_marker body_text) in
+  if strict_ok then mark_ingested_success ~metadata:metadata_json doc_id
+  else if ok && body_text_has_error_marker body_text then
+    Printf.eprintf
+      "[ingest.strict] not recording success for doc_id=%s because body_text contains [ERROR:] markers\n%!"
+      (sanitize_doc_id_for_ledger doc_id);
+  (resp, resp_body))
 
+(*
+  Mbox file discovery and streaming
+
+  For bulk ingestion, the server walks the user's mail directory tree,
+  identifies mbox files (those whose first 5 bytes are "From "), and
+  streams messages out of them.
+
+  The mbox streaming parser is chunk-based to handle multi-GB files
+  without loading them into memory.  It emits one raw RFC822 string
+  per message, correctly handling "From " line delimiters that may
+  span chunk boundaries.
+*)
 let expand_home (p : string) : string =
   if String.length p > 0 && p.[0] = '~' then
     let home =
@@ -1009,13 +1363,8 @@ let is_mbox_file (path : string) : bool =
 
 let should_skip_file (path : string) : bool =
   let lower = String.lowercase_ascii path in
-  let ends_with s suf =
-    let ls = String.length s in
-    let lq = String.length suf in
-    ls >= lq && String.sub s (ls - lq) lq = suf
-  in
-  ends_with lower ".msf" || ends_with lower ".dat" || ends_with lower ".sqlite"
-  || ends_with lower ".json" || ends_with lower ".log"
+  ends_with ".msf" lower || ends_with ".dat" lower || ends_with ".sqlite" lower
+  || ends_with ".json" lower || ends_with ".log" lower
 
 let rec collect_mbox_files ~recursive (acc : string list) (path : string) : string list =
   let path = expand_home path in
@@ -1267,6 +1616,14 @@ let collect_mbox_files_with_progress ~recursive ~(on_progress : int -> int -> st
   on_progress !visited !mbox_found "";
   List.rev !files
 
+(*
+  Bulk ingestion state persistence
+
+  Tracks per-file progress (byte position, completion flag) so that
+  a restarted bulk ingest can resume where it left off rather than
+  re-processing already-seen messages.  State is saved as JSON to
+  ~/.thunderrag/bulk_ingest_state.json (or $RAG_BULK_STATE).
+*)
 type bulk_file_state =
   { size : int
   ; mtime : int
@@ -1278,12 +1635,7 @@ let bulk_state_path () : string =
   match Sys.getenv_opt "RAG_BULK_STATE" with
   | Some p when String.trim p <> "" -> expand_home p
   | _ ->
-      let home =
-        match Sys.getenv_opt "HOME" with
-        | Some h -> h
-        | None -> "."
-      in
-      Filename.concat home ".rag_bulk_ingest_state.json"
+      Filename.concat (thunderrag_config_dir ()) "bulk_ingest_state.json"
 
 let load_bulk_state () : (string, bulk_file_state) Hashtbl.t =
   let tbl = Hashtbl.create 128 in
@@ -1358,6 +1710,17 @@ type bulk_file_progress =
   ; mtime : int
   }
 
+(*
+  Bulk ingestion
+
+  handle_bulk_ingest is a long-running endpoint that scans filesystem mail stores
+  (e.g. mbox) and ingests messages concurrently.
+
+  Key goals:
+  - be restartable across runs (bulk_state_path)
+  - show progress during scanning and per-file ingestion
+  - tolerate failures in individual messages without aborting the whole run
+*)
 let handle_bulk_ingest ~client ~sw ~clock (body : string) : (Http.Response.t * string) =
   let json = Yojson.Safe.from_string body in
   let assoc =
@@ -1479,7 +1842,7 @@ let handle_bulk_ingest ~client ~sw ~clock (body : string) : (Http.Response.t * s
                   let headers = parse_headers raw in
                   let doc_id = doc_id_of_raw headers raw in
                   let resp, _body =
-                    forward_ingest_raw ~client ~sw ~log:false ~doc_id ~headers ~raw
+                    forward_ingest_raw ~client ~sw ~log:false ~whoami:"" ~doc_id ~headers ~raw
                   in
                   let code = Cohttp.Code.code_of_status (Http.Response.status resp) in
                   let ok = code >= 200 && code < 300 in
@@ -1631,7 +1994,72 @@ let handle_bulk_ingest ~client ~sw ~clock (body : string) : (Http.Response.t * s
     (resp, Yojson.Safe.to_string result))
 
 let handler ~client ~sw ~clock _socket request body =
+  (*
+    HTTP routing
+
+    This server is intentionally stateful:
+    - sessions_tbl holds long-lived session_state by session_id
+    - pending_tbl holds short-lived pending_query entries keyed by request_id
+
+    Query endpoints implement the 2-phase flow:
+    - /query: retrieval only (no Ollama chat)
+    - /query/evidence: upload raw RFC822 bodies from Thunderbird
+    - /query/complete: final prompt construction + Ollama chat
+  *)
   match Http.Request.meth request, Http.Request.resource request with
+  | `GET, "/admin/models" ->
+      (* Query Ollama /api/tags for available models and return the list
+         along with the current default chat model from settings. *)
+      (try
+         let uri = Uri.of_string (ollama_base_url ^ "/api/tags") in
+         let call () = get_uri ~client ~sw ~uri in
+         let _resp, resp_body = !global_with_timeout 10.0 call in
+         let all_models =
+           try
+             match Yojson.Safe.from_string resp_body with
+             | `Assoc kv -> (
+                 match List.assoc_opt "models" kv with
+                 | Some (`List xs) ->
+                     xs
+                     |> List.filter_map (function
+                          | `Assoc mkv -> (
+                              match List.assoc_opt "name" mkv with
+                              | Some (`String n) -> Some n
+                              | _ -> None)
+                          | _ -> None)
+                 | _ -> [])
+             | _ -> []
+           with _ -> []
+         in
+         (* Filter out the embedding model — it is not useful for chat. *)
+         let embed = String.lowercase_ascii ollama_embed_model in
+         let strip_latest s =
+           let low = String.lowercase_ascii s in
+           if String.length low > 7 && String.sub low (String.length low - 7) 7 = ":latest"
+           then String.sub low 0 (String.length low - 7)
+           else low
+         in
+         let models =
+           all_models
+           |> List.filter (fun name ->
+                let low = String.lowercase_ascii name in
+                low <> embed && strip_latest name <> strip_latest ollama_embed_model)
+         in
+         let body =
+           `Assoc
+             [ ("models", `List (List.map (fun s -> `String s) models))
+             ; ("default_chat_model", `String ollama_llm_model)
+             ]
+           |> Yojson.Safe.to_string
+         in
+         Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
+       with ex ->
+         let body =
+           `Assoc [ ("error", `String (Printexc.to_string ex)); ("models", `List []) ]
+           |> Yojson.Safe.to_string
+         in
+         Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ())
+
   | `POST, "/admin/session/debug" ->
       let raw = read_all body in
       let session_id =
@@ -1702,16 +2130,414 @@ let handler ~client ~sw ~clock _socket request body =
         `Assoc [ ("status", `String "ok"); ("path", `String p) ] |> Yojson.Safe.to_string
       in
       Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
+
+  (*
+    Ingestion endpoint
+
+    Accepts a raw RFC822 message in the request body.
+    This path is used both by:
+    - interactive ingestion (single message), and
+    - bulk ingestion tooling (which ultimately calls forward_ingest_raw per message).
+  *)
   | `POST, "/ingest" ->
       let raw = read_all body in
       let headers = parse_headers raw in
       let doc_id = doc_id_of_ingest request headers raw in
 
+      let whoami = request_header_or_empty request "x-thunderrag-whoami" in
       let resp, resp_body =
-        forward_ingest_raw ~client ~sw ~log:true ~doc_id ~headers ~raw
+        forward_ingest_raw ~client ~sw ~log:true ~whoami ~doc_id ~headers ~raw
       in
       let status = Http.Response.status resp in
       Cohttp_eio.Server.respond_string ~status ~body:resp_body ~headers:json_headers ()
+
+  (*
+    Evidence upload endpoint (phase 2)
+
+    Thunderbird is responsible for retrieving full email content using its internal APIs.
+    It uploads each message as message/rfc822, tagging it with:
+    - X-RAG-Request-Id: correlates with the request_id returned by /query
+    - X-Thunderbird-Message-Id: stable pointer used across ingestion/retrieval/UI
+  *)
+  | `POST, "/query/evidence" ->
+      let request_id = request_header_or_empty request "x-rag-request-id" |> String.trim in
+      let message_id = request_header_or_empty request "x-thunderbird-message-id" |> String.trim in
+      if request_id = "" || message_id = "" then
+        Cohttp_eio.Server.respond_string ~status:`Bad_request
+          ~body:"missing X-RAG-Request-Id or X-Thunderbird-Message-Id\n" ()
+      else
+        let raw = read_all body in
+        let ok =
+          Eio.Mutex.use_rw ~protect:true pending_tbl_mu (fun () ->
+            match Hashtbl.find_opt pending_tbl request_id with
+            | None -> false
+            | Some p ->
+                Eio.Mutex.use_rw ~protect:true p.mu (fun () ->
+                  Hashtbl.replace p.evidence_by_id message_id raw;
+                  true))
+        in
+        if not ok then
+          Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"unknown request_id\n" ()
+        else
+          Cohttp_eio.Server.respond_string ~status:`OK
+            ~body:(`Assoc [ ("status", `String "ok") ] |> Yojson.Safe.to_string)
+            ~headers:json_headers ()
+
+  (*
+    Finalize query endpoint (phase 3)
+
+    Preconditions:
+    - /query has been called and returned request_id + message_ids
+    - Thunderbird has uploaded evidence for each message_id via /query/evidence
+
+    Responsibilities:
+    - validate that all expected evidence has arrived
+    - re-extract normalized text from raw emails (same logic as ingestion)
+    - build final prompt (question before evidence; include SOURCES INDEX)
+    - call Ollama /api/chat
+    - update session state and cleanup pending state
+  *)
+  | `POST, "/query/complete" ->
+      let raw = read_all body in
+      let session_id, request_id, chat_model_override =
+        try
+          let json = Yojson.Safe.from_string raw in
+          match json with
+          | `Assoc kv ->
+              let sid =
+                match List.assoc_opt "session_id" kv with
+                | Some (`String s) -> s
+                | _ -> ""
+              in
+              let rid =
+                match List.assoc_opt "request_id" kv with
+                | Some (`String s) -> s
+                | _ -> ""
+              in
+              let cm =
+                match List.assoc_opt "chat_model" kv with
+                | Some (`String s) -> String.trim s
+                | _ -> ""
+              in
+              (sid, rid, cm)
+          | _ -> ("", "", "")
+        with _ -> ("", "", "")
+      in
+      if String.trim session_id = "" || String.trim request_id = "" then
+        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id/request_id\n" ()
+      else (
+        let pending_opt =
+          Eio.Mutex.use_rw ~protect:true pending_tbl_mu (fun () -> Hashtbl.find_opt pending_tbl request_id)
+        in
+        match pending_opt with
+        | None -> Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"unknown request_id\n" ()
+        | Some p ->
+            if p.session_id <> session_id then
+              Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"request_id/session_id mismatch\n" ()
+            else (
+              let missing =
+                Eio.Mutex.use_rw ~protect:true p.mu (fun () ->
+                  p.message_ids
+                  |> List.filter (fun mid -> not (Hashtbl.mem p.evidence_by_id mid)))
+              in
+              if missing <> [] then
+                let body =
+                  `Assoc
+                    [ ("status", `String "missing_evidence")
+                    ; ("missing_message_ids", `List (List.map (fun s -> `String s) missing))
+                    ]
+                  |> Yojson.Safe.to_string
+                in
+                Cohttp_eio.Server.respond_string ~status:`Bad_request ~body ~headers:json_headers ()
+              else (
+                let s = get_or_create_session session_id in
+                let tail_snapshot, history_summary, sources_summary, last_sources_recap =
+                  Eio.Mutex.use_rw ~protect:true s.mu (fun () ->
+                    (s.tail, s.history_summary, s.sources_summary, s.last_sources_recap))
+                in
+
+                let cached_md_by_doc : (string, Yojson.Safe.t) Hashtbl.t = Hashtbl.create 32 in
+                (match p.sources_json with
+                | `List ys ->
+                    List.iter
+                      (function
+                        | `Assoc kv ->
+                            let doc_id =
+                              match List.assoc_opt "doc_id" kv with
+                              | Some (`String s) -> s
+                              | _ -> ""
+                            in
+                            let md =
+                              match List.assoc_opt "metadata" kv with
+                              | Some m -> m
+                              | _ -> `Assoc []
+                            in
+                            if String.trim doc_id <> "" then Hashtbl.replace cached_md_by_doc doc_id md
+                        | _ -> ())
+                      ys
+                | _ -> ());
+
+                let evidence_by_doc : (string, (string * Yojson.Safe.t)) Hashtbl.t = Hashtbl.create 32 in
+                Eio.Mutex.use_rw ~protect:true p.mu (fun () ->
+                  List.iter
+                    (fun mid ->
+                      let raw = Hashtbl.find p.evidence_by_id mid in
+                      let _, md_from_raw = ingest_text_of_raw ~doc_id:mid ~raw in
+                      let cached_md =
+                        match Hashtbl.find_opt cached_md_by_doc mid with
+                        | Some m -> m
+                        | None -> `Assoc []
+                      in
+                      let md =
+                        match cached_md, md_from_raw with
+                        | `Assoc cached_kv, `Assoc fresh_kv ->
+                            let tbl = Hashtbl.create 32 in
+                            List.iter (fun (k, v) -> Hashtbl.replace tbl k v) cached_kv;
+                            let override_keys =
+                              [ "from"; "to"; "cc"; "bcc"; "subject"; "date"; "attachments"; "message_id" ]
+                            in
+                            List.iter
+                              (fun (k, v) ->
+                                if List.mem k override_keys then Hashtbl.replace tbl k v)
+                              fresh_kv;
+                            `Assoc (Hashtbl.to_seq tbl |> List.of_seq)
+                        | _ -> cached_md
+                      in
+                      let parts = extract_body_parts raw in
+                      let new_body = String.trim parts.new_text |> sanitize_utf8 in
+                      let attachment_summaries =
+                        match md with
+                        | `Assoc kv -> (
+                            match List.assoc_opt "attachment_summaries" kv with
+                            | Some (`List xs) -> xs
+                            | _ -> [])
+                        | _ -> []
+                      in
+                      let attachments_section = format_attachment_summaries_for_text attachment_summaries in
+                      let body =
+                        let att = if attachments_section = "" then "" else "\n\n" ^ attachments_section in
+                        "NEW CONTENT:\n" ^ new_body ^ att
+                      in
+                      let body =
+                        if String.length body > rag_max_evidence_chars_per_email then
+                          String.sub body 0 rag_max_evidence_chars_per_email
+                        else body
+                      in
+                      Hashtbl.replace evidence_by_doc mid (body, md))
+                    p.message_ids);
+
+                (* Build evidence entries and sort by date (oldest first)
+                   so the LLM sees them in chronological order.
+                   Also rebuild sources_json in the same order for the UI. *)
+                let evidence_entries =
+                  p.message_ids
+                  |> List.map (fun mid ->
+                         let text, md =
+                           match Hashtbl.find_opt evidence_by_doc mid with
+                           | Some (t, m) -> (t, m)
+                           | None -> ("", `Assoc [])
+                         in
+                         let md_str key =
+                           match md with
+                           | `Assoc kv -> (
+                               match List.assoc_opt key kv with
+                               | Some (`String s) -> String.trim s
+                               | _ -> "")
+                           | _ -> ""
+                         in
+                         (mid, text, md, md_str "date", md_str "from", md_str "subject"))
+                  |> List.sort (fun (_, _, _, d1, _, _) (_, _, _, d2, _, _) -> String.compare d1 d2)
+                in
+
+                let sources_json =
+                  (* Build a lookup from doc_id → original sources_json entry. *)
+                  let orig_by_id = Hashtbl.create 32 in
+                  (match p.sources_json with
+                  | `List ys ->
+                      List.iter (fun v ->
+                        match v with
+                        | `Assoc kv -> (
+                            match List.assoc_opt "doc_id" kv with
+                            | Some (`String s) -> Hashtbl.replace orig_by_id s v
+                            | _ -> ())
+                        | _ -> ()) ys
+                  | _ -> ());
+                  (* Emit entries in date-sorted order, with updated metadata. *)
+                  `List (evidence_entries |> List.map (fun (mid, _text, md, _, _, _) ->
+                    let base_kv =
+                      match Hashtbl.find_opt orig_by_id mid with
+                      | Some (`Assoc kv) -> kv
+                      | _ -> [ ("doc_id", `String mid) ]
+                    in
+                    let kv = base_kv |> List.filter (fun (k, _) -> k <> "text" && k <> "metadata") in
+                    if md <> `Assoc [] then
+                      `Assoc (kv @ [ ("text", `String ""); ("metadata", md) ])
+                    else
+                      `Assoc (kv @ [ ("text", `String "") ])))
+                in
+
+                let evidence_msg =
+                  let lines =
+                    evidence_entries
+                    |> List.mapi (fun i (mid, text, _md, date_, from_, subject) ->
+                           let header =
+                             Printf.sprintf "[Email %d] doc_id=%s date=%s from=%s subject=%s" (i + 1) mid date_ from_ subject
+                           in
+                           header
+                           ^ "\n"
+                           ^ (if String.trim text = "" then "(empty body)" else String.trim text))
+                  in
+                  String.concat "\n\n" lines
+                in
+
+                let sources_index_msg =
+                  let lines =
+                    evidence_entries
+                    |> List.mapi (fun i (_, _, _, date_, from_, subject) ->
+                           Printf.sprintf "[Email %d] date=%s from=%s subject=%s" (i + 1) date_ from_ subject)
+                  in
+                  "EMAILS INDEX (use this for sorting by recency):\n" ^ String.concat "\n" lines
+                in
+
+                let system_prompt =
+                  "You are a careful assistant in an ongoing multi-turn chat. "
+                  ^ (Printf.sprintf "Current date/time: %s (local); %s (UTC). " (now_local_string ()) (now_utc_iso8601 ()))
+                  ^ "Treat the previous user/assistant turns as conversation context. "
+                  ^ "Answer ONLY the last user message. "
+                  ^ "After the current user request, you may receive a system message containing RETRIEVED EMAILS for that request; use it to answer the most recent user message. "
+                  ^ "Do not greet, do not restate the user's request, and do not narrate your process. "
+                  ^ "Do not invent email facts; use the provided email evidence and cite as [Email N] when relying on them. "
+                  ^ "If the user refers to 'the second one you listed', resolve it against your most recent numbered list."
+                in
+
+                (*
+                  Final generation prompt construction
+
+                  Message ordering:
+                  - system: behavioral instructions + current time
+                  - user: session summary (if any, compressed old turns)
+                  - user: sources summary (if any, compressed old source recaps)
+                  - tail: recent conversation turns (last assistant turn patched
+                    with last_sources_recap at prompt time, not stored)
+                  - user: evidence (sources index + retrieved emails)
+                  - user: question + citation instructions
+                *)
+                let messages =
+                  let base =
+                    [ `Assoc [ ("role", `String "system"); ("content", `String system_prompt) ] ]
+                  in
+                  (* Merge session + sources summaries into a single user message. *)
+                  let context_parts =
+                    (if String.trim history_summary <> ""
+                     then [ "SESSION SUMMARY:\n" ^ history_summary ]
+                     else [])
+                    @ (if String.trim sources_summary <> ""
+                       then [ "SOURCES SUMMARY:\n" ^ sources_summary ]
+                       else [])
+                  in
+                  let with_context =
+                    if context_parts = [] then base
+                    else
+                      base
+                      @ [ `Assoc
+                            [ ("role", `String "user")
+                            ; ("content", `String (String.concat "\n\n" context_parts))
+                            ]
+                        ]
+                  in
+                  (* Process tail for the prompt:
+                     - Last assistant turn: append last_sources_recap so the model
+                       sees which emails its most recent answer cited.
+                     - Older assistant turns: replace [Email N] with inline
+                       (email from X re: Y) using their stored cited_recap. *)
+                  let patched_tail =
+                    let rev = List.rev tail_snapshot in
+                    let found_last = ref false in
+                    let process_rev =
+                      List.map (fun m ->
+                        if m.role = "assistant" && not !found_last then (
+                          found_last := true;
+                          if String.trim last_sources_recap = "" then m
+                          else { m with content = m.content ^ "\n\nCited emails:\n" ^ last_sources_recap })
+                        else if m.role = "assistant" && String.trim m.cited_recap <> "" then
+                          { m with content = resolve_citations_inline ~text:m.content ~recap:m.cited_recap }
+                        else m
+                      ) rev
+                    in
+                    List.rev process_rev
+                  in
+                  let with_tail =
+                    with_context
+                    @ List.map
+                        (fun m ->
+                          `Assoc
+                            [ ("role", `String m.role)
+                            ; ("content", `String m.content)
+                            ])
+                        patched_tail
+                  in
+                  if String.trim evidence_msg = "" then
+                    with_tail
+                    @ [ `Assoc [ ("role", `String "user"); ("content", `String p.question) ] ]
+                  else
+                    let evidence_content =
+                      sources_index_msg
+                      ^ "\n\nRETRIEVED EMAILS THAT MAY BE RELEVANT:\n"
+                      ^ evidence_msg
+                    in
+                    let question_content =
+                      p.question
+                      ^ "\n\nAnswer based on the retrieved emails above. "
+                      ^ "Do not greet, do not offer to help, and do not ask for a follow-up question. "
+                      ^ "Start immediately with the answer (no preamble). "
+                      ^ "If the request involves ordering or selecting items by time/recency, use the dates in the EMAILS INDEX to decide which emails are newest. "
+                      ^ "When referencing an email, cite it as [Email N]."
+                    in
+                    with_tail
+                    @ [ `Assoc [ ("role", `String "user"); ("content", `String evidence_content) ]
+                      ; `Assoc [ ("role", `String "user"); ("content", `String question_content) ]
+                      ]
+                in
+
+                let answer =
+                  match ollama_chat ~client ~sw ~model:chat_model_override ~messages () with
+                  | Ok s -> strip_leading_boilerplate s |> String.trim
+                  | Error msg -> "ollama chat error: " ^ msg
+                in
+
+                let renumbered_answer, cited_recap =
+                  renumber_cited_sources ~answer ~sources_json
+                in
+                Eio.Mutex.use_rw ~protect:true s.mu (fun () ->
+                  let add_msg role content ?(cited = "") () =
+                    s.tail <- s.tail @ [ { role; content; cited_recap = cited } ];
+                    let max_tail = 24 in
+                    if List.length s.tail > max_tail then s.tail <- take_last max_tail s.tail
+                  in
+                  add_msg "user" p.question ();
+                  add_msg "assistant" renumbered_answer ~cited:cited_recap ();
+
+                  if String.trim s.last_sources_recap <> "" then (
+                    if String.trim s.sources_summary = "" then s.sources_summary <- s.last_sources_recap
+                    else s.sources_summary <- s.sources_summary ^ "\n\n" ^ s.last_sources_recap);
+                  s.last_sources_recap <- cited_recap;
+                  maybe_summarize_session ~client ~sw s);
+
+                Eio.Mutex.use_rw ~protect:true pending_tbl_mu (fun () -> Hashtbl.remove pending_tbl request_id);
+
+                let body =
+                  `Assoc [ ("answer", `String answer); ("sources", sources_json) ]
+                  |> Yojson.Safe.to_string
+                in
+                Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ())))
+
+  (*
+    Retrieval-only query endpoint (phase 1)
+
+    This endpoint does not call Ollama chat.
+    It embeds the user question, retrieves doc_ids from python-engine, and returns
+    request_id + message_ids so that Thunderbird can upload full evidence.
+  *)
   | `POST, "/query" ->
       let query_body = read_all body in
       let session_id, question, top_k, mode =
@@ -1749,11 +2575,11 @@ let handler ~client ~sw ~clock _socket request body =
       if String.trim session_id = "" || String.trim question = "" then
         Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id/question\n" ()
       else (
-        let s = get_or_create_session session_id in
-        let tail_snapshot, history_summary, sources_summary, last_sources_recap =
-          Eio.Mutex.use_rw ~protect:true s.mu (fun () ->
-            (s.tail, s.history_summary, s.sources_summary, s.last_sources_recap))
-        in
+        if debug_retrieval_enabled () then (
+          let emb_req =
+            `Assoc [ ("model", `String ollama_embed_model); ("prompt", `String question) ]
+          in
+          Printf.printf "\n[retrieval.embed.request]\n%s\n%!" (Yojson.Safe.pretty_to_string emb_req));
 
         let q_embedding =
           match ollama_embed ~client ~sw ~text:question with
@@ -1763,13 +2589,15 @@ let handler ~client ~sw ~clock _socket request body =
               raise (Failure body)
         in
 
-        let retrieval_body =
+        let retrieval_obj : Yojson.Safe.t =
           `Assoc
             [ ("embedding", `List (List.map (fun f -> `Float f) q_embedding))
             ; ("top_k", `Int top_k)
             ]
-          |> Yojson.Safe.to_string
         in
+        let retrieval_body = Yojson.Safe.to_string retrieval_obj in
+        if debug_retrieval_enabled () then
+          Printf.printf "\n[retrieval.query_embedded.request]\n%s\n%!" (Yojson.Safe.pretty_to_string retrieval_obj);
         let resp_r, resp_r_body =
           forward_json ~client ~sw ~path:"/query_embedded" ~body_json:retrieval_body
         in
@@ -1789,145 +2617,447 @@ let handler ~client ~sw ~clock _socket request body =
             with _ -> `List []
           in
 
-          let evidence_msg =
-            let excerpt (s : string) =
-              let max_len = 800 in
-              if String.length s <= max_len then s else String.sub s 0 max_len
+          if debug_retrieval_enabled () then (
+            let summarize_one (v : Yojson.Safe.t) : string option =
+              match v with
+              | `Assoc kv ->
+                  let doc_id =
+                    match List.assoc_opt "doc_id" kv with
+                    | Some (`String s) when String.trim s <> "" -> Some (String.trim s)
+                    | _ -> None
+                  in
+                  let score =
+                    match List.assoc_opt "score" kv with
+                    | Some (`Float f) -> Some (Printf.sprintf "%g" f)
+                    | Some (`Int i) -> Some (string_of_int i)
+                    | Some (`Intlit s) -> Some s
+                    | Some (`String s) -> Some s
+                    | _ -> None
+                  in
+                  (match doc_id, score with
+                  | Some d, Some sc -> Some (Printf.sprintf "doc_id=%s score=%s" d sc)
+                  | Some d, None -> Some (Printf.sprintf "doc_id=%s" d)
+                  | _ -> None)
+              | _ -> None
             in
             let lines =
               match sources_json with
-              | `List ys ->
-                  ys
-                  |> List.mapi (fun i v ->
-                         let getf name =
-                           match v with
-                           | `Assoc kv -> List.assoc_opt name kv
-                           | _ -> None
-                         in
-                         let doc_id =
-                           match getf "doc_id" with
-                           | Some (`String s) -> s
-                           | _ -> ""
-                         in
-                         let md =
-                           match getf "metadata" with
-                           | Some m -> m
-                           | _ -> `Assoc []
-                         in
-                         let get_md key =
-                           match md with
-                           | `Assoc kv -> (
-                               match List.assoc_opt key kv with
-                               | Some (`String s) -> String.trim s
-                               | _ -> "")
-                           | _ -> ""
-                         in
-                         let from_ = get_md "from" in
-                         let subject = get_md "subject" in
-                         let date_ = get_md "date" in
-                         let text =
-                           match getf "text" with
-                           | Some (`String s) -> s
-                           | _ -> ""
-                         in
-                         Printf.sprintf "[Source %d] doc_id=%s date=%s from=%s subject=%s\n%s"
-                           (i + 1) doc_id date_ from_ subject (excerpt (String.trim text)))
+              | `List ys -> ys |> List.filter_map summarize_one
               | _ -> []
             in
-            String.concat "\n\n" lines
+            Printf.printf "\n[retrieval.query_embedded.response]\n%s\n%!" (String.concat "\n" lines));
+
+          let sources_json =
+            match sources_json with
+            | `List ys ->
+                let ys =
+                  if rag_max_evidence_sources > 0 && List.length ys > rag_max_evidence_sources then
+                    take rag_max_evidence_sources ys
+                  else ys
+                in
+                `List ys
+            | _ -> sources_json
           in
 
-          let system_prompt =
-            "You are a careful assistant in an ongoing multi-turn chat. "
-            ^ "Treat the previous user/assistant turns as conversation context. "
-            ^ "Answer ONLY the last user message. "
-            ^ "After the current user request, you may receive a system message containing RETRIEVED EVIDENCE for that request; use it to answer the most recent user message. "
-            ^ "Do not greet, do not restate the user's request, and do not narrate your process. "
-            ^ "Do not invent email facts; use the provided evidence and cite sources as [Source N] when relying on them. "
-            ^ "If the user refers to 'the second one you listed', resolve it against your most recent numbered list."
+          (* Enrich sources whose metadata is empty/missing key fields
+             by looking up ingested_details_tbl (which stores the metadata
+             captured at ingestion time).  This handles emails that were
+             ingested before metadata was stored in the python-engine or
+             where the python-engine lost the metadata. *)
+          let sources_json =
+            let enrich_one (v : Yojson.Safe.t) : Yojson.Safe.t =
+              match v with
+              | `Assoc kv ->
+                  let doc_id =
+                    match List.assoc_opt "doc_id" kv with
+                    | Some (`String s) -> String.trim s
+                    | _ -> ""
+                  in
+                  let existing_md =
+                    match List.assoc_opt "metadata" kv with
+                    | Some (`Assoc md_kv) -> md_kv
+                    | _ -> []
+                  in
+                  let has_field key =
+                    match List.assoc_opt key existing_md with
+                    | Some (`String s) when String.trim s <> "" -> true
+                    | _ -> false
+                  in
+                  if doc_id <> "" && not (has_field "subject" && has_field "from" && has_field "date") then (
+                    let bare =
+                      if String.length doc_id > 1 && doc_id.[0] = '<' && doc_id.[String.length doc_id - 1] = '>'
+                      then String.sub doc_id 1 (String.length doc_id - 2) else doc_id
+                    in
+                    let bracketed = if doc_id.[0] = '<' then doc_id else "<" ^ doc_id ^ ">" in
+                    let detail =
+                      match Hashtbl.find_opt ingested_details_tbl doc_id with
+                      | Some _ as r -> r
+                      | None -> (match Hashtbl.find_opt ingested_details_tbl bracketed with
+                        | Some _ as r -> r
+                        | None -> Hashtbl.find_opt ingested_details_tbl bare)
+                    in
+                    match detail with
+                    | Some (`Assoc detail_kv) ->
+                        let stored_md =
+                          match List.assoc_opt "metadata" detail_kv with
+                          | Some (`Assoc md) -> md
+                          | _ -> []
+                        in
+                        let merged = Hashtbl.create 16 in
+                        List.iter (fun (k, v) -> Hashtbl.replace merged k v) existing_md;
+                        List.iter (fun (k, v) ->
+                          if not (has_field k) then Hashtbl.replace merged k v) stored_md;
+                        let new_md = `Assoc (Hashtbl.to_seq merged |> List.of_seq) in
+                        `Assoc (kv |> List.filter (fun (k, _) -> k <> "metadata") |> fun base -> base @ [("metadata", new_md)])
+                    | _ -> v)
+                  else v
+              | _ -> v
+            in
+            match sources_json with
+            | `List ys -> `List (List.map enrich_one ys)
+            | _ -> sources_json
           in
 
-          let messages =
-            let base =
-              [ `Assoc [ ("role", `String "system"); ("content", `String system_prompt) ] ]
-            in
-            let with_summaries =
-              let add_if_nonempty label v acc =
-                if String.trim v = "" then acc
-                else
-                  acc
-                  @ [ `Assoc
-                        [ ("role", `String "system")
-                        ; ("content", `String (label ^ "\n" ^ v))
-                        ]
-                    ]
-              in
-              base
-              |> add_if_nonempty "SESSION SUMMARY:" history_summary
-              |> add_if_nonempty "SOURCES SUMMARY:" sources_summary
-              |> add_if_nonempty "PREVIOUS SOURCES RECAP:" last_sources_recap
-            in
-            let with_tail =
-              with_summaries
-              @ List.map
-                  (fun m ->
-                    `Assoc
-                      [ ("role", `String m.role)
-                      ; ("content", `String m.content)
-                      ])
-                  tail_snapshot
-            in
-            let with_question =
-              with_tail
-              @ [ `Assoc [ ("role", `String "user"); ("content", `String question) ] ]
-            in
-            if String.trim evidence_msg = "" then with_question
-            else
-              with_question
-              @ [ `Assoc
-                    [ ("role", `String "system")
-                    ; ("content", `String ("RETRIEVED EMAILS THAT MAY BE RELEVANT TO REPLY TO THE ABOVE USER REQUEST:\n" ^ evidence_msg))
-                    ]
-                ]
+          let message_ids =
+            match sources_json with
+            | `List ys ->
+                ys
+                |> List.filter_map (function
+                     | `Assoc kv -> (
+                         match List.assoc_opt "doc_id" kv with
+                         | Some (`String s) when String.trim s <> "" -> Some (String.trim s)
+                         | _ -> None)
+                     | _ -> None)
+            | _ -> []
           in
-
-          let answer =
-            match ollama_chat ~client ~sw ~messages with
-            | Ok s -> String.trim s
-            | Error msg -> "ollama chat error: " ^ msg
+          let request_id = fresh_request_id session_id question in
+          let p : pending_query =
+            { mu = Eio.Mutex.create ()
+            ; session_id
+            ; question
+            ; message_ids
+            ; sources_json
+            ; evidence_by_id = Hashtbl.create 32
+            }
           in
-
-          let recap = sources_recap_of_sources_json sources_json in
-          Eio.Mutex.use_rw ~protect:true s.mu (fun () ->
-            let add_msg role content =
-              s.tail <- s.tail @ [ { role; content } ];
-              let max_tail = 24 in
-              if List.length s.tail > max_tail then s.tail <- take_last max_tail s.tail
-            in
-            add_msg "user" question;
-            add_msg "assistant" answer;
-
-            if String.trim s.last_sources_recap <> "" then (
-              if String.trim s.sources_summary = "" then s.sources_summary <- s.last_sources_recap
-              else s.sources_summary <- s.sources_summary ^ "\n\n" ^ s.last_sources_recap);
-            s.last_sources_recap <- recap;
-
-            maybe_summarize_session ~client ~sw s);
+          Eio.Mutex.use_rw ~protect:true pending_tbl_mu (fun () -> Hashtbl.replace pending_tbl request_id p);
 
           let body =
-            `Assoc [ ("answer", `String answer); ("sources", sources_json) ]
+            `Assoc
+              [ ("status", `String "need_messages")
+              ; ("request_id", `String request_id)
+              ; ("message_ids", `List (List.map (fun s -> `String s) message_ids))
+              ; ("sources", sources_json)
+              ]
             |> Yojson.Safe.to_string
           in
           Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()))
+  (*
+    Batch ingestion status check
+
+    Accepts {"ids": ["<msg-id-1>", ...]} and returns which ones have been
+    successfully ingested (no [ERROR:] markers).  Used by the Thunderbird
+    add-on to display green/red indicators in the message list column.
+  *)
+  | `POST, "/admin/ingested_status" ->
+      let raw = read_all body in
+      let ids =
+        try
+          let json = Yojson.Safe.from_string raw in
+          match json with
+          | `Assoc kv -> (
+              match List.assoc_opt "ids" kv with
+              | Some (`List xs) ->
+                  xs |> List.filter_map (function `String s -> Some (String.trim s) | _ -> None)
+              | _ -> [])
+          | _ -> []
+        with _ -> []
+      in
+      (* Normalize: try both bare id and <id> forms since TB may omit angle brackets. *)
+      let mem_any id =
+        Hashtbl.mem ingested_ids_tbl id
+        || (not (String.length id > 0 && id.[0] = '<') && Hashtbl.mem ingested_ids_tbl ("<" ^ id ^ ">"))
+        || (String.length id > 1 && id.[0] = '<' && id.[String.length id - 1] = '>'
+            && Hashtbl.mem ingested_ids_tbl (String.sub id 1 (String.length id - 2)))
+      in
+      let ingested =
+        ids |> List.filter (fun id -> id <> "" && mem_any id)
+      in
+      (* Also report which of the ingested IDs are marked processed. *)
+      let is_processed id =
+        let lookup k =
+          match Hashtbl.find_opt ingested_details_tbl k with
+          | Some (`Assoc kv) -> (
+              match List.assoc_opt "metadata" kv with
+              | Some (`Assoc md) -> (
+                  match List.assoc_opt "processed" md with
+                  | Some (`Bool true) -> true
+                  | _ -> false)
+              | _ -> false)
+          | _ -> false
+        in
+        let bare =
+          if String.length id > 1 && id.[0] = '<' && id.[String.length id - 1] = '>'
+          then String.sub id 1 (String.length id - 2) else id
+        in
+        let bracketed =
+          if String.length id > 0 && id.[0] = '<' then id else "<" ^ id ^ ">"
+        in
+        lookup id || lookup bracketed || lookup bare
+      in
+      let processed =
+        ingested |> List.filter is_processed
+      in
+      let body =
+        `Assoc
+          [ ("ingested", `List (List.map (fun s -> `String s) ingested))
+          ; ("processed", `List (List.map (fun s -> `String s) processed))
+          ]
+        |> Yojson.Safe.to_string
+      in
+      Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
+
+  (*
+    Extract body text from raw RFC822 email.
+
+    Accepts {"raw": "...", "doc_id": "...", "summarize": bool}.
+    When summarize=false: fast MIME parse + body extraction (no LLM).
+    When summarize=true:  also runs LLM summarization of quoted text + attachments.
+    Returns {"body_text": "...", "metadata": {...}}.
+    Used by the ingested-detail UI to show what was (or would be) indexed.
+  *)
+  | `POST, "/admin/extract_body" ->
+      let raw_req = read_all body in
+      let json = try Yojson.Safe.from_string raw_req with _ -> `Null in
+      let get_str key = match json with
+        | `Assoc kv -> (match List.assoc_opt key kv with Some (`String s) -> s | _ -> "")
+        | _ -> ""
+      in
+      let summarize = match json with
+        | `Assoc kv -> (match List.assoc_opt "summarize" kv with Some (`Bool b) -> b | _ -> false)
+        | _ -> false
+      in
+      let raw_email = get_str "raw" in
+      let doc_id = get_str "doc_id" in
+      if raw_email = "" then
+        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing raw\n" ()
+      else
+        let headers = parse_headers raw_email in
+        let parts = extract_body_parts raw_email in
+        let new_body = String.trim parts.new_text |> sanitize_utf8 in
+        let quoted_raw = String.trim parts.quoted_text |> sanitize_utf8 in
+        let quoted_capped_untrimmed =
+          if String.trim quoted_raw = "" then ""
+          else
+            truncate_lines quoted_raw ~max_lines:rag_quoted_context_max_lines
+            |> truncate_chars ~max_chars:rag_quoted_context_max_input_chars
+        in
+        let quoted_capped = String.trim quoted_capped_untrimmed in
+        let overflow_start = String.length quoted_capped_untrimmed in
+        let has_overflow = overflow_start < String.length quoted_raw in
+        let overflow =
+          if has_overflow then
+            String.sub quoted_raw overflow_start (String.length quoted_raw - overflow_start) |> String.trim
+          else ""
+        in
+        let overflow_summary, attachment_summaries =
+          if summarize then
+            let qs = if overflow = "" then None
+              else summarize_quoted_context ~client ~sw ~quoted_text:overflow in
+            let atts = attachment_summaries_of_raw ~client ~sw ~raw:raw_email in
+            (qs, atts)
+          else (None, [])
+        in
+        let attachments_section = format_attachment_summaries_for_text attachment_summaries in
+        let body_text =
+          let qs =
+            match overflow_summary with
+            | Some s when String.trim s <> "" -> "QUOTED CONTEXT (older, summarized):\n" ^ String.trim s
+            | _ -> ""
+          in
+          let qc =
+            if quoted_capped = "" then ""
+            else if has_overflow then "QUOTED CONTEXT (recent):\n" ^ quoted_capped
+            else "QUOTED CONTEXT:\n" ^ quoted_capped
+          in
+          let att = if attachments_section = "" then "" else attachments_section in
+          let parts = List.filter (fun s -> s <> "") [qs; qc; att; "NEW CONTENT:\n" ^ new_body] in
+          String.concat "\n\n" parts
+        in
+        let _index_text, metadata_json =
+          make_ingest_data ~doc_id ~headers ~raw:raw_email ~body_text
+            ~triage:None
+        in
+        let resp_json =
+          `Assoc
+            [ ("body_text", `String body_text)
+            ; ("metadata", metadata_json)
+            ; ("summarize_model", `String (if summarize then ollama_summarize_model else ""))
+            ]
+        in
+        Cohttp_eio.Server.respond_string ~status:`OK
+          ~body:(Yojson.Safe.to_string resp_json) ~headers:json_headers ()
+
+  (*
+    Single-document ingestion detail
+
+    Accepts {"id": "<msg-id>"} and returns the embedding model and
+    metadata that were stored at ingestion time.  Used by the
+    Thunderbird add-on's right-click "Show ingested data" action.
+  *)
+  | `POST, "/admin/ingested_detail" ->
+      let raw = read_all body in
+      let id =
+        try
+          let json = Yojson.Safe.from_string raw in
+          match json with
+          | `Assoc kv -> (
+              match List.assoc_opt "id" kv with
+              | Some (`String s) -> String.trim s
+              | _ -> "")
+          | _ -> ""
+        with _ -> ""
+      in
+      if id = "" then
+        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing id\n" ()
+      else
+        (* Try both bare id and <id> forms. *)
+        let try_id alt = Hashtbl.mem ingested_ids_tbl alt in
+        let bare = if String.length id > 1 && id.[0] = '<' && id.[String.length id - 1] = '>'
+          then String.sub id 1 (String.length id - 2) else id in
+        let bracketed = if String.length id > 0 && id.[0] = '<' then id else "<" ^ id ^ ">" in
+        let ingested = try_id id || try_id bare || try_id bracketed in
+        let detail =
+          match Hashtbl.find_opt ingested_details_tbl id with
+          | Some _ as r -> r
+          | None -> (match Hashtbl.find_opt ingested_details_tbl bracketed with
+            | Some _ as r -> r
+            | None -> Hashtbl.find_opt ingested_details_tbl bare)
+        in
+        let body =
+          match detail with
+          | Some json -> json
+          | None ->
+              `Assoc
+                [ ("doc_id", `String id)
+                ; ("ingested", `Bool ingested)
+                ; ("detail", `Null)
+                ]
+        in
+        Cohttp_eio.Server.respond_string ~status:`OK
+          ~body:(Yojson.Safe.to_string body) ~headers:json_headers ()
+
   | `POST, "/admin/delete" ->
       let delete_body = read_all body in
       let resp, resp_body = forward_json ~client ~sw ~path:"/admin/delete" ~body_json:delete_body in
       let status = Http.Response.status resp in
+      (* Also remove from local ingested-IDs ledger and details cache. *)
+      (try
+         let json = Yojson.Safe.from_string delete_body in
+         match json with
+         | `Assoc kv -> (
+             match List.assoc_opt "id" kv with
+             | Some (`String doc_id) ->
+                 let doc_id = String.trim doc_id in
+                 let bare =
+                   if String.length doc_id > 1 && doc_id.[0] = '<'
+                      && doc_id.[String.length doc_id - 1] = '>'
+                   then String.sub doc_id 1 (String.length doc_id - 2) else doc_id
+                 in
+                 let bracketed =
+                   if String.length doc_id > 0 && doc_id.[0] = '<' then doc_id
+                   else "<" ^ doc_id ^ ">"
+                 in
+                 List.iter (fun k ->
+                   Hashtbl.remove ingested_ids_tbl k;
+                   Hashtbl.remove ingested_details_tbl k)
+                   [doc_id; bare; bracketed]
+             | _ -> ())
+         | _ -> ()
+       with _ -> ());
       Cohttp_eio.Server.respond_string ~status ~body:resp_body ~headers:json_headers ()
   | `POST, "/admin/reset" ->
       let resp, resp_body = forward_json ~client ~sw ~path:"/admin/reset" ~body_json:"{}" in
       let status = Http.Response.status resp in
+      if is_ok_status status then (
+        (* Clear OCaml-side ingestion ledger so column lights turn red. *)
+        Hashtbl.clear ingested_ids_tbl;
+        Hashtbl.clear ingested_details_tbl;
+        (try Sys.remove (ingested_ids_path ()) with Sys_error _ -> ());
+        (try Sys.remove (ingested_details_path ()) with Sys_error _ -> ()));
       Cohttp_eio.Server.respond_string ~status ~body:resp_body ~headers:json_headers ()
+  | `POST, "/admin/mark_processed" ->
+      let raw = read_all body in
+      (* Accept either JSON {"id":"..."} or raw RFC822 (from filter action) *)
+      let id =
+        let from_json =
+          try
+            let json = Yojson.Safe.from_string raw in
+            match json with
+            | `Assoc kv -> (match List.assoc_opt "id" kv with Some (`String s) -> String.trim s | _ -> "")
+            | _ -> ""
+          with _ -> ""
+        in
+        if from_json <> "" then from_json
+        else
+          let from_header = request_header_or_empty request "x-thunderbird-message-id" |> String.trim in
+          if from_header <> "" then from_header
+          else
+            let rfc_headers = parse_headers raw in
+            header_or_empty rfc_headers "message-id" |> String.trim
+      in
+      if id = "" then
+        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing id\n" ()
+      else if set_processed_flag id true then
+        Cohttp_eio.Server.respond_string ~status:`OK
+          ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool true); ("id", `String id); ("processed", `Bool true) ]))
+          ~headers:json_headers ()
+      else
+        Cohttp_eio.Server.respond_string ~status:`Not_found
+          ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String "not ingested") ]))
+          ~headers:json_headers ()
+
+  | `POST, "/admin/mark_unprocessed" ->
+      let raw = read_all body in
+      (* Accept either JSON {"id":"..."} or raw RFC822 (from filter action) *)
+      let id =
+        let from_json =
+          try
+            let json = Yojson.Safe.from_string raw in
+            match json with
+            | `Assoc kv -> (match List.assoc_opt "id" kv with Some (`String s) -> String.trim s | _ -> "")
+            | _ -> ""
+          with _ -> ""
+        in
+        if from_json <> "" then from_json
+        else
+          let from_header = request_header_or_empty request "x-thunderbird-message-id" |> String.trim in
+          if from_header <> "" then from_header
+          else
+            let rfc_headers = parse_headers raw in
+            header_or_empty rfc_headers "message-id" |> String.trim
+      in
+      if id = "" then
+        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing id\n" ()
+      else if set_processed_flag id false then
+        Cohttp_eio.Server.respond_string ~status:`OK
+          ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool true); ("id", `String id); ("processed", `Bool false) ]))
+          ~headers:json_headers ()
+      else
+        Cohttp_eio.Server.respond_string ~status:`Not_found
+          ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String "not ingested") ]))
+          ~headers:json_headers ()
+
+  | `POST, "/debug/stdout" ->
+      let msg = read_all body |> String.trim in
+      if msg <> "" then Printf.printf "[TB] %s\n%!" msg;
+      Cohttp_eio.Server.respond_string ~status:`OK ~body:"ok\n" ()
+
+  | `POST, "/debug/stderr" ->
+      let msg = read_all body |> String.trim in
+      if msg <> "" then Printf.eprintf "[TB] %s\n%!" msg;
+      Cohttp_eio.Server.respond_string ~status:`OK ~body:"ok\n" ()
+
   | `POST, "/admin/bulk_ingest" ->
       let bulk_body = read_all body in
       let resp, resp_body = handle_bulk_ingest ~client ~sw ~clock bulk_body in
@@ -1943,6 +3073,12 @@ let log_warning ex = Logs.warn (fun f -> f "%a" Eio.Exn.pp ex)
 let () =
   Logs.set_reporter (Logs_fmt.reporter ())
 
+(*
+  Server startup
+
+  Parses -p <port>, initialises the Eio event loop, binds the TCP socket
+  (with a user-friendly error on EADDRINUSE), and starts the cohttp server.
+*)
 let () =
   let port = ref 8080 in
   Arg.parse
@@ -1951,10 +3087,23 @@ let () =
 
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
+  global_with_timeout := (fun seconds fn ->
+    try Eio.Time.with_timeout_exn env#clock seconds fn
+    with Eio.Time.Timeout ->
+      raise (Failure (Printf.sprintf "ollama request timed out after %.0fs" seconds)));
   let socket =
-    Eio.Net.listen env#net ~sw ~backlog:128 ~reuse_addr:true
-      (`Tcp (Eio.Net.Ipaddr.V4.any, !port))
+    try
+      Eio.Net.listen env#net ~sw ~backlog:128 ~reuse_addr:true
+        (`Tcp (Eio.Net.Ipaddr.V4.any, !port))
+    with Unix.Unix_error (Unix.EADDRINUSE, _, _) ->
+      Printf.eprintf
+        "Error: port %d is already in use.\n\
+         Another instance of rag-email-server (or another process) is likely running on that port.\n\
+         Try:  lsof -ti:%d | xargs kill   or use a different port with -p <port>\n%!"
+        !port !port;
+      exit 1
   in
+  Printf.printf "Listening on port %d\n%!" !port;
   let client = Cohttp_eio.Client.make ~https:None env#net in
   let server = Cohttp_eio.Server.make ~callback:(handler ~client ~sw ~clock:env#clock) () in
   Cohttp_eio.Server.run socket server ~on_error:log_warning

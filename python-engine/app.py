@@ -1,3 +1,22 @@
+"""ThunderRAG python-engine
+
+Responsibilities
+- Owns the vector index (FAISS) and the doc_id mapping (SQLite).
+- Provides a minimal HTTP API used by the OCaml server:
+  - /ingest_embedded: store pre-computed embeddings for a doc_id (computed in OCaml).
+  - /query_embedded: vector retrieval given a query embedding (computed in OCaml).
+  - /admin/delete, /admin/reset: maintenance operations.
+
+Design notes / invariants
+- This service is a pure vector index — it does NOT call an LLM and does NOT store metadata.
+  Email metadata (from, subject, date, etc.) is the OCaml server's responsibility.
+- Embeddings are treated as cosine similarity via inner product on L2-normalized vectors.
+- chunks.text and metadata_json are stored as "" / "{}" respectively.
+  The OCaml server and UI do not rely on the python-engine for email content or metadata.
+- Retrieval returns chunk-level hits from FAISS, then deduplicates by doc_id (keeping the best
+  scoring chunk per doc_id) because the OCaml server operates at the email/message level.
+"""
+
 import asyncio
 import json
 import os
@@ -5,7 +24,9 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import faiss  # type: ignore
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
@@ -19,30 +40,25 @@ DEFAULT_TOP_K = int(os.environ.get("RAG_ENGINE_TOP_K", "8"))
 
 
 def _l2_normalize(vec: List[float]) -> List[float]:
-    import math
-
-    s = 0.0
-    for v in vec:
-        s += v * v
-    if s <= 0:
-        return vec
-    inv = 1.0 / math.sqrt(s)
-    return [v * inv for v in vec]
-
-
-class IngestRequest(BaseModel):
-    id: str = Field(..., description="Document/message id")
-    text: str = Field(..., description="Text content to embed")
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    """L2-normalize a vector so inner-product equals cosine similarity."""
+    a = np.array(vec, dtype="float32")
+    n = float(np.linalg.norm(a))
+    return (a / n).tolist() if n > 0 else vec
 
 
 class EmbeddedChunk(BaseModel):
+    """A single chunk with its pre-computed embedding vector."""
     chunk_index: int = Field(..., ge=0)
     text: str
     embedding: List[float]
 
 
 class IngestEmbeddedRequest(BaseModel):
+    """Request to store pre-computed embeddings for a document.
+
+    The OCaml server computes embeddings via Ollama and forwards them here.
+    Metadata typically includes from, to, subject, date, attachments, etc.
+    """
     id: str = Field(..., description="Document/message id")
     metadata: Dict[str, Any] = Field(default_factory=dict)
     chunks: List[EmbeddedChunk] = Field(default_factory=list)
@@ -54,19 +70,22 @@ class IngestResponse(BaseModel):
 
 
 class QueryEmbeddedRequest(BaseModel):
+    """Vector retrieval request with a pre-computed query embedding."""
     embedding: List[float]
     top_k: int = Field(default=DEFAULT_TOP_K, ge=1, le=50)
 
 
 class SourceChunk(BaseModel):
+    """A single retrieval hit: one chunk from a document, with its similarity score."""
     chunk_id: int
     doc_id: str
-    text: str
+    text: str          # Currently "" (pointer-first: bodies come from Thunderbird)
     metadata: Dict[str, Any]
-    score: float
+    score: float        # Cosine similarity (inner product on L2-normalized vectors)
 
 
 class QueryResponse(BaseModel):
+    """Retrieval response.  answer is always "" (LLM generation is in OCaml)."""
     answer: str
     sources: List[SourceChunk]
 
@@ -86,10 +105,11 @@ class ResetResponse(BaseModel):
 
 @dataclass
 class EngineState:
+    """Singleton runtime state holding the DB connection, FAISS index, and async lock."""
     conn: sqlite3.Connection
-    index: Optional[faiss.Index]
-    dim: Optional[int]
-    lock: asyncio.Lock
+    index: Optional[faiss.Index]  # None until first ingestion
+    dim: Optional[int]            # Embedding dimensionality (set on first ingest)
+    lock: asyncio.Lock            # Serializes all index/DB mutations
 
 
 def _ensure_data_dir() -> None:
@@ -97,6 +117,13 @@ def _ensure_data_dir() -> None:
 
 
 def _connect_db() -> sqlite3.Connection:
+    """Create/open the SQLite DB and ensure the schema exists.
+
+    Schema notes
+    - One row per embedded chunk.
+    - doc_id is the stable identifier (typically the RFC822 Message-Id).
+    - metadata_json stores arbitrary JSON metadata (from, subject, date, attachments, ...).
+    """
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.execute(
         """
@@ -120,6 +147,7 @@ def _connect_db() -> sqlite3.Connection:
 
 
 def _load_meta() -> Dict[str, Any]:
+    """Load the meta.json sidecar (currently just stores {"dim": N})."""
     if not os.path.exists(META_PATH):
         return {}
     with open(META_PATH, "r", encoding="utf-8") as f:
@@ -127,6 +155,7 @@ def _load_meta() -> Dict[str, Any]:
 
 
 def _save_meta(meta: Dict[str, Any]) -> None:
+    """Atomically persist meta.json via write-to-tmp + rename."""
     tmp = META_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(meta, f)
@@ -134,6 +163,11 @@ def _save_meta(meta: Dict[str, Any]) -> None:
 
 
 def _make_faiss_index(dim: int) -> faiss.Index:
+    """Create a FAISS index configured for cosine similarity.
+
+    Cosine similarity is equivalent to inner product when vectors are L2-normalized.
+    We use an ID-mapped index so we can delete by SQLite row ids.
+    """
     # Cosine similarity = inner product on L2-normalized vectors.
     base = faiss.IndexFlatIP(dim)
     return faiss.IndexIDMap2(base)
@@ -146,53 +180,36 @@ def _load_faiss_index() -> Optional[faiss.Index]:
 
 
 def _persist_faiss_index(index: faiss.Index) -> None:
+    """Atomically persist the FAISS index to disk via write-to-tmp + rename."""
     tmp = FAISS_PATH + ".tmp"
     faiss.write_index(index, tmp)
     os.replace(tmp, FAISS_PATH)
 
 
 def _remove_faiss_ids(index: faiss.Index, ids: List[int]) -> None:
+    """Remove vectors from a FAISS IDMap index by their SQLite row IDs."""
     if not ids:
         return
-    import numpy as np
-
     arr = np.array(ids, dtype="int64")
     sel = faiss.IDSelectorBatch(int(arr.size), faiss.swig_ptr(arr))
     index.remove_ids(sel)
 
 
 def _safe_unlink(path: str) -> None:
+    """Delete a file if it exists; silently ignore if already gone."""
     try:
         os.unlink(path)
     except FileNotFoundError:
         return
 
 
-def _chunk_text(text: str, *, chunk_size: int = 1500, overlap: int = 200) -> List[str]:
-    cleaned = text.replace("\r\n", "\n").strip()
-    if not cleaned:
-        return []
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize global EngineState on startup, clean up on shutdown.
 
-    chunks: List[str] = []
-    start = 0
-    n = len(cleaned)
-    while start < n:
-        end = min(n, start + chunk_size)
-        chunk = cleaned[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
-        if end >= n:
-            break
-        start = max(0, end - overlap)
-    return chunks
-
-
-app = FastAPI()
-state: Optional[EngineState] = None
-
-
-@app.on_event("startup")
-async def _startup() -> None:
+    The FAISS index is loaded from disk if present, otherwise created lazily when the first
+    embeddings are ingested.
+    """
     global state
     _ensure_data_dir()
     conn = _connect_db()
@@ -207,21 +224,21 @@ async def _startup() -> None:
         dim = meta["dim"]
 
     state = EngineState(conn=conn, index=index, dim=dim, lock=asyncio.Lock())
+    yield
+    if state:
+        try:
+            state.conn.close()
+        finally:
+            state = None
 
 
-@app.on_event("shutdown")
-async def _shutdown() -> None:
-    global state
-    if not state:
-        return
-    try:
-        state.conn.close()
-    finally:
-        state = None
+app = FastAPI(lifespan=lifespan)
+state: Optional[EngineState] = None
 
 
 @app.get("/health")
 async def health() -> Dict[str, Any]:
+    """Health/status endpoint used for debugging and readiness checks."""
     if not state:
         raise HTTPException(status_code=503, detail="not initialized")
     return {
@@ -232,16 +249,19 @@ async def health() -> Dict[str, Any]:
     }
 
 
-@app.post("/ingest", response_model=IngestResponse)
-async def ingest(req: IngestRequest) -> IngestResponse:
-    raise HTTPException(
-        status_code=410,
-        detail="/ingest is disabled. Compute embeddings in OCaml and call /ingest_embedded.",
-    )
-
-
 @app.post("/ingest_embedded", response_model=IngestResponse)
 async def ingest_embedded(req: IngestEmbeddedRequest) -> IngestResponse:
+    """Ingest pre-computed embeddings for a document/message.
+
+    Idempotency
+    - If a doc_id already exists, we delete existing rows and remove their FAISS ids,
+      then insert the new chunks.
+
+    Pointer-first storage
+    - chunks.text is currently stored as "" (empty) to keep python-engine lightweight.
+      The UI does not display bodies from here; OCaml builds prompts from Thunderbird-provided
+      raw RFC822 evidence.
+    """
     if not state:
         raise HTTPException(status_code=503, detail="not initialized")
 
@@ -303,12 +323,10 @@ async def ingest_embedded(req: IngestEmbeddedRequest) -> IngestResponse:
         for ch in chunks:
             cur.execute(
                 "INSERT INTO chunks(doc_id, chunk_index, text, metadata_json) VALUES(?,?,?,?)",
-                (req.id, int(ch.chunk_index), ch.text, json.dumps(req.metadata)),
+                (req.id, int(ch.chunk_index), "", "{}"),
             )
             inserted_ids.append(int(cur.lastrowid))
         state.conn.commit()
-
-        import numpy as np
 
         vecs = np.array(embedded, dtype="float32")
         ids = np.array(inserted_ids, dtype="int64")
@@ -318,16 +336,23 @@ async def ingest_embedded(req: IngestEmbeddedRequest) -> IngestResponse:
     return IngestResponse(status="ok", chunks_ingested=len(chunks))
 
 
-@app.post("/query", response_model=QueryResponse)
-async def query(_req: Dict[str, Any]) -> QueryResponse:
-    raise HTTPException(
-        status_code=410,
-        detail="/query is disabled. Compute embeddings + LLM response in OCaml; call /query_embedded for retrieval.",
-    )
-
-
 @app.post("/query_embedded", response_model=QueryResponse)
 async def query_embedded(req: QueryEmbeddedRequest) -> QueryResponse:
+    """Vector retrieval endpoint.
+
+    Input
+    - embedding: query embedding (already computed by OCaml via Ollama)
+    - top_k: maximum number of results
+
+    Output
+    - QueryResponse(answer="", sources=[...])
+      The OCaml server uses sources[*].doc_id as the stable message pointer.
+
+    Ranking + dedupe
+    - FAISS returns chunk-level hits.
+    - We load metadata_json from SQLite for each hit.
+    - We deduplicate by doc_id (keep highest score), sort by score desc, and return up to top_k.
+    """
     if not state:
         raise HTTPException(status_code=503, detail="not initialized")
 
@@ -343,8 +368,6 @@ async def query_embedded(req: QueryEmbeddedRequest) -> QueryResponse:
             raise HTTPException(status_code=400, detail="index is empty")
         if state.dim is None or len(qvec) != state.dim:
             raise HTTPException(status_code=500, detail="embedding dim mismatch")
-
-        import numpy as np
 
         q = np.array([qvec], dtype="float32")
         scores, ids = state.index.search(q, search_k)
@@ -375,11 +398,22 @@ async def query_embedded(req: QueryEmbeddedRequest) -> QueryResponse:
                 )
             )
 
+        # Deduplicate by doc_id, keeping the highest-scoring hit.
+        best_by_doc: Dict[str, SourceChunk] = {}
+        for h in hits:
+            prev = best_by_doc.get(h.doc_id)
+            if prev is None or h.score > prev.score:
+                best_by_doc[h.doc_id] = h
+        hits = list(best_by_doc.values())
+        hits.sort(key=lambda h: h.score, reverse=True)
+        hits = hits[: int(req.top_k)]
+
     return QueryResponse(answer="", sources=hits)
 
 
 @app.post("/admin/delete", response_model=DeleteResponse)
 async def admin_delete(req: DeleteRequest) -> DeleteResponse:
+    """Delete all chunks associated with a doc_id from SQLite and FAISS."""
     if not state:
         raise HTTPException(status_code=503, detail="not initialized")
 
@@ -408,6 +442,7 @@ async def admin_delete(req: DeleteRequest) -> DeleteResponse:
 
 @app.post("/admin/reset", response_model=ResetResponse)
 async def admin_reset() -> ResetResponse:
+    """Hard reset: delete all persisted DB/index files and reinitialize empty state."""
     if not state:
         raise HTTPException(status_code=503, detail="not initialized")
 
@@ -427,11 +462,3 @@ async def admin_reset() -> ResetResponse:
         state.dim = None
 
     return ResetResponse(status="ok")
-
-
-@app.post("/admin/summarize")
-async def admin_summarize(_req: Dict[str, Any]) -> Dict[str, Any]:
-    raise HTTPException(
-        status_code=410,
-        detail="/admin/summarize is disabled. Summarization should be done by OCaml via Ollama.",
-    )

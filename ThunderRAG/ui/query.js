@@ -1,18 +1,47 @@
+/*
+  ThunderRAG query UI
+
+  This page implements a 2-phase RAG query flow:
+  1) POST /query (OCaml server)
+     - Server runs retrieval only (vector search via python-engine).
+     - Response includes status=need_messages, request_id, message_ids, and source metadata.
+  2) For each message_id:
+     - UI asks background.js to fetch raw RFC822 via browser.messages.getRaw.
+     - UI uploads evidence to OCaml server via POST /query/evidence with headers:
+       - X-RAG-Request-Id
+       - X-Thunderbird-Message-Id
+  3) POST /query/complete
+     - Server builds final prompt (includes SOURCES INDEX + evidence), calls Ollama chat,
+       updates session state, and returns answer + metadata-only sources.
+
+  UI responsibilities
+  - Render the Sources block above the final answer.
+  - Show progress ("Fetching emails X/Y") while evidence is being uploaded.
+  - Show typing dots while waiting for /query/complete.
+  - Convert citations like [Source N] into clickable links that open the corresponding email.
+*/
+
+/* Short alias for getElementById, used throughout the UI. */
 function $(id) {
   return document.getElementById(id);
 }
 
-function normalizeBaseUrl(s) {
-  const trimmed = (s || "").trim();
-  if (!trimmed) {
-    return "http://localhost:8080";
+/*
+  Read the OCaml server base URL from browser.storage.local (set in add-on options).
+  Falls back to http://localhost:8080 if not configured.
+*/
+const DEFAULT_SERVER_BASE = "http://localhost:8080";
+async function getServerBase() {
+  try {
+    const data = await browser.storage.local.get("ragServerBase");
+    const url = (data.ragServerBase || "").trim();
+    return url || DEFAULT_SERVER_BASE;
+  } catch (_e) {
+    return DEFAULT_SERVER_BASE;
   }
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) {
-    return trimmed.replace(/\/+$/, "");
-  }
-  return ("http://" + trimmed).replace(/\/+$/, "");
 }
 
+/* Format an email date string into a locale-aware short format for source tiles. */
 function formatEmailDate(s) {
   const raw = String(s || "").trim();
   if (!raw) return "";
@@ -31,59 +60,11 @@ function formatEmailDate(s) {
   }
 }
 
-function decodeRfc2047(s) {
-  const input = String(s || "");
-  if (!input.includes("=?")) return input;
-
-  const td = new TextDecoder("utf-8", { fatal: false });
-
-  function decodeQ(payload) {
-    const bytes = [];
-    for (let i = 0; i < payload.length; i++) {
-      const ch = payload[i];
-      if (ch === "_") {
-        bytes.push(0x20);
-        continue;
-      }
-      if (ch === "=" && i + 2 < payload.length) {
-        const h = payload.slice(i + 1, i + 3);
-        if (/^[0-9A-Fa-f]{2}$/.test(h)) {
-          bytes.push(parseInt(h, 16));
-          i += 2;
-          continue;
-        }
-      }
-      bytes.push(ch.charCodeAt(0) & 0xff);
-    }
-    return td.decode(new Uint8Array(bytes));
-  }
-
-  function decodeB(payload) {
-    let bin = "";
-    try {
-      bin = atob(payload.replace(/\s+/g, ""));
-    } catch (_e) {
-      return null;
-    }
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i) & 0xff;
-    return td.decode(bytes);
-  }
-
-  return input.replace(/=\?([^?]+)\?([bqBQ])\?([^?]*)\?=/g, (_m, charset, enc, payload) => {
-    const cs = String(charset || "").trim().toLowerCase();
-    if (cs !== "utf-8" && cs !== "utf8") return _m;
-    const e = String(enc || "").toLowerCase();
-    if (e === "q") return decodeQ(String(payload || ""));
-    if (e === "b") {
-      const out = decodeB(String(payload || ""));
-      return out == null ? _m : out;
-    }
-    return _m;
-  });
-}
-
 async function fetchJson(url, body) {
+  /*
+    JSON POST helper.
+    The OCaml server consistently returns JSON (or an error status + text).
+  */
   const resp = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -133,6 +114,11 @@ function appendMessage(role, text) {
 }
 
 function renderSourcesInto(container, sources) {
+  /*
+    Render a set of lightweight source tiles.
+    Each tile is clickable (opens the message), but intentionally does NOT show
+    message bodies or attachment contents.
+  */
   container.innerHTML = "";
 
   if (!Array.isArray(sources) || sources.length === 0) {
@@ -145,72 +131,11 @@ function renderSourcesInto(container, sources) {
 
   for (const s of sources) {
     const docId = s?.doc_id || "";
-    const text = String(s?.text || "");
     const md = s?.metadata || {};
 
-    const from = decodeRfc2047(String(md?.from || "")).trim();
-    const subject = decodeRfc2047(String(md?.subject || "")).trim();
+    const from = String(md?.from || "").trim();
+    const subject = String(md?.subject || "").trim();
     const date = formatEmailDate(md?.date);
-    const to = decodeRfc2047(String(md?.to || "")).trim();
-    const cc = decodeRfc2047(String(md?.cc || "")).trim();
-    const bcc = decodeRfc2047(String(md?.bcc || "")).trim();
-    const attachments = Array.isArray(md?.attachments)
-      ? md.attachments.filter((x) => typeof x === "string" && x.trim())
-      : [];
-
-    let snippetText = text;
-    {
-      const lines = snippetText.split("\n");
-      let blankIdx = -1;
-      for (let i = 0; i < Math.min(lines.length, 30); i++) {
-        if (!String(lines[i] || "").trim()) {
-          blankIdx = i;
-          break;
-        }
-      }
-
-      // If the chunk begins with an email header block, remove it so we don't duplicate meta.
-      // We can't rely on Message-Id always being present in the chunk (chunking can cut it off).
-      if (blankIdx >= 0) {
-        const headerLines = lines.slice(0, blankIdx);
-        const headerCount = headerLines.reduce((n, l) => {
-          const t = String(l || "").trim();
-          if (!t) return n;
-          if (/^(From|To|Cc|Bcc|Subject|Date)\s*:/i.test(t)) return n + 1;
-          return n;
-        }, 0);
-
-        // Heuristic: if we see multiple header-like lines before the first blank line,
-        // treat it as the indexed header prefix.
-        if (headerCount >= 2) {
-          snippetText = lines.slice(blankIdx + 1).join("\n").trim();
-        }
-      }
-
-      if (blankIdx < 0) {
-        let headerCount = 0;
-        let cut = 0;
-        for (let i = 0; i < Math.min(lines.length, 20); i++) {
-          const t = String(lines[i] || "").trim();
-          if (!t) break;
-          if (/^(From|To|Cc|Bcc|Subject|Date|Message-Id|Attachments)\s*:/i.test(t)) {
-            headerCount += 1;
-            cut = i + 1;
-          } else {
-            break;
-          }
-        }
-        if (headerCount >= 2 && cut > 0) {
-          snippetText = lines.slice(cut).join("\n").trim();
-        }
-      }
-    }
-
-    snippetText = snippetText
-      .split("\n")
-      .filter((line) => !/^Message-Id\s*:/i.test(String(line || "").trim()))
-      .join("\n")
-      .trim();
 
     const card = document.createElement("div");
     card.className = "source";
@@ -244,7 +169,10 @@ function renderSourcesInto(container, sources) {
     const left = document.createElement("div");
     const title = document.createElement("div");
     title.className = "source-title";
-    title.textContent = subject || "(no subject)";
+    const label = s?._label || "";
+    title.textContent = label
+      ? `[${label}] ${subject || "(no subject)"}`
+      : subject || "(no subject)";
     left.appendChild(title);
 
     const right = document.createElement("div");
@@ -258,35 +186,51 @@ function renderSourcesInto(container, sources) {
     meta.className = "source-meta";
     const metaLines = [];
     if (from) metaLines.push(`From: ${from}`);
-    if (to) metaLines.push(`To: ${to}`);
-    if (cc) metaLines.push(`Cc: ${cc}`);
-    if (bcc) metaLines.push(`Bcc: ${bcc}`);
-    if (attachments.length) metaLines.push(`Attachments: ${attachments.join(", ")}`);
     meta.textContent = metaLines.join("\n");
-
-    const body = document.createElement("div");
-    body.className = "source-text";
-    body.textContent = snippetText;
 
     card.appendChild(header);
     if (meta.textContent.trim()) {
       card.appendChild(meta);
     }
-    card.appendChild(body);
     container.appendChild(card);
   }
 }
 
 function setAssistantMessage(bubble, answer, sources) {
-  bubble.textContent = answer || "";
+  /*
+    Renders a single assistant "bubble" with three pieces:
+    - A debug-only collapsible triangle (no label) that expands the full sources list.
+    - The final answer text, with citations post-processed into clickable links.
+    - Below the answer: tiles for only the sources actually cited as [Email N].
+
+    bubble.__rag is used to keep references to the progress bar + answer element for updates.
+  */
+  bubble.textContent = "";
 
   const meta = document.createElement("div");
   meta.className = "assistant-meta";
 
   const details = document.createElement("details");
   const summary = document.createElement("summary");
-  const n = Array.isArray(sources) ? sources.length : 0;
-  summary.textContent = `Sources (${n})`;
+  const summaryRow = document.createElement("div");
+  summaryRow.className = "summary-row";
+
+  const summaryProgress = document.createElement("span");
+  summaryProgress.className = "summary-progress";
+  summaryProgress.style.display = "none";
+
+  const progressLabel = document.createElement("span");
+  progressLabel.textContent = "Fetching emails";
+
+  const progress = document.createElement("progress");
+  progress.max = 100;
+  progress.value = 0;
+
+  summaryProgress.appendChild(progressLabel);
+  summaryProgress.appendChild(progress);
+  summaryRow.appendChild(summaryProgress);
+
+  summary.appendChild(summaryRow);
   details.appendChild(summary);
 
   const sourcesContainer = document.createElement("div");
@@ -296,11 +240,140 @@ function setAssistantMessage(bubble, answer, sources) {
 
   meta.appendChild(details);
   bubble.appendChild(meta);
+
+  const answerEl = document.createElement("div");
+  const srcs = Array.isArray(sources) ? sources : [];
+  const text = String(answer || "");
+
+  // Pass 1: collect unique cited original indices (0-based) in order of appearance.
+  const citedOriginal = [];
+  {
+    const seen = new Set();
+    const re = /\[Email\s+(\d+)\]/g;
+    let m;
+    while ((m = re.exec(text))) {
+      const idx = parseInt(m[1], 10) - 1;
+      if (idx >= 0 && idx < srcs.length && srcs[idx]?.doc_id && !seen.has(idx)) {
+        seen.add(idx);
+        citedOriginal.push(idx);
+      }
+    }
+  }
+  // Build renumber map: original 0-based index → new 1-based number.
+  const renumber = new Map();
+  citedOriginal.forEach((origIdx, i) => renumber.set(origIdx, i + 1));
+
+  // Pass 2: render answer text with renumbered citations.
+  {
+    const re = /\[Email\s+(\d+)\]/g;
+    let last = 0;
+    let m;
+    while ((m = re.exec(text))) {
+      const start = m.index;
+      const end = re.lastIndex;
+      if (start > last) {
+        answerEl.appendChild(document.createTextNode(text.slice(last, start)));
+      }
+
+      const origN = parseInt(m[1], 10);
+      const idx = origN - 1;
+      const newN = renumber.get(idx);
+
+      if (newN !== undefined) {
+        const docId = String(srcs[idx]?.doc_id || "");
+        const a = document.createElement("a");
+        a.href = "#";
+        a.className = "citation";
+        a.textContent = `[Email ${newN}]`;
+        a.addEventListener("click", async (e) => {
+          e.preventDefault();
+          try {
+            await browser.runtime.sendMessage({
+              type: "openMessageByHeaderMessageId",
+              headerMessageId: docId,
+            });
+          } catch (err) {
+            $("error").textContent = String(err && err.message ? err.message : err);
+          }
+        });
+        answerEl.appendChild(a);
+      } else {
+        answerEl.appendChild(document.createTextNode(m[0]));
+      }
+
+      last = end;
+    }
+    if (last < text.length) {
+      answerEl.appendChild(document.createTextNode(text.slice(last)));
+    }
+  }
+  bubble.appendChild(answerEl);
+
+  // Render cited sources below the answer (always visible, no collapse), renumbered.
+  if (citedOriginal.length > 0) {
+    const citedContainer = document.createElement("div");
+    citedContainer.className = "cited-sources";
+    const citedWithLabels = citedOriginal.map((origIdx, i) => ({
+      ...srcs[origIdx],
+      _label: `Email ${i + 1}`,
+    }));
+    renderSourcesInto(citedContainer, citedWithLabels);
+    bubble.appendChild(citedContainer);
+  }
+
+  bubble.__rag = {
+    details,
+    summaryProgress,
+    progress,
+    progressLabel,
+    answerEl,
+  };
 }
 
-let inFlight = false;
-const history = [];
+function setSourcesProgress(bubble, current, total) {
+  /*
+    Show and update the inline progress bar inside the Sources summary header.
+    This remains visible even while the Sources <details> is collapsed.
+  */
+  const s = bubble && bubble.__rag;
+  if (!s) return;
+  const cur = Math.max(0, Number(current || 0));
+  const tot = Math.max(0, Number(total || 0));
+  if (!tot) {
+    s.summaryProgress.style.display = "none";
+    return;
+  }
+  s.summaryProgress.style.display = "";
+  s.progress.value = Math.max(0, Math.min(100, Math.round((cur / tot) * 100)));
+  s.progressLabel.textContent = `Fetching emails ${cur}/${tot}`;
+}
 
+function hideSourcesProgress(bubble) {
+  const s = bubble && bubble.__rag;
+  if (!s) return;
+  s.summaryProgress.style.display = "none";
+}
+
+function setTypingDots(bubble) {
+  /*
+    Replace the answer area with an animated typing indicator while we wait for /query/complete.
+  */
+  const s = bubble && bubble.__rag;
+  if (!s) return;
+  s.answerEl.textContent = "";
+  const t = document.createElement("span");
+  t.className = "typing";
+  t.appendChild(document.createElement("span")).className = "dot";
+  t.appendChild(document.createElement("span")).className = "dot";
+  t.appendChild(document.createElement("span")).className = "dot";
+  s.answerEl.appendChild(t);
+}
+
+/* Guards against concurrent queries — only one query can be in flight at a time. */
+let inFlight = false;
+
+/* Get or create a persistent session ID stored in localStorage.
+   The session ID ties together multi-turn conversation state on the OCaml server. */
 function getSessionId() {
   const key = "rag.sessionId";
   let v = localStorage.getItem(key);
@@ -316,11 +389,16 @@ function getSessionId() {
 }
 
 async function onAsk() {
+  /*
+    Main user action handler:
+    - sends the question
+    - orchestrates retrieval, evidence upload, and final completion
+    - updates the UI to reflect progress and results
+  */
   clearError();
   if (inFlight) return;
 
-  const base = normalizeBaseUrl($("serverBase").value);
-  localStorage.setItem("rag.serverBase", base);
+  const base = await getServerBase();
 
   const mode = String($("mode").value || "assistive");
   localStorage.setItem("rag.mode", mode);
@@ -334,7 +412,6 @@ async function onAsk() {
 
   $("question").value = "";
   appendMessage("user", question);
-  history.push({ role: "user", content: question });
   const assistant = appendMessage("assistant", "...");
   inFlight = true;
   $("askBtn").disabled = true;
@@ -348,26 +425,75 @@ async function onAsk() {
       top_k: topK,
       mode,
     });
-    const answer = res?.answer || "";
-    setAssistantMessage(assistant.bubble, answer, res?.sources || []);
+
     const srcs = Array.isArray(res?.sources) ? res.sources : [];
-    const summary = srcs
-      .slice(0, 12)
-      .map((s, idx) => {
-        const md = s?.metadata || {};
-        const docId = s?.doc_id || "";
-        const from = decodeRfc2047(md?.from || "");
-        const subject = decodeRfc2047(md?.subject || "");
-        const date = formatEmailDate(md?.date);
-        const atts = Array.isArray(md?.attachments)
-          ? md.attachments.filter((x) => typeof x === "string" && x.trim()).join(", ")
-          : "";
-        const attPart = atts ? ` attachments=${atts}` : "";
-        return `[Source ${idx + 1}] doc_id=${docId} from=${from} subject=${subject} date=${date}${attPart}`;
-      })
-      .join("\n");
-    history.push({ role: "assistant", content: answer });
-    $("status").textContent = "";
+
+    if (String(res?.status || "") === "need_messages") {
+      const requestId = String(res?.request_id || "");
+      const messageIds = Array.isArray(res?.message_ids) ? res.message_ids : [];
+
+      setAssistantMessage(assistant.bubble, "", srcs);
+      setSourcesProgress(assistant.bubble, 0, messageIds.length);
+
+      if (!requestId || !messageIds.length) {
+        throw new Error("Server requested messages but did not return request_id/message_ids");
+      }
+
+      async function postEvidence(headerMessageId, raw) {
+        const enc = new TextEncoder();
+        const bytes = enc.encode(String(raw || ""));
+        const blob = new Blob([bytes], { type: "message/rfc822" });
+        const headers = new Headers();
+        headers.set("Content-Type", "message/rfc822");
+        headers.set("X-Thunderbird-Message-Id", headerMessageId);
+        headers.set("X-RAG-Request-Id", requestId);
+
+        const resp = await fetch(`${base}/query/evidence`, {
+          method: "POST",
+          headers,
+          body: blob,
+        });
+        const text = await resp.text();
+        if (!resp.ok) {
+          throw new Error(`Evidence upload failed: HTTP ${resp.status}: ${text}`);
+        }
+      }
+
+      for (let i = 0; i < messageIds.length; i++) {
+        const mid = String(messageIds[i] || "").trim();
+        if (!mid) continue;
+        $("status").textContent = `Fetching evidence ${i + 1}/${messageIds.length}...`;
+        const got = await browser.runtime.sendMessage({
+          type: "getRawMessageByHeaderMessageId",
+          headerMessageId: mid,
+        });
+        const raw = got?.raw;
+        await postEvidence(mid, raw);
+        setSourcesProgress(assistant.bubble, i + 1, messageIds.length);
+      }
+
+      hideSourcesProgress(assistant.bubble);
+      setTypingDots(assistant.bubble);
+
+      const chatModel = $("chatModel").value || "";
+      localStorage.setItem("rag.chatModel", chatModel);
+
+      const final = await fetchJson(`${base}/query/complete`, {
+        session_id,
+        request_id: requestId,
+        chat_model: chatModel,
+      });
+
+      const answer = String(final?.answer || "");
+      const sources = Array.isArray(final?.sources) ? final.sources : srcs;
+      setAssistantMessage(assistant.bubble, answer, sources);
+      $("status").textContent = "";
+      return;
+    } else {
+      const answer = res?.answer || "";
+      setAssistantMessage(assistant.bubble, answer, srcs);
+      $("status").textContent = "";
+    }
   } catch (e) {
     $("status").textContent = "";
     $("error").textContent = String(e && e.message ? e.message : e);
@@ -378,12 +504,69 @@ async function onAsk() {
   }
 }
 
-function init() {
-  const saved = localStorage.getItem("rag.serverBase");
-  $("serverBase").value = saved || "http://localhost:8080";
+/*
+  Fetch the list of available Ollama models from the OCaml server and populate
+  the chatModel <select> dropdown.  Selects either the previously-saved model
+  (from localStorage) or the server's default_chat_model.
+*/
+async function fetchModels() {
+  const base = await getServerBase();
+  const sel = $("chatModel");
+  try {
+    const resp = await fetch(`${base}/admin/models`);
+    const data = await resp.json();
+    const models = Array.isArray(data?.models) ? data.models : [];
+    const defaultModel = String(data?.default_chat_model || "");
+    const savedModel = localStorage.getItem("rag.chatModel") || "";
 
+    sel.innerHTML = "";
+    if (models.length === 0) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "(no models found)";
+      sel.appendChild(opt);
+      return;
+    }
+    for (const m of models) {
+      const opt = document.createElement("option");
+      opt.value = m;
+      opt.textContent = m;
+      sel.appendChild(opt);
+    }
+    // Select saved model if still available, else default, else first.
+    if (savedModel && models.includes(savedModel)) {
+      sel.value = savedModel;
+    } else if (defaultModel && models.includes(defaultModel)) {
+      sel.value = defaultModel;
+    } else {
+      sel.value = models[0];
+    }
+  } catch (e) {
+    sel.innerHTML = "";
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "(error loading models)";
+    sel.appendChild(opt);
+  }
+}
+
+/* Load the default top-K from add-on storage (set in options page) into the query input. */
+async function loadDefaultTopK() {
+  try {
+    const data = await browser.storage.local.get("ragDefaultTopK");
+    const val = parseInt(data.ragDefaultTopK, 10);
+    if (val && val >= 1 && val <= 50) {
+      $("topK").value = val;
+    }
+  } catch (_e) { /* keep hardcoded default */ }
+}
+
+/* Initialize the UI: restore saved settings from localStorage and wire up event listeners. */
+function init() {
   const savedMode = localStorage.getItem("rag.mode");
   $("mode").value = savedMode === "grounded" ? "grounded" : "assistive";
+
+  loadDefaultTopK();
 
   $("askBtn").addEventListener("click", onAsk);
 
@@ -403,6 +586,21 @@ function init() {
     e.preventDefault();
     onAsk();
   });
+
+  // Persist selected model.
+  $("chatModel").addEventListener("change", () => {
+    localStorage.setItem("rag.chatModel", $("chatModel").value);
+  });
+
+  // Re-fetch models if the server URL changes in options.
+  browser.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes.ragServerBase) {
+      fetchModels();
+    }
+  });
+
+  // Fetch models on startup.
+  fetchModels();
 }
 
 init();

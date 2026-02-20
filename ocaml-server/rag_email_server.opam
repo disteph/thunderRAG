@@ -15,6 +15,7 @@ depends: [
   "mrmime"
   "angstrom"
   "bigstringaf"
+  "lambdasoup"
   "logs"
   "fmt"
   "odoc" {with-doc}

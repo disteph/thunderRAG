@@ -3,7 +3,7 @@
  (modules main tool_check)
  (public_name rag-email-server)
  (promote (until-clean) (into ".."))
- (libraries eio_main cohttp-eio uri yojson mrmime angstrom logs logs.fmt fmt bigstringaf unix))
+ (libraries rag_lib eio_main cohttp-eio uri yojson mrmime angstrom logs logs.fmt fmt bigstringaf unix lambdasoup))
 
 (rule
  (targets tool_check.ml)

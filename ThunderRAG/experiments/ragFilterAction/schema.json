@@ -1,7 +1,7 @@
 [
   {
     "namespace": "ragFilterAction",
-    "description": "Registers the ThunderRAG filter custom action.",
+    "description": "Registers the ThunderRAG filter custom action and provides an ingest queue for encrypted email delegation.",
     "functions": [
       {
         "name": "register",
@@ -16,6 +16,52 @@
         "description": "Unregister the custom filter action (best-effort).",
         "async": true,
         "parameters": []
+      },
+      {
+        "name": "getIngestQueue",
+        "type": "function",
+        "description": "Return the current queue of messages awaiting background-script decryption and ingestion. Each item has {id, headerMessageId, endpoint, timestamp}.",
+        "async": true,
+        "parameters": []
+      },
+      {
+        "name": "completeIngestItem",
+        "type": "function",
+        "description": "Remove a completed or failed item from the ingest queue by its id.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "itemId",
+            "type": "string",
+            "description": "The queue item id to remove."
+          }
+        ]
+      },
+      {
+        "name": "updateIngestStatusCache",
+        "type": "function",
+        "description": "Push a JSON-encoded map of headerMessageId → boolean ingestion status to the experiment API's column handler cache.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "cacheJson",
+            "type": "string",
+            "description": "JSON string of {headerMessageId: bool, ...}"
+          }
+        ]
+      },
+      {
+        "name": "getDecryptedBodyText",
+        "type": "function",
+        "description": "Use Thunderbird's internal MIME pipeline to extract decrypted body text for an S/MIME or PGP-encrypted message. Returns {body, kind} or null.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "messageId",
+            "type": "integer",
+            "description": "Internal Thunderbird numeric message ID."
+          }
+        ]
       }
     ]
   }
