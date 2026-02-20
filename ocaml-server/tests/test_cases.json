@@ -1,0 +1,216 @@
+{
+  "_meta": "Quality test cases for ThunderRAG. Each case runs through the full query flow and checks the answer.",
+  "user_name": "Bob Martinez <bob@acme.com>",
+  "cases": [
+    {
+      "id": "factual_01",
+      "category": "factual",
+      "question": "When is the Project Falcon launch date?",
+      "session_group": "session_factual_01",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["March 15", "March 17"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["Project Falcon launch date", "Updated Falcon timeline"],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "factual_02",
+      "category": "factual",
+      "question": "Who scheduled the Q1 budget review meeting and when is it?",
+      "session_group": "session_factual_02",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["Carol", "February 20", "Feb 20"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["Q1 budget review"],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "factual_03",
+      "category": "factual",
+      "question": "What are the key highlights from the Q1 financial report?",
+      "session_group": "session_factual_03",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["2.4M", "$2.4M", "2.4 million", "revenue", "25%"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["Q1 financial report"],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "urgent_01",
+      "category": "triage",
+      "question": "Are there any urgent emails that need immediate attention?",
+      "session_group": "session_urgent_01",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["server", "down", "production", "Dave", "503"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["URGENT", "Production server down"],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "thread_01",
+      "category": "thread",
+      "question": "What is the current status of the CloudStore vendor contract negotiation?",
+      "session_group": "session_thread_01",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["$40,000", "40,000", "40K", "negotiate", "Heidi", "Grace"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["Vendor contract renewal"],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "thread_02",
+      "category": "thread",
+      "question": "What did Grace recommend about the CloudStore contract?",
+      "session_group": "session_thread_02",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["negotiate", "$40,000", "40,000", "DataVault", "migration risk"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["Vendor contract renewal"],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "broad_01",
+      "category": "broad",
+      "question": "What topics has Mark Johnson emailed me about?",
+      "session_group": "session_broad_01",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["Lisa Wong", "new hire", "renovation", "Building 3", "offsite", "April"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["New hire", "Office renovation", "Company offsite"],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "temporal_01",
+      "category": "temporal",
+      "question": "What is the most recent email I got from Alice?",
+      "session_group": "session_temporal_01",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["March 17", "Updated Falcon timeline", "2-day delay", "marketing"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["Updated Falcon timeline"],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "temporal_02",
+      "category": "temporal",
+      "question": "What deadlines do I have coming up?",
+      "session_group": "session_temporal_02",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["February 28", "Feb 28", "March 3", "compliance", "audit"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["Compliance audit", "budget review"],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "attachment_01",
+      "category": "attachment",
+      "question": "Did anyone send me a spreadsheet or financial report?",
+      "session_group": "session_attachment_01",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["Eve", "Q1", "financial", "report", "xlsx"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["Q1 financial report"],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "crossref_01",
+      "category": "cross_reference",
+      "question": "What's the situation with the payment gateway API keys for Falcon?",
+      "session_group": "session_crossref_01",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["API keys", "pending", "approval", "Dave", "vendor"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["API keys for Falcon"],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "negative_01",
+      "category": "negative",
+      "question": "Has anyone emailed me about the Mars colonization project?",
+      "session_group": "session_negative_01",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["no ", "not ", "don't", "doesn't", "no relevant", "no emails", "not found", "couldn't find"],
+        "must_not_contain": [],
+        "must_cite_emails": false,
+        "expected_email_subjects_any": [],
+        "hallucination_keywords": ["Mars colonization", "Mars project"]
+      }
+    },
+    {
+      "id": "multiturn_01",
+      "category": "multi_turn",
+      "question": "Tell me about Alice's emails regarding Project Falcon.",
+      "session_group": "session_multiturn",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["Falcon", "launch", "Alice"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["Falcon"],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "multiturn_02",
+      "category": "multi_turn",
+      "question": "What did she say about the deadline change?",
+      "session_group": "session_multiturn",
+      "depends_on": "multiturn_01",
+      "criteria": {
+        "must_contain_any": ["March 17", "2-day delay", "marketing", "March 15"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["Updated Falcon timeline"],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "multiturn_03",
+      "category": "multi_turn",
+      "question": "And who needs to be informed about this change?",
+      "session_group": "session_multiturn",
+      "depends_on": "multiturn_02",
+      "criteria": {
+        "must_contain_any": ["QA", "Bob"],
+        "must_not_contain": [],
+        "must_cite_emails": false,
+        "expected_email_subjects_any": [],
+        "hallucination_keywords": []
+      }
+    }
+  ]
+}

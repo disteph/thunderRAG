@@ -1942,6 +1942,8 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
     in
     match ollama_chat ~client ~sw ~model:ollama_summarize_model ~messages () with
     | Ok raw_resp ->
+        if rag_debug_ollama_chat then
+          Printf.printf "\n[retrieval.rewrite.response]\n%s\n%!" raw_resp;
         let raw_resp = String.trim raw_resp in
         let raw_resp =
           if starts_with "```" raw_resp then
@@ -2597,7 +2599,10 @@ let handler ~client ~sw ~clock _socket request body =
 
                 let answer =
                   match ollama_chat ~client ~sw ~model:chat_model_override ~messages () with
-                  | Ok s -> strip_leading_boilerplate s |> String.trim
+                  | Ok s ->
+                      if rag_debug_ollama_chat then
+                        Printf.printf "\n[chat.raw_answer]\n%s\n%!" s;
+                      strip_leading_boilerplate s |> String.trim
                   | Error msg -> "ollama chat error: " ^ msg
                 in
 
