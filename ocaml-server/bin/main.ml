@@ -13,12 +13,12 @@
   - Query (2-phase):
     1) POST /query
        - Runs vector retrieval via python-engine.
-       - Returns status=need_messages + request_id + message_ids + sources metadata.
+       - Returns status=need_messages + request_id + message_ids + email metadata.
     2) POST /query/evidence
        - Thunderbird uploads message/rfc822 evidence for each message id (header X-Thunderbird-Message-Id).
     3) POST /query/complete
        - Extracts body text again (same normalization as ingestion), builds the final prompt, calls
-         Ollama /api/chat, updates session state, returns answer + metadata-only sources for UI.
+         Ollama /api/chat, updates session state, returns answer + metadata-only emails for UI.
 
   Key environment variables
   - OLLAMA_BASE_URL, OLLAMA_EMBED_MODEL, OLLAMA_LLM_MODEL
@@ -347,108 +347,152 @@ let ollama_chat ~client ~sw ?(model = "") ~(messages : Yojson.Safe.t list) () : 
       | _ -> Error "bad chat response"
     with ex -> Error (Printexc.to_string ex)
 
+(*
+  Recursive chunked summarization — single factored-out implementation.
+
+  summarize_to_fit guarantees the returned string is at most [max_chars] long.
+  If the input already fits, it is returned unchanged.  Otherwise it is
+  recursively split into [max_input_chars]-sized chunks, each chunk is
+  summarized by the LLM, and the combined summaries are re-checked (and
+  re-summarized if still too long).  A depth limit of 4 prevents runaway
+  recursion; on exhaustion or LLM failure the text is hard-truncated as a
+  last resort.
+*)
+
+let split_into_chunks (text : string) (chunk_size : int) : string list =
+  let len = String.length text in
+  let rec loop pos acc =
+    if pos >= len then List.rev acc
+    else
+      let remaining = len - pos in
+      let raw_end = pos + min chunk_size remaining in
+      let chunk_end =
+        if raw_end >= len then len
+        else
+          let last_nl = ref raw_end in
+          let found = ref false in
+          for i = raw_end - 1 downto (max pos (raw_end - 200)) do
+            if (not !found) && String.get text i = '\n' then (
+              last_nl := i + 1;
+              found := true)
+          done;
+          if !found then !last_nl else raw_end
+      in
+      let chunk = String.sub text pos (chunk_end - pos) in
+      loop chunk_end (chunk :: acc)
+  in
+  loop 0 []
+
+let strip_summary_preamble (s : string) : string =
+  let lines = String.split_on_char '\n' s in
+  let is_preamble_line (l : string) : bool =
+    let t = String.trim l in
+    if t = "" then true
+    else
+      let lower = String.lowercase_ascii t in
+      starts_with "here is" lower
+      || starts_with "here's" lower
+      || starts_with "summary" lower
+      || starts_with "summarized" lower
+      || starts_with "quoted context" lower
+  in
+  let rec drop = function
+    | [] -> []
+    | l :: rest -> if is_preamble_line l then drop rest else l :: rest
+  in
+  String.concat "\n" (drop lines)
+
+let summarize_to_fit ~client ~sw ~system_prompt ~max_input_chars ~max_chars
+    ~label (text : string) : string =
+  let clean = String.trim text in
+  if String.length clean <= max_chars then clean
+  else
+    let summarize_one ~(target_chars : int) (chunk : string) : string option =
+      let input_len = String.length chunk in
+      (* Clamp effective target to 50–75% of input: never ask LLM to compress
+         below half (wastes quality) or above 75% (wastes a pass). If the
+         clamped target still exceeds max_chars, the recursion loop will
+         call another pass. *)
+      let effective_target =
+        if input_len <= 0 then target_chars
+        else
+          let floor = input_len / 2 in          (* 50% *)
+          let ceil  = input_len * 3 / 4 in      (* 75% *)
+          max floor (min ceil target_chars)
+      in
+      let pct = if input_len > 0 then effective_target * 100 / input_len else 50 in
+      let augmented_prompt =
+        system_prompt
+        ^ Printf.sprintf "\n\nIMPORTANT: The input is approximately %d characters. You MUST compress it to approximately %d characters (roughly %d%% of the original). Be aggressive — omit filler, merge related points, and use terse phrasing. Do NOT exceed %d characters."
+            input_len effective_target pct effective_target
+      in
+      let messages : Yojson.Safe.t list =
+        [ `Assoc [ ("role", `String "system"); ("content", `String augmented_prompt) ]
+        ; `Assoc [ ("role", `String "user"); ("content", `String chunk) ]
+        ]
+      in
+      match ollama_chat ~client ~sw ~model:ollama_summarize_model ~messages () with
+      | Ok s ->
+          if rag_debug_ollama_chat then Printf.printf "\n[%s.summary.response]\n%s\n%!" label s;
+          let s = strip_summary_preamble s |> String.trim in
+          if s = "" then (
+            Printf.eprintf "[%s.summary.error] empty response from ollama\n%!" label;
+            None)
+          else Some s
+      | Error err ->
+          let err = String.trim err in
+          let err = if err = "" then "unknown error" else err in
+          let err = truncate_chars err ~max_chars:400 |> String.trim in
+          Printf.eprintf "[%s.summary.error] %s\n%!" label err;
+          None
+    in
+    let rec chunk_and_summarize text depth =
+      if String.length text <= max_chars then text
+      else if depth > 4 then (
+        Printf.eprintf "[%s.summary.warning] recursion depth limit reached, truncating\n%!" label;
+        truncate_chars text ~max_chars)
+      else if String.length text <= max_input_chars then (
+        match summarize_one ~target_chars:max_chars text with
+        | Some s -> chunk_and_summarize s (depth + 1)
+        | None -> truncate_chars text ~max_chars)
+      else
+        let chunks = split_into_chunks text max_input_chars in
+        let n = List.length chunks in
+        let per_chunk_target = max 200 (max_chars / (max 1 n)) in
+        Printf.printf "[%s.summary] depth=%d chunks=%d total_chars=%d target_per_chunk=%d\n%!" label depth n (String.length text) per_chunk_target;
+        let summaries = List.filter_map (summarize_one ~target_chars:per_chunk_target) chunks in
+        match summaries with
+        | [] -> truncate_chars text ~max_chars
+        | _ ->
+            let combined = String.concat "\n\n" summaries in
+            chunk_and_summarize combined (depth + 1)
+    in
+    chunk_and_summarize clean 0
+
 let summarize_quoted_context ~client ~sw ~(quoted_text : string) : string option =
   if (not rag_quoted_context_summarize) || String.trim quoted_text = "" then None
   else
     let quoted_clean = String.trim quoted_text in
     if String.length quoted_clean < 40 then None
     else
-    let max_lines = rag_quoted_context_max_lines in
-    let max_input = rag_quoted_context_max_input_chars in
-    let strip_summary_preamble (s : string) : string =
-      let lines = String.split_on_char '\n' s in
-      let is_preamble_line (l : string) : bool =
-        let t = String.trim l in
-        if t = "" then true
-        else
-          let lower = String.lowercase_ascii t in
-          starts_with "here is" lower
-          || starts_with "here's" lower
-          || starts_with "summary" lower
-          || starts_with "summarized quoted" lower
-          || starts_with "quoted context" lower
+      let max_lines = rag_quoted_context_max_lines in
+      let max_chars = rag_quoted_context_max_chars in
+      let max_input = rag_quoted_context_max_input_chars in
+      let system_prompt =
+        get_prompt "compress_quoted_context_ingest"
+          ~default:"Compress quoted email thread history. Third person only. Preserve facts. No preamble."
+          ~vars:[("{{max_lines}}", string_of_int max_lines)]
       in
-      let rec drop = function
-        | [] -> []
-        | l :: rest -> if is_preamble_line l then drop rest else l :: rest
+      let result = summarize_to_fit ~client ~sw ~system_prompt ~max_input_chars:max_input
+        ~max_chars ~label:"quoted_context" quoted_clean
       in
-      String.concat "\n" (drop lines)
-    in
-    let summarize_one (text : string) : string option =
-      let input = truncate_chars text ~max_chars:max_input in
-      let system =
-        Printf.sprintf
-          "You are compressing quoted email thread history. Summarize ONLY the quoted context below. Write entirely in the THIRD PERSON — attribute statements to the person who wrote them (e.g. 'John Smith said X', 'Alice replied that Y'). NEVER use first person ('I', 'me', 'my', 'we', 'our'). If the author's name is not clear from the text, use a neutral reference such as 'the sender' or 'one participant'. Preserve concrete facts (names, dates, numbers, decisions, questions). Do not invent. Output plain text only. IMPORTANT: Output MUST start immediately with the first fact line (no preamble such as 'Here is', 'Summary:', 'The quoted context', no title line, no leading colon line). If you add any preamble, the output will be discarded. Maximum %d lines."
-          max_lines
-      in
-      let messages : Yojson.Safe.t list =
-        [ `Assoc [ ("role", `String "system"); ("content", `String system) ]
-        ; `Assoc [ ("role", `String "user"); ("content", `String input) ]
-        ]
-      in
-      match ollama_chat ~client ~sw ~model:ollama_summarize_model ~messages () with
-      | Ok s ->
-          if rag_debug_ollama_chat then Printf.printf "\n[quoted_context.summary.response]\n%s\n%!" s;
-          let s = strip_summary_preamble s |> String.trim in
-          let s = truncate_lines s ~max_lines |> String.trim in
-          let s = truncate_chars s ~max_chars:rag_quoted_context_max_chars |> String.trim in
-          let lower = String.lowercase_ascii s in
-          if s = "" then (
-            Printf.eprintf "[quoted_context.summary.error] empty response from ollama\n%!";
-            Some "[ERROR: quoted-context summary failed: empty response]")
-          else if starts_with "no quoted context" lower || starts_with "no quoted" lower || starts_with "please provide" lower then (
-            Printf.eprintf "[quoted_context.summary.error] ollama claimed no quoted context (unexpected)\n%!";
-            Some "[ERROR: quoted-context summary failed: model claimed no quoted context]" )
-          else Some s
-      | Error err ->
-          let err = String.trim err in
-          let err = if err = "" then "unknown error" else err in
-          let err = truncate_chars err ~max_chars:400 |> String.trim in
-          Printf.eprintf "[quoted_context.summary.error] %s\n%!" err;
-          Some ("[ERROR: quoted-context summary failed: " ^ err ^ "]")
-    in
-    let split_into_chunks text chunk_size =
-      let len = String.length text in
-      let rec loop pos acc =
-        if pos >= len then List.rev acc
-        else
-          let remaining = len - pos in
-          let raw_end = pos + min chunk_size remaining in
-          let chunk_end =
-            if raw_end >= len then len
-            else
-              let last_nl = ref raw_end in
-              let found = ref false in
-              for i = raw_end - 1 downto (max pos (raw_end - 200)) do
-                if (not !found) && String.get text i = '\n' then (
-                  last_nl := i + 1;
-                  found := true)
-              done;
-              if !found then !last_nl else raw_end
-          in
-          let chunk = String.sub text pos (chunk_end - pos) in
-          loop chunk_end (chunk :: acc)
-      in
-      loop 0 []
-    in
-    let rec chunk_and_summarize text depth =
-      if depth > 4 then (
-        Printf.eprintf "[quoted_context.summary.warning] recursion depth limit reached, summarizing truncated\n%!";
-        summarize_one text)
-      else if String.length text <= max_input then
-        summarize_one text
-      else
-        let chunks = split_into_chunks text max_input in
-        let n = List.length chunks in
-        Printf.printf "[quoted_context.summary] depth=%d chunks=%d total_chars=%d\n%!" depth n (String.length text);
-        let summaries = List.filter_map summarize_one chunks in
-        match summaries with
-        | [] -> None
-        | _ ->
-            let combined = String.concat "\n\n" summaries in
-            chunk_and_summarize combined (depth + 1)
-    in
-    chunk_and_summarize quoted_clean 0
+      let result = truncate_lines result ~max_lines |> String.trim in
+      let lower = String.lowercase_ascii result in
+      if result = "" then None
+      else if starts_with "no quoted context" lower || starts_with "no quoted" lower || starts_with "please provide" lower then (
+        Printf.eprintf "[quoted_context.summary.error] ollama claimed no quoted context (unexpected)\n%!";
+        Some "[ERROR: quoted-context summary failed: model claimed no quoted context]")
+      else Some result
 
 (*
   Email triage via LLM
@@ -473,39 +517,9 @@ let triage_email ~client ~sw ~(whoami : string)
     Printf.eprintf "[triage] skipped: whoami is empty\n%!";
     None)
   else
-  let body_excerpt = truncate_chars body_text ~max_chars:4000 |> String.trim in
+  let body_excerpt = String.trim body_text in
   let system =
-    "You are an email triage assistant. Given information about the recipient and \
-     an email, evaluate three things:\n\n\
-     1. action_score (integer 0-100): How much does this email require an action \
-     or response from the recipient? 0 = purely informational / no action needed, \
-     100 = urgent action required.\n\n\
-     2. importance_score (integer 0-100): How important is this email to the \
-     recipient? 0 = spam/irrelevant, 100 = critical.\n\n\
-     3. reply_by (string, YYYY-MM-DD format): The date by which the recipient \
-     should reply or take action. This is the MOST IMPORTANT field. Rules:\n\
-     - If there is an explicit deadline in the email, use it.\n\
-     - If there is NO explicit deadline but the email still expects a reply or \
-       action, you MUST make a best-effort guess based on:\n\
-       * Urgency cues (\"ASAP\", \"urgent\", exclamation marks, etc.)\n\
-       * Social and professional norms (e.g. a colleague's question → 1-2 \
-         business days; a meeting invite → before the meeting date; a job \
-         application acknowledgment → 1 week)\n\
-       * The email's send date (use it as the reference point for relative \
-         deadlines)\n\
-     - Output \"none\" ONLY if you are confident the email requires NO reply \
-       and NO action at all (e.g. automated notifications, FYI-only messages \
-       where the recipient is in Cc/Bcc, spam, newsletters).\n\
-     - When in doubt, prefer a date over \"none\". The recipient will use this \
-       field to sort and prioritise emails, so a reasonable guess is far more \
-       useful than \"none\".\n\n\
-     Consider:\n\
-     - Whether the recipient's address is in To (direct) vs Cc/Bcc (FYI)\n\
-     - The subject and body content\n\
-     - Any explicit deadlines or urgency cues\n\
-     - The email's Date header as the reference point for relative deadlines\n\n\
-     Respond with ONLY a JSON object, no markdown, no explanation:\n\
-     {\"action_score\": <int>, \"importance_score\": <int>, \"reply_by\": \"YYYY-MM-DD or none\"}"
+    get_prompt "triage" ~default:"You are an email triage assistant. Respond with ONLY a JSON object: {\"action_score\": <int 0-100>, \"importance_score\": <int 0-100>, \"reply_by\": \"YYYY-MM-DD or none\"}" ~vars:[]
   in
   let user_msg =
     Printf.sprintf
@@ -637,25 +651,19 @@ let attachment_text_of_part ~(filename : string) ~(content_type : string) ~(deco
 let summarize_attachment ~client ~sw ~(filename : string) ~(text : string) : string option =
   if (not rag_attachment_summarize) || String.trim text = "" then None
   else
-    let input = truncate_chars text ~max_chars:rag_attachment_max_input_chars in
-    let system =
-      Printf.sprintf
-        "You are summarizing an email attachment for retrieval and question answering. Do not invent. Preserve key facts, numbers, dates, names, decisions, and action items. Output plain text only, no greeting. Keep under %d characters."
-        rag_attachment_max_chars
+    let system_prompt =
+      get_prompt "compress_attachment"
+        ~default:"Summarize an email attachment. Preserve key facts. Output plain text only."
+        ~vars:[("{{filename}}", filename); ("{{max_chars}}", string_of_int rag_attachment_max_chars)]
     in
-    let messages : Yojson.Safe.t list =
-      [ `Assoc [ ("role", `String "system"); ("content", `String system) ]
-      ; `Assoc
-          [ ("role", `String "user")
-          ; ("content", `String (Printf.sprintf "Filename: %s\n\n%s" filename input))
-          ]
-      ]
+    let result = summarize_to_fit ~client ~sw ~system_prompt
+      ~max_input_chars:rag_attachment_max_input_chars
+      ~max_chars:rag_attachment_max_chars
+      ~label:(Printf.sprintf "attachment[%s]" filename)
+      text
     in
-    match ollama_chat ~client ~sw ~model:ollama_summarize_model ~messages () with
-    | Ok s ->
-        let s = String.trim s |> truncate_chars ~max_chars:rag_attachment_max_chars |> String.trim in
-        if s = "" then None else Some s
-    | Error _ -> None
+    let result = String.trim result in
+    if result = "" then None else Some result
 
 let attachment_summaries_of_raw ~client ~sw ~(raw : string) : Yojson.Safe.t list =
   let parts = collect_mime_leaf_parts raw in
@@ -717,7 +725,6 @@ let debug_retrieval_enabled () : bool =
 type chat_message =
   { role : string
   ; content : string
-  ; cited_recap : string
   }
 
 (*
@@ -725,9 +732,8 @@ type chat_message =
 
   Each session_id maps to a session_state holding:
   - tail: the most recent user/assistant turns (kept short to limit prompt growth)
-  - history_summary: rolling summary of older conversation
-  - sources_summary: rolling summary of sources discussed
-  - last_sources_recap: a recap of the sources used in the previous answer
+  - history_summary: rolling summary of older conversation (with [Email N]
+    references resolved to inline "(email from X re: Y)" by the summarizer)
 
   The goal is continuity without repeatedly sending entire historical evidence.
 *)
@@ -735,14 +741,14 @@ type session_state =
   { mu : Eio.Mutex.t
   ; mutable history_summary : string
   ; mutable tail : chat_message list
-  ; mutable sources_summary : string
-  ; mutable last_sources_recap : string
+  ; mutable user_name : string
   }
 
 type pending_query =
   { mu : Eio.Mutex.t
   ; session_id : string
   ; question : string
+  ; resolved_question : string
   ; message_ids : string list
   ; sources_json : Yojson.Safe.t
   ; evidence_by_id : (string, string) Hashtbl.t
@@ -767,8 +773,7 @@ let get_or_create_session (session_id : string) : session_state =
           { mu = Eio.Mutex.create ()
           ; history_summary = ""
           ; tail = []
-          ; sources_summary = ""
-          ; last_sources_recap = ""
+          ; user_name = ""
           }
         in
         Hashtbl.replace session_tbl session_id s;
@@ -790,65 +795,6 @@ let render_messages (msgs : chat_message list) : string =
          in
          Printf.sprintf "%s: %s" label (String.trim m.content))
   |> String.concat "\n"
-
-(*
-  Sources recap and session summarization
-
-  The UI and the final generation prompt benefit from having a compact recap of
-  what sources were used recently.
-
-  Two representations exist:
-  - sources_json: structured JSON from python-engine /query_embedded
-  - sources recap text: compact, stable, human-readable lines like
-    [Email N] doc_id=... from=... subject=... date=...
-
-  The recap text is also used to build/update session fields:
-  - sources_summary: rolling summary of sources discussed across the session
-  - last_sources_recap: recap of the sources used in the most recent answer
-*)
-let format_source_recap_lines (xs : Yojson.Safe.t list) : string =
-  let xs = if List.length xs > 12 then take 12 xs else xs in
-  let get_field name = function
-    | `Assoc kv -> List.assoc_opt name kv
-    | _ -> None
-  in
-  let get_md_str md key =
-    match get_field key md with
-    | Some (`String s) -> String.trim s
-    | _ -> ""
-  in
-  xs
-  |> List.mapi (fun i v ->
-         let doc_id = match get_field "doc_id" v with Some (`String s) -> s | _ -> "" in
-         let md = match get_field "metadata" v with Some m -> m | _ -> `Assoc [] in
-         let from_ = get_md_str md "from" in
-         let subject = get_md_str md "subject" in
-         let date_ = get_md_str md "date" in
-         let atts =
-           match get_field "attachments" md with
-           | Some (`List ys) ->
-               ys
-               |> List.filter_map (function
-                    | `String s when String.trim s <> "" -> Some (String.trim s)
-                    | _ -> None)
-               |> String.concat ", "
-           | _ -> ""
-         in
-         let att_part = if atts = "" then "" else Printf.sprintf " attachments=%s" atts in
-         Printf.sprintf "[Email %d] doc_id=%s from=%s subject=%s date=%s%s"
-           (i + 1) doc_id from_ subject date_ att_part)
-  |> String.concat "\n"
-
-let sources_recap_of_query_response (resp_body : string) : string option =
-  try
-    let json = Yojson.Safe.from_string resp_body in
-    match json with
-    | `Assoc kv -> (
-        match List.assoc_opt "sources" kv with
-        | Some (`List xs) -> Some (format_source_recap_lines xs)
-        | _ -> Some "")
-    | _ -> Some ""
-  with _ -> None
 
 (* Extract cited [Email N] indices from LLM answer, renumber sequentially,
    and build a cited-only recap.  Returns (renumbered_answer, cited_recap).
@@ -920,100 +866,19 @@ let renumber_cited_sources ~(answer : string) ~(sources_json : Yojson.Safe.t) : 
   let recap = String.concat "\n" recap_lines in
   (renumbered, recap)
 
-(* Replace [Email N] citations with inline "(email from X re: Y)" using the
-   cited_recap lines stored with the message.  Each recap line has the form:
-   [Email N] doc_id=... from=... subject=... date=...
-   We parse from= and subject= to build a short inline reference. *)
-let resolve_citations_inline ~(text : string) ~(recap : string) : string =
-  if String.trim recap = "" then text
-  else
-    (* Build a map: 1-based number → "(email from X re: Y)" *)
-    let map = Hashtbl.create 16 in
-    String.split_on_char '\n' recap
-    |> List.iter (fun line ->
-      let line = String.trim line in
-      (* Parse [Email N] *)
-      let prefix = "[Email " in
-      let plen = String.length prefix in
-      if String.length line > plen && String.sub line 0 plen = prefix then
-        let j = ref plen in
-        while !j < String.length line && line.[!j] >= '0' && line.[!j] <= '9' do incr j done;
-        if !j > plen && !j < String.length line && line.[!j] = ']' then (
-          let n = try int_of_string (String.sub line plen (!j - plen)) with _ -> -1 in
-          if n > 0 then
-            let rest = String.sub line (!j + 1) (String.length line - !j - 1) in
-            let find_field key =
-              let pat = key ^ "=" in
-              match String.split_on_char ' ' (String.trim rest) with
-              | _ ->
-                  (* Simple scan for key=value *)
-                  let parts = String.split_on_char ' ' (String.trim rest) in
-                  let rec find = function
-                    | [] -> ""
-                    | p :: _ when String.length p > String.length pat
-                                  && String.sub p 0 (String.length pat) = pat ->
-                        String.sub p (String.length pat) (String.length p - String.length pat)
-                    | _ :: ps -> find ps
-                  in
-                  find parts
-            in
-            let from_ = find_field "from" in
-            let subject = find_field "subject" in
-            let label =
-              match (from_, subject) with
-              | "", "" -> "(cited email)"
-              | f, "" -> Printf.sprintf "(email from %s)" f
-              | "", s -> Printf.sprintf "(email re: %s)" s
-              | f, s -> Printf.sprintf "(email from %s re: %s)" f s
-            in
-            Hashtbl.replace map n label));
-    (* Now replace [Email N] in the text *)
-    let prefix = "[Email " in
-    let plen = String.length prefix in
-    let len = String.length text in
-    let buf = Buffer.create len in
-    let i = ref 0 in
-    while !i <= len - plen - 2 do
-      if String.sub text !i plen = prefix then (
-        let j = ref (!i + plen) in
-        while !j < len && text.[!j] >= '0' && text.[!j] <= '9' do incr j done;
-        if !j > !i + plen && !j < len && text.[!j] = ']' then (
-          let n = try int_of_string (String.sub text (!i + plen) (!j - !i - plen)) with _ -> -1 in
-          match Hashtbl.find_opt map n with
-          | Some label ->
-              Buffer.add_string buf label;
-              i := !j + 1
-          | None ->
-              Buffer.add_char buf text.[!i];
-              incr i)
-        else (
-          Buffer.add_char buf text.[!i];
-          incr i))
-      else (
-        Buffer.add_char buf text.[!i];
-        incr i)
-    done;
-    while !i < len do
-      Buffer.add_char buf text.[!i];
-      incr i
-    done;
-    Buffer.contents buf
 
 (*
   Summarization via Ollama
 
   This is a secondary use of the LLM, separate from final answer generation.
-  It produces:
-  - history summaries (older turns) to control prompt growth
-  - sources summaries (older sources recaps) to preserve continuity
+  It compresses older conversation turns into a rolling history_summary,
+  resolving [Email N] citations to inline references so the summary is
+  self-contained.
 *)
-let call_ollama_summarize ~client ~sw ~(kind : string) ~(text : string) ~(target_chars : int)
+let call_ollama_summarize ~client ~sw ~(text : string) ~(target_chars : int)
     : string option =
   let instr =
-    if kind = "sources" then
-      "Summarize the following sources recap so it can be used as context for follow-up questions. Preserve any doc_id/message_id, dates, subjects, senders, and attachment filenames. Do not invent sources."
-    else
-      "Summarize the following conversation so it can be used as context for a future assistant reply. Preserve user preferences, decisions, constraints, open questions, and any specific identifiers. Replace any [Email N] citation references with the actual email subject and sender so the summary is self-contained. Do not invent facts."
+    get_prompt "conversation_summary" ~default:"Summarize the following conversation for context. Preserve key facts and identifiers. Do not invent." ~vars:[]
   in
   let messages =
     [ `Assoc [ ("role", `String "system"); ("content", `String (instr ^ Printf.sprintf " Target length: at most %d characters. Output plain text." target_chars)) ]
@@ -1042,27 +907,12 @@ let maybe_summarize_session ~client ~sw (s : session_state) : unit =
       if String.trim s.history_summary = "" then render_messages to_summarize
       else s.history_summary ^ "\n\n" ^ render_messages to_summarize
     in
-    match call_ollama_summarize ~client ~sw ~kind:"history" ~text:prefix ~target_chars:history_target with
+    match call_ollama_summarize ~client ~sw ~text:prefix ~target_chars:history_target with
     | Some summary ->
         s.history_summary <- trim_to_max summary history_target;
         s.tail <- to_keep
-    | None -> ());
+    | None -> ())
 
-  let sources_max = 8000 in
-  let sources_trigger = int_of_float (0.8 *. float_of_int sources_max) in
-  let sources_target = int_of_float (0.6 *. float_of_int sources_max) in
-  if String.length s.sources_summary > sources_trigger then
-    match
-      call_ollama_summarize ~client ~sw ~kind:"sources" ~text:s.sources_summary
-        ~target_chars:sources_target
-    with
-    | Some summary -> s.sources_summary <- trim_to_max summary sources_target
-    | None -> ()
-
-let sources_recap_of_sources_json (sources_json : Yojson.Safe.t) : string =
-  match sources_json with
-  | `List ys -> format_source_recap_lines ys
-  | _ -> ""
 
 (*
   python-engine boundary
@@ -1176,7 +1026,7 @@ let make_ingest_data ~doc_id ~(headers : (string, string) Hashtbl.t) ~(raw : str
 
   It rebuilds the same "text_for_index"/metadata representation used at ingestion,
   but is called at /query/complete time so we can:
-  - build SOURCES INDEX entries (date/from/subject), and
+  - build EMAILS INDEX entries (date/from/subject), and
   - regenerate evidence text consistently with ingestion-time normalization.
 *)
 let ingest_text_of_raw ~(doc_id : string) ~(raw : string) : (string * Yojson.Safe.t) =
@@ -1241,19 +1091,27 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
     if overflow = "" then None
     else summarize_quoted_context ~client ~sw ~quoted_text:overflow
   in
+  let qs =
+    match overflow_summary with
+    | Some s when String.trim s <> "" -> "QUOTED CONTEXT (older, summarized):\n" ^ String.trim s
+    | _ -> ""
+  in
+  let qc =
+    if quoted_capped = "" then ""
+    else if has_overflow then "QUOTED CONTEXT (recent):\n" ^ quoted_capped
+    else "QUOTED CONTEXT:\n" ^ quoted_capped
+  in
+  let att = if attachments_section = "" then "" else attachments_section in
+  let new_body_capped =
+    summarize_to_fit ~client ~sw
+      ~system_prompt:(get_prompt "compress_new_content_ingest" ~default:"Compress email body. Preserve all facts. Third person. Do not invent." ~vars:[])
+      ~max_input_chars:rag_summarize_max_input_chars
+      ~max_chars:rag_new_content_max_chars
+      ~label:"new_content"
+      new_body
+  in
   let body_text =
-    let qs =
-      match overflow_summary with
-      | Some s when String.trim s <> "" -> "QUOTED CONTEXT (older, summarized):\n" ^ String.trim s
-      | _ -> ""
-    in
-    let qc =
-      if quoted_capped = "" then ""
-      else if has_overflow then "QUOTED CONTEXT (recent):\n" ^ quoted_capped
-      else "QUOTED CONTEXT:\n" ^ quoted_capped
-    in
-    let att = if attachments_section = "" then "" else attachments_section in
-    let parts = List.filter (fun s -> s <> "") [qs; qc; att; "NEW CONTENT:\n" ^ new_body] in
+    let parts = List.filter (fun s -> s <> "") [qs; qc; att; "NEW CONTENT:\n" ^ new_body_capped] in
     String.concat "\n\n" parts
   in
   let triage =
@@ -1993,6 +1851,162 @@ let handle_bulk_ingest ~client ~sw ~clock (body : string) : (Http.Response.t * s
     let resp = Http.Response.make ~status:`OK () in
     (resp, Yojson.Safe.to_string result))
 
+(*
+  Query rewriting for multi-query retrieval.
+
+  Given a conversation context and the user's latest question, generate
+  reformulated queries to improve vector-search recall:
+  1. Contextual rewrite: self-contained query with resolved pronouns/dates/refs
+  2. HyDE: a short hypothetical email passage that would be a relevant result
+
+  Returns a list of query strings (always includes the original question).
+  Falls back to [question] on LLM failure or when rewriting is disabled.
+*)
+let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
+    ~(history_summary : string) ~(tail : chat_message list)
+    ~(user_name : string) : string list * string =
+  if not rag_query_rewrite then ([question], question)
+  else
+    let has_context = String.trim history_summary <> "" || tail <> [] in
+    let user_identity =
+      if String.trim user_name <> ""
+      then Printf.sprintf "The user (the email account owner) is: %s.\n" user_name
+      else ""
+    in
+    let rewrite_field =
+      if has_context then
+        get_prompt_raw "query_rewrite_field" ~default:"- \"rewrite\": Rewrite the user's last question as a self-contained search query. Resolve pronouns and relative dates.\n"
+      else ""
+    in
+    let system =
+      get_prompt "query_rewrite"
+        ~default:"You help search an email archive. Output a JSON object with resolved_question, hyp_from, hyp_to, hyp_subject, hyp_body fields."
+        ~vars:[
+          ("{{user_identity}}", user_identity);
+          ("{{rewrite_field}}", rewrite_field);
+          ("{{datetime_local}}", now_local_string ());
+        ]
+    in
+    let messages : Yojson.Safe.t list =
+      let base =
+        [ `Assoc [ ("role", `String "system"); ("content", `String system) ] ]
+      in
+      let summary =
+        if String.trim history_summary <> "" then
+          [ `Assoc [ ("role", `String "user"); ("content", `String history_summary) ] ]
+        else []
+      in
+      let turns =
+        tail |> List.map (fun m ->
+          `Assoc [ ("role", `String m.role); ("content", `String (String.trim m.content)) ])
+      in
+      let final =
+        [ `Assoc [ ("role", `String "user"); ("content", `String question) ] ]
+      in
+      base @ summary @ turns @ final
+    in
+    match ollama_chat ~client ~sw ~model:ollama_summarize_model ~messages () with
+    | Ok raw_resp ->
+        let raw_resp = String.trim raw_resp in
+        let raw_resp =
+          if starts_with "```" raw_resp then
+            let lines = String.split_on_char '\n' raw_resp in
+            let lines = match lines with _ :: rest -> rest | [] -> [] in
+            let lines = List.rev lines in
+            let lines =
+              match lines with
+              | l :: rest when starts_with "```" (String.trim l) -> List.rev rest
+              | _ -> List.rev lines
+            in
+            String.concat "\n" lines
+          else raw_resp
+        in
+        (try
+           let json = Yojson.Safe.from_string raw_resp in
+           let get_str key =
+             match json with
+             | `Assoc kv -> (
+                 match List.assoc_opt key kv with
+                 | Some (`String s) when String.trim s <> "" -> Some (String.trim s)
+                 | _ -> None)
+             | _ -> None
+           in
+           let resolved = match get_str "resolved_question" with
+             | Some rq -> rq
+             | None -> question
+           in
+           let queries = ref [question] in
+           (* The resolved_question is often a better search query than the raw question *)
+           if resolved <> question then queries := !queries @ [resolved];
+           (match get_str "rewrite" with
+            | Some r when r <> question && r <> resolved -> queries := !queries @ [r]
+            | _ -> ());
+           (* Assemble hypothetical email from individual fields *)
+           let hyp_from = get_str "hyp_from" in
+           let hyp_to   = get_str "hyp_to" in
+           let hyp_subj = get_str "hyp_subject" in
+           let hyp_body = get_str "hyp_body" in
+           (match hyp_subj, hyp_body with
+            | Some subj, Some body ->
+                let from_line = match hyp_from with Some f -> f | None -> "someone" in
+                let to_line   = match hyp_to   with Some t -> t | None -> "" in
+                let hyp =
+                  Printf.sprintf "From: %s\nTo: %s\nSubject: %s\n\nNEW CONTENT:\n%s"
+                    from_line to_line subj body
+                in
+                queries := !queries @ [hyp]
+            | _ ->
+                Printf.eprintf "[retrieval.rewrite.warning] incomplete hypothetical (from=%b to=%b subject=%b body=%b): %s\n%!"
+                  (hyp_from <> None) (hyp_to <> None) (hyp_subj <> None) (hyp_body <> None)
+                  (if String.length raw_resp > 300 then String.sub raw_resp 0 300 ^ "..." else raw_resp));
+           Printf.printf "[retrieval.rewrite] generated %d queries, resolved_question=%s\n%!"
+             (List.length !queries)
+             (if String.length resolved > 200 then String.sub resolved 0 200 ^ "..." else resolved);
+           if debug_retrieval_enabled () then
+             List.iteri (fun i q ->
+               Printf.printf "[retrieval.rewrite.%d] %s\n%!" i
+                 (if String.length q > 200 then String.sub q 0 200 ^ "..." else q))
+               !queries;
+           (!queries, resolved)
+         with _ ->
+           Printf.eprintf "[retrieval.rewrite.error] failed to parse JSON response: %s\n%!"
+             (if String.length raw_resp > 200 then String.sub raw_resp 0 200 ^ "..." else raw_resp);
+           ([question], question))
+    | Error err ->
+        Printf.eprintf "[retrieval.rewrite.error] %s\n%!" (truncate_chars err ~max_chars:200);
+        ([question], question)
+
+(* Merge email entries from multiple retrievals.
+   Deduplicates by doc_id, keeping the entry with the highest score.
+   Returns a sorted `List of email entries, capped at top_k. *)
+let merge_multi_query_sources (all_sources : Yojson.Safe.t list) (top_k : int) : Yojson.Safe.t =
+  let get_doc_id = function
+    | `Assoc kv -> (match List.assoc_opt "doc_id" kv with Some (`String s) -> s | _ -> "")
+    | _ -> ""
+  in
+  let get_score = function
+    | `Assoc kv -> (match List.assoc_opt "score" kv with
+        | Some (`Float f) -> f
+        | Some (`Int i) -> float_of_int i
+        | _ -> 0.0)
+    | _ -> 0.0
+  in
+  let best : (string, (float * Yojson.Safe.t)) Hashtbl.t = Hashtbl.create 64 in
+  List.iter (fun src ->
+    let doc_id = get_doc_id src in
+    let score = get_score src in
+    if doc_id <> "" then (
+      match Hashtbl.find_opt best doc_id with
+      | Some (prev_score, _) when prev_score >= score -> ()
+      | _ -> Hashtbl.replace best doc_id (score, src))
+  ) all_sources;
+  let sorted =
+    Hashtbl.to_seq best |> List.of_seq
+    |> List.sort (fun (_, (s1, _)) (_, (s2, _)) -> compare s2 s1)
+  in
+  let capped = if top_k > 0 && List.length sorted > top_k then take top_k sorted else sorted in
+  `List (List.map (fun (_, (_, src)) -> src) capped)
+
 let handler ~client ~sw ~clock _socket request body =
   (*
     HTTP routing
@@ -2093,8 +2107,6 @@ let handler ~client ~sw ~clock _socket request body =
               [ ("session_id", `String session_id)
               ; ("history_summary", `String s.history_summary)
               ; ("tail", tail_json)
-              ; ("sources_summary", `String s.sources_summary)
-              ; ("last_sources_recap", `String s.last_sources_recap)
               ]
             |> Yojson.Safe.to_string)
         in
@@ -2251,9 +2263,9 @@ let handler ~client ~sw ~clock _socket request body =
                 Cohttp_eio.Server.respond_string ~status:`Bad_request ~body ~headers:json_headers ()
               else (
                 let s = get_or_create_session session_id in
-                let tail_snapshot, history_summary, sources_summary, last_sources_recap =
+                let tail_snapshot, history_summary, session_user_name =
                   Eio.Mutex.use_rw ~protect:true s.mu (fun () ->
-                    (s.tail, s.history_summary, s.sources_summary, s.last_sources_recap))
+                    (s.tail, s.history_summary, s.user_name))
                 in
 
                 let cached_md_by_doc : (string, Yojson.Safe.t) Hashtbl.t = Hashtbl.create 32 in
@@ -2305,24 +2317,29 @@ let handler ~client ~sw ~clock _socket request body =
                       in
                       let parts = extract_body_parts raw in
                       let new_body = String.trim parts.new_text |> sanitize_utf8 in
-                      let attachment_summaries =
-                        match md with
-                        | `Assoc kv -> (
-                            match List.assoc_opt "attachment_summaries" kv with
-                            | Some (`List xs) -> xs
-                            | _ -> [])
-                        | _ -> []
+                      let new_body_capped =
+                        summarize_to_fit ~client ~sw
+                          ~system_prompt:(get_prompt "compress_new_content_evidence" ~default:"Compress email body for Q&A evidence. Preserve all facts. Third person. Do not invent." ~vars:[])
+                          ~max_input_chars:rag_summarize_max_input_chars
+                          ~max_chars:rag_max_evidence_chars_per_email
+                          ~label:"evidence"
+                          new_body
                       in
-                      let attachments_section = format_attachment_summaries_for_text attachment_summaries in
-                      let body =
-                        let att = if attachments_section = "" then "" else "\n\n" ^ attachments_section in
-                        "NEW CONTENT:\n" ^ new_body ^ att
+                      let quoted_raw = String.trim parts.quoted_text |> sanitize_utf8 in
+                      let quoted_section =
+                        if String.trim quoted_raw = "" then ""
+                        else
+                          let quoted_capped =
+                            summarize_to_fit ~client ~sw
+                              ~system_prompt:(get_prompt "compress_quoted_context_evidence" ~default:"Compress quoted thread context for Q&A evidence. Preserve facts. Third person. Do not invent." ~vars:[])
+                              ~max_input_chars:rag_summarize_max_input_chars
+                              ~max_chars:(rag_max_evidence_chars_per_email / 2)
+                              ~label:"evidence-quoted"
+                              quoted_raw
+                          in
+                          "\n\nQUOTED CONTEXT:\n" ^ quoted_capped
                       in
-                      let body =
-                        if String.length body > rag_max_evidence_chars_per_email then
-                          String.sub body 0 rag_max_evidence_chars_per_email
-                        else body
-                      in
+                      let body = "NEW CONTENT:\n" ^ new_body_capped ^ quoted_section in
                       Hashtbl.replace evidence_by_doc mid (body, md))
                     p.message_ids);
 
@@ -2345,8 +2362,56 @@ let handler ~client ~sw ~clock _socket request body =
                                | _ -> "")
                            | _ -> ""
                          in
-                         (mid, text, md, md_str "date", md_str "from", md_str "subject"))
-                  |> List.sort (fun (_, _, _, d1, _, _) (_, _, _, d2, _, _) -> String.compare d1 d2)
+                         let md_int key =
+                           match md with
+                           | `Assoc kv -> (
+                               match List.assoc_opt key kv with
+                               | Some (`Int n) -> Some n
+                               | _ -> None)
+                           | _ -> None
+                         in
+                         let md_attachments =
+                           match md with
+                           | `Assoc kv -> (
+                               match List.assoc_opt "attachments" kv with
+                               | Some (`List ys) ->
+                                   ys |> List.filter_map (function
+                                     | `String s when String.trim s <> "" -> Some (String.trim s)
+                                     | _ -> None)
+                               | _ -> [])
+                           | _ -> []
+                         in
+                         let md_bool key =
+                           match md with
+                           | `Assoc kv -> (
+                               match List.assoc_opt key kv with
+                               | Some (`Bool b) -> Some b
+                               | _ -> None)
+                           | _ -> None
+                         in
+                         let triage_str =
+                           let action = md_int "action_score" in
+                           let importance = md_int "importance_score" in
+                           let reply_by = md_str "reply_by" in
+                           let processed = md_bool "processed" in
+                           let parts = ref [] in
+                           (match action, importance with
+                            | Some a, Some imp ->
+                                parts := !parts @ [ Printf.sprintf "action=%d/100 importance=%d/100" a imp ];
+                                if reply_by <> "" && reply_by <> "none" then
+                                  parts := !parts @ [ Printf.sprintf "reply_by=%s" reply_by ]
+                            | _ -> ());
+                           (match processed with
+                            | Some true -> parts := !parts @ [ "processed=true" ]
+                            | _ -> ());
+                           String.concat " " !parts
+                         in
+                         (mid, text, md,
+                          md_str "date", md_str "from", md_str "to",
+                          md_str "cc", md_str "bcc", md_str "subject",
+                          md_attachments, triage_str))
+                  |> List.sort (fun (_, _, _, d1, _, _, _, _, _, _, _) (_, _, _, d2, _, _, _, _, _, _, _) ->
+                       String.compare d1 d2)
                 in
 
                 let sources_json =
@@ -2363,7 +2428,7 @@ let handler ~client ~sw ~clock _socket request body =
                         | _ -> ()) ys
                   | _ -> ());
                   (* Emit entries in date-sorted order, with updated metadata. *)
-                  `List (evidence_entries |> List.map (fun (mid, _text, md, _, _, _) ->
+                  `List (evidence_entries |> List.map (fun (mid, _text, md, _, _, _, _, _, _, _, _) ->
                     let base_kv =
                       match Hashtbl.find_opt orig_by_id mid with
                       | Some (`Assoc kv) -> kv
@@ -2379,10 +2444,21 @@ let handler ~client ~sw ~clock _socket request body =
                 let evidence_msg =
                   let lines =
                     evidence_entries
-                    |> List.mapi (fun i (mid, text, _md, date_, from_, subject) ->
-                           let header =
-                             Printf.sprintf "[Email %d] doc_id=%s date=%s from=%s subject=%s" (i + 1) mid date_ from_ subject
+                    |> List.mapi (fun i (mid, text, _md, date_, from_, to_, cc_, bcc_, subject, atts, triage) ->
+                           let hdr_parts =
+                             [ Printf.sprintf "[Email %d]" (i + 1)
+                             ; Printf.sprintf "doc_id=%s" mid
+                             ; Printf.sprintf "date=%s" date_
+                             ; Printf.sprintf "from=%s" from_
+                             ]
+                             @ (if String.trim to_ <> "" then [ Printf.sprintf "to=%s" to_ ] else [])
+                             @ (if String.trim cc_ <> "" then [ Printf.sprintf "cc=%s" cc_ ] else [])
+                             @ (if String.trim bcc_ <> "" then [ Printf.sprintf "bcc=%s" bcc_ ] else [])
+                             @ [ Printf.sprintf "subject=%s" subject ]
+                             @ (if atts <> [] then [ Printf.sprintf "attachments=[%s]" (String.concat "; " atts) ] else [])
+                             @ (if String.trim triage <> "" then [ triage ] else [])
                            in
+                           let header = String.concat " " hdr_parts in
                            header
                            ^ "\n"
                            ^ (if String.trim text = "" then "(empty body)" else String.trim text))
@@ -2393,21 +2469,36 @@ let handler ~client ~sw ~clock _socket request body =
                 let sources_index_msg =
                   let lines =
                     evidence_entries
-                    |> List.mapi (fun i (_, _, _, date_, from_, subject) ->
-                           Printf.sprintf "[Email %d] date=%s from=%s subject=%s" (i + 1) date_ from_ subject)
+                    |> List.mapi (fun i (_, _, _, date_, from_, to_, cc_, _bcc_, subject, atts, triage) ->
+                           let parts =
+                             [ Printf.sprintf "[Email %d]" (i + 1)
+                             ; Printf.sprintf "date=%s" date_
+                             ; Printf.sprintf "from=%s" from_
+                             ]
+                             @ (if String.trim to_ <> "" then [ Printf.sprintf "to=%s" to_ ] else [])
+                             @ (if String.trim cc_ <> "" then [ Printf.sprintf "cc=%s" cc_ ] else [])
+                             @ [ Printf.sprintf "subject=%s" subject ]
+                             @ (if atts <> [] then [ Printf.sprintf "attachments=[%s]" (String.concat "; " atts) ] else [])
+                             @ (if String.trim triage <> "" then [ triage ] else [])
+                           in
+                           String.concat " " parts)
                   in
-                  "EMAILS INDEX (use this for sorting by recency):\n" ^ String.concat "\n" lines
+                  String.concat "\n" lines
                 in
 
+                let user_identity_str =
+                  if String.trim session_user_name <> ""
+                  then Printf.sprintf "The user is: %s. " session_user_name
+                  else ""
+                in
                 let system_prompt =
-                  "You are a careful assistant in an ongoing multi-turn chat. "
-                  ^ (Printf.sprintf "Current date/time: %s (local); %s (UTC). " (now_local_string ()) (now_utc_iso8601 ()))
-                  ^ "Treat the previous user/assistant turns as conversation context. "
-                  ^ "Answer ONLY the last user message. "
-                  ^ "After the current user request, you may receive a system message containing RETRIEVED EMAILS for that request; use it to answer the most recent user message. "
-                  ^ "Do not greet, do not restate the user's request, and do not narrate your process. "
-                  ^ "Do not invent email facts; use the provided email evidence and cite as [Email N] when relying on them. "
-                  ^ "If the user refers to 'the second one you listed', resolve it against your most recent numbered list."
+                  get_prompt "chat"
+                    ~default:"You are a helpful email assistant. Cite emails as [Email N]. Do not invent facts."
+                    ~vars:[
+                      ("{{user_identity}}", user_identity_str);
+                      ("{{datetime_local}}", now_local_string ());
+                      ("{{datetime_utc}}", now_utc_iso8601 ());
+                    ]
                 in
 
                 (*
@@ -2415,56 +2506,25 @@ let handler ~client ~sw ~clock _socket request body =
 
                   Message ordering:
                   - system: behavioral instructions + current time
-                  - user: session summary (if any, compressed old turns)
-                  - user: sources summary (if any, compressed old source recaps)
-                  - tail: recent conversation turns (last assistant turn patched
-                    with last_sources_recap at prompt time, not stored)
-                  - user: evidence (sources index + retrieved emails)
+                  - user: history summary (if any: compressed old turns, with
+                    [Email N] refs already resolved to inline by the summarizer)
+                  - tail: recent conversation turns as-is (literal content)
+                  - user: evidence (retrieved email bodies)
                   - user: question + citation instructions
                 *)
                 let messages =
                   let base =
                     [ `Assoc [ ("role", `String "system"); ("content", `String system_prompt) ] ]
                   in
-                  (* Merge session + sources summaries into a single user message. *)
-                  let context_parts =
-                    (if String.trim history_summary <> ""
-                     then [ "SESSION SUMMARY:\n" ^ history_summary ]
-                     else [])
-                    @ (if String.trim sources_summary <> ""
-                       then [ "SOURCES SUMMARY:\n" ^ sources_summary ]
-                       else [])
-                  in
                   let with_context =
-                    if context_parts = [] then base
+                    if String.trim history_summary = "" then base
                     else
                       base
                       @ [ `Assoc
                             [ ("role", `String "user")
-                            ; ("content", `String (String.concat "\n\n" context_parts))
+                            ; ("content", `String history_summary)
                             ]
                         ]
-                  in
-                  (* Process tail for the prompt:
-                     - Last assistant turn: append last_sources_recap so the model
-                       sees which emails its most recent answer cited.
-                     - Older assistant turns: replace [Email N] with inline
-                       (email from X re: Y) using their stored cited_recap. *)
-                  let patched_tail =
-                    let rev = List.rev tail_snapshot in
-                    let found_last = ref false in
-                    let process_rev =
-                      List.map (fun m ->
-                        if m.role = "assistant" && not !found_last then (
-                          found_last := true;
-                          if String.trim last_sources_recap = "" then m
-                          else { m with content = m.content ^ "\n\nCited emails:\n" ^ last_sources_recap })
-                        else if m.role = "assistant" && String.trim m.cited_recap <> "" then
-                          { m with content = resolve_citations_inline ~text:m.content ~recap:m.cited_recap }
-                        else m
-                      ) rev
-                    in
-                    List.rev process_rev
                   in
                   let with_tail =
                     with_context
@@ -2474,24 +2534,25 @@ let handler ~client ~sw ~clock _socket request body =
                             [ ("role", `String m.role)
                             ; ("content", `String m.content)
                             ])
-                        patched_tail
+                        tail_snapshot
                   in
                   if String.trim evidence_msg = "" then
                     with_tail
-                    @ [ `Assoc [ ("role", `String "user"); ("content", `String p.question) ] ]
+                    @ [ `Assoc [ ("role", `String "user"); ("content", `String p.resolved_question) ] ]
                   else
                     let evidence_content =
-                      sources_index_msg
-                      ^ "\n\nRETRIEVED EMAILS THAT MAY BE RELEVANT:\n"
+                      "EMAILS THAT MAY BE RELEVANT:\n\n"
+                      ^ sources_index_msg
+                      ^ "\n\n"
                       ^ evidence_msg
                     in
+                    let question_suffix =
+                      get_prompt "chat_question_suffix"
+                        ~default:"Answer based on the retrieved emails above. Cite as [Email N]."
+                        ~vars:[]
+                    in
                     let question_content =
-                      p.question
-                      ^ "\n\nAnswer based on the retrieved emails above. "
-                      ^ "Do not greet, do not offer to help, and do not ask for a follow-up question. "
-                      ^ "Start immediately with the answer (no preamble). "
-                      ^ "If the request involves ordering or selecting items by time/recency, use the dates in the EMAILS INDEX to decide which emails are newest. "
-                      ^ "When referencing an email, cite it as [Email N]."
+                      p.resolved_question ^ "\n\n" ^ question_suffix
                     in
                     with_tail
                     @ [ `Assoc [ ("role", `String "user"); ("content", `String evidence_content) ]
@@ -2505,22 +2566,22 @@ let handler ~client ~sw ~clock _socket request body =
                   | Error msg -> "ollama chat error: " ^ msg
                 in
 
-                let renumbered_answer, cited_recap =
+                let renumbered_answer, _cited_recap =
                   renumber_cited_sources ~answer ~sources_json
                 in
                 Eio.Mutex.use_rw ~protect:true s.mu (fun () ->
-                  let add_msg role content ?(cited = "") () =
-                    s.tail <- s.tail @ [ { role; content; cited_recap = cited } ];
+                  let add_msg role content =
+                    s.tail <- s.tail @ [ { role; content } ];
                     let max_tail = 24 in
                     if List.length s.tail > max_tail then s.tail <- take_last max_tail s.tail
                   in
-                  add_msg "user" p.question ();
-                  add_msg "assistant" renumbered_answer ~cited:cited_recap ();
-
-                  if String.trim s.last_sources_recap <> "" then (
-                    if String.trim s.sources_summary = "" then s.sources_summary <- s.last_sources_recap
-                    else s.sources_summary <- s.sources_summary ^ "\n\n" ^ s.last_sources_recap);
-                  s.last_sources_recap <- cited_recap;
+                  add_msg "user" p.question;
+                  let answer_with_refs =
+                    if String.trim sources_index_msg <> "" then
+                      renumbered_answer ^ "\n\nEMAILS REFERENCED ABOVE:\n" ^ sources_index_msg
+                    else renumbered_answer
+                  in
+                  add_msg "assistant" answer_with_refs;
                   maybe_summarize_session ~client ~sw s);
 
                 Eio.Mutex.use_rw ~protect:true pending_tbl_mu (fun () -> Hashtbl.remove pending_tbl request_id);
@@ -2532,6 +2593,17 @@ let handler ~client ~sw ~clock _socket request body =
                 Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ())))
 
   (*
+    Multi-query retrieval with contextual rewriting + HyDE
+
+    Before embedding the user's question, we optionally generate reformulated
+    queries to improve recall:
+    1. Contextual rewrite: resolves pronouns, relative dates, implicit refs
+    2. HyDE (Hypothetical Document Embedding): a hypothetical email passage
+
+    Each query is embedded separately, results are merged by doc_id (max score).
+  *)
+
+  (*
     Retrieval-only query endpoint (phase 1)
 
     This endpoint does not call Ollama chat.
@@ -2540,7 +2612,7 @@ let handler ~client ~sw ~clock _socket request body =
   *)
   | `POST, "/query" ->
       let query_body = read_all body in
-      let session_id, question, top_k, mode =
+      let session_id, question, top_k, mode, user_name =
         try
           let json = Yojson.Safe.from_string query_body in
           let assoc =
@@ -2569,54 +2641,70 @@ let handler ~client ~sw ~clock _socket request body =
             | Some (`String s) -> s
             | _ -> "assistive"
           in
-          (session_id, question, top_k, mode)
-        with _ -> ("", "", 8, "assistive")
+          let user_name =
+            match get "user_name" with
+            | Some (`String s) -> String.trim s
+            | _ -> ""
+          in
+          (session_id, question, top_k, mode, user_name)
+        with _ -> ("", "", 8, "assistive", "")
       in
       if String.trim session_id = "" || String.trim question = "" then
         Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id/question\n" ()
       else (
-        if debug_retrieval_enabled () then (
-          let emb_req =
-            `Assoc [ ("model", `String ollama_embed_model); ("prompt", `String question) ]
-          in
-          Printf.printf "\n[retrieval.embed.request]\n%s\n%!" (Yojson.Safe.pretty_to_string emb_req));
+        let s = get_or_create_session session_id in
+        (* Store user_name on the session if provided and not already set. *)
+        if String.trim user_name <> "" then
+          Eio.Mutex.use_rw ~protect:true s.mu (fun () ->
+            if String.trim s.user_name = "" then s.user_name <- user_name);
+        let history_summary, tail =
+          Eio.Mutex.use_rw ~protect:true s.mu (fun () ->
+            (s.history_summary, s.tail))
+        in
 
-        let q_embedding =
-          match ollama_embed ~client ~sw ~text:question with
-          | Ok v -> l2_normalize v
+        let queries, resolved_question =
+          rewrite_queries_for_retrieval ~client ~sw ~question
+            ~history_summary ~tail ~user_name:(s.user_name)
+        in
+
+        let embed_and_retrieve (query_text : string) : Yojson.Safe.t list =
+          match ollama_embed ~client ~sw ~text:query_text with
           | Error msg ->
-              let body = Printf.sprintf "ollama embed error: %s\n" msg in
-              raise (Failure body)
+              Printf.eprintf "[retrieval.embed.error] %s\n%!" msg;
+              []
+          | Ok v ->
+              let emb = l2_normalize v in
+              if debug_retrieval_enabled () then
+                Printf.printf "[retrieval.embed] query=%s\n%!"
+                  (if String.length query_text > 120 then String.sub query_text 0 120 ^ "..." else query_text);
+              let obj : Yojson.Safe.t =
+                `Assoc
+                  [ ("embedding", `List (List.map (fun f -> `Float f) emb))
+                  ; ("top_k", `Int top_k)
+                  ]
+              in
+              let body = Yojson.Safe.to_string obj in
+              let resp, resp_body =
+                forward_json ~client ~sw ~path:"/query_embedded" ~body_json:body
+              in
+              if not (is_ok_status (Http.Response.status resp)) then []
+              else
+                try
+                  match Yojson.Safe.from_string resp_body with
+                  | `Assoc kv -> (
+                      match List.assoc_opt "sources" kv with
+                      | Some (`List xs) -> xs
+                      | _ -> [])
+                  | _ -> []
+                with _ -> []
         in
 
-        let retrieval_obj : Yojson.Safe.t =
-          `Assoc
-            [ ("embedding", `List (List.map (fun f -> `Float f) q_embedding))
-            ; ("top_k", `Int top_k)
-            ]
+        let all_sources =
+          List.concat (List.map embed_and_retrieve queries)
         in
-        let retrieval_body = Yojson.Safe.to_string retrieval_obj in
-        if debug_retrieval_enabled () then
-          Printf.printf "\n[retrieval.query_embedded.request]\n%s\n%!" (Yojson.Safe.pretty_to_string retrieval_obj);
-        let resp_r, resp_r_body =
-          forward_json ~client ~sw ~path:"/query_embedded" ~body_json:retrieval_body
-        in
-        let status_r = Http.Response.status resp_r in
-        if not (is_ok_status status_r) then
-          Cohttp_eio.Server.respond_string ~status:status_r ~body:resp_r_body ~headers:json_headers ()
-        else (
-          let sources_json =
-            try
-              let json = Yojson.Safe.from_string resp_r_body in
-              match json with
-              | `Assoc kv -> (
-                  match List.assoc_opt "sources" kv with
-                  | Some s -> s
-                  | None -> `List [])
-              | _ -> `List []
-            with _ -> `List []
-          in
+        let sources_json = merge_multi_query_sources all_sources top_k in
 
+        (
           if debug_retrieval_enabled () then (
             let summarize_one (v : Yojson.Safe.t) : string option =
               match v with
@@ -2645,19 +2733,9 @@ let handler ~client ~sw ~clock _socket request body =
               | `List ys -> ys |> List.filter_map summarize_one
               | _ -> []
             in
-            Printf.printf "\n[retrieval.query_embedded.response]\n%s\n%!" (String.concat "\n" lines));
+            Printf.printf "\n[retrieval.merged.response] %d queries -> %d unique sources\n%s\n%!"
+              (List.length queries) (List.length lines) (String.concat "\n" lines));
 
-          let sources_json =
-            match sources_json with
-            | `List ys ->
-                let ys =
-                  if rag_max_evidence_sources > 0 && List.length ys > rag_max_evidence_sources then
-                    take rag_max_evidence_sources ys
-                  else ys
-                in
-                `List ys
-            | _ -> sources_json
-          in
 
           (* Enrich sources whose metadata is empty/missing key fields
              by looking up ingested_details_tbl (which stores the metadata
@@ -2735,6 +2813,7 @@ let handler ~client ~sw ~clock _socket request body =
             { mu = Eio.Mutex.create ()
             ; session_id
             ; question
+            ; resolved_question
             ; message_ids
             ; sources_json
             ; evidence_by_id = Hashtbl.create 32
@@ -3084,6 +3163,11 @@ let () =
   Arg.parse
     [ ("-p", Arg.Set_int port, " Listening port number (8080 by default)") ]
     ignore "RAG email ingest server";
+
+  (* Install default prompts.json to ~/.thunderRAG/ if not already present *)
+  install_default_if_missing
+    ~src:(default_prompts_path ())
+    ~dst:(prompts_path ());
 
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->

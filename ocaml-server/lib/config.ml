@@ -156,13 +156,19 @@ let rag_chunk_size : int =
 let rag_chunk_overlap : int =
   env_int "RAG_CHUNK_OVERLAP" (setting_int [ "rag"; "chunk_overlap" ] ~default:200)
 
-(* Maximum number of source emails to include as evidence in the LLM prompt. *)
-let rag_max_evidence_sources : int =
-  env_int "RAG_MAX_EVIDENCE_SOURCES" (setting_int [ "rag"; "max_evidence_sources" ] ~default:8)
-
 (* Maximum characters per email to include in evidence (truncated beyond this). *)
 let rag_max_evidence_chars_per_email : int =
-  env_int "RAG_MAX_EVIDENCE_CHARS_PER_EMAIL" (setting_int [ "rag"; "max_evidence_chars_per_email" ] ~default:4000)
+  env_int "RAG_MAX_EVIDENCE_CHARS_PER_EMAIL" (setting_int [ "rag"; "max_evidence_chars_per_email" ] ~default:8000)
+
+(* Maximum characters for the NEW CONTENT section of an email body.
+   If the new content exceeds this, it is recursively summarized. *)
+let rag_new_content_max_chars : int =
+  env_int "RAG_NEW_CONTENT_MAX_CHARS" (setting_int [ "rag"; "new_content"; "max_chars" ] ~default:8000)
+
+(* Maximum characters per LLM summarization call input.  Shared default for
+   summarize_to_fit when no context-specific override is provided. *)
+let rag_summarize_max_input_chars : int =
+  env_int "RAG_SUMMARIZE_MAX_INPUT_CHARS" (setting_int [ "rag"; "summarize"; "max_input_chars" ] ~default:20000)
 
 (* Whether to LLM-summarize quoted thread context during ingestion. *)
 let rag_quoted_context_summarize : bool =
@@ -172,7 +178,7 @@ let rag_quoted_context_max_lines : int =
   env_int "RAG_QUOTED_CONTEXT_MAX_LINES" (setting_int [ "rag"; "quoted_context"; "max_lines" ] ~default:100)
 
 let rag_quoted_context_max_chars : int =
-  env_int "RAG_QUOTED_CONTEXT_MAX_CHARS" (setting_int [ "rag"; "quoted_context"; "max_chars" ] ~default:4000)
+  env_int "RAG_QUOTED_CONTEXT_MAX_CHARS" (setting_int [ "rag"; "quoted_context"; "max_chars" ] ~default:8000)
 
 let rag_quoted_context_max_input_chars : int =
   env_int "RAG_QUOTED_CONTEXT_MAX_INPUT_CHARS" (setting_int [ "rag"; "quoted_context"; "max_input_chars" ] ~default:20000)
@@ -198,6 +204,12 @@ let rag_attachment_use_pdftotext : bool =
 let rag_attachment_use_pandoc : bool =
   env_bool "RAG_ATTACHMENT_USE_PANDOC" (setting_bool [ "rag"; "attachments"; "use_pandoc" ] ~default:false)
 
+(* Whether to rewrite the user's query before embedding for retrieval.
+   When enabled, generates a contextual rewrite + hypothetical email passage
+   (multi-query) and merges results for better recall. *)
+let rag_query_rewrite : bool =
+  env_bool "RAG_QUERY_REWRITE" (setting_bool [ "rag"; "query"; "rewrite" ] ~default:true)
+
 (* --- Debug flags: enable verbose logging for specific subsystems --- *)
 
 let rag_debug_ollama_embed : bool =
@@ -208,6 +220,117 @@ let rag_debug_ollama_chat : bool =
 
 let rag_debug_retrieval : bool =
   env_bool "RAG_DEBUG_RETRIEVAL" (setting_bool [ "debug"; "retrieval" ] ~default:false)
+
+(* --- Prompts (hot-reloadable) --- *)
+
+(* Path to prompts.json: THUNDERRAG_PROMPTS env var, or ~/.thunderRAG/prompts.json. *)
+let prompts_path () : string =
+  match Sys.getenv_opt "THUNDERRAG_PROMPTS" with
+  | Some p when String.trim p <> "" ->
+      let p = String.trim p in
+      if String.length p > 0 && p.[0] = '~' then Filename.concat (thunderrag_home_dir ()) (String.sub p 1 (String.length p - 1))
+      else p
+  | _ -> Filename.concat (thunderrag_config_dir ()) "prompts.json"
+
+(* Path to the default prompts.json shipped with the codebase.
+   Set via THUNDERRAG_DEFAULT_PROMPTS or auto-detected relative to the executable. *)
+let default_prompts_path () : string =
+  match Sys.getenv_opt "THUNDERRAG_DEFAULT_PROMPTS" with
+  | Some p when String.trim p <> "" -> String.trim p
+  | _ ->
+      (* Try: directory of the executable / ../prompts.json (works for dune exec) *)
+      let exe_dir = Filename.dirname Sys.executable_name in
+      let candidate = Filename.concat (Filename.concat exe_dir "..") "prompts.json" in
+      if Sys.file_exists candidate then candidate
+      else
+        (* Fallback: current working directory *)
+        let cwd_candidate = "prompts.json" in
+        if Sys.file_exists cwd_candidate then cwd_candidate
+        else candidate  (* will just fail gracefully later *)
+
+(* Copy a default file to the config directory if the target does not exist. *)
+let install_default_if_missing ~(src : string) ~(dst : string) : unit =
+  if (not (Sys.file_exists dst)) && Sys.file_exists src then (
+    ensure_dir (thunderrag_config_dir ());
+    try
+      let ic = open_in_bin src in
+      let n = in_channel_length ic in
+      let buf = Bytes.create n in
+      really_input ic buf 0 n;
+      close_in ic;
+      let oc = open_out_bin dst in
+      output_bytes oc buf;
+      close_out oc;
+      Printf.printf "[config] installed default %s -> %s\n%!" (Filename.basename src) dst
+    with e ->
+      Printf.eprintf "[config] failed to install %s -> %s: %s\n%!"
+        src dst (Printexc.to_string e))
+
+(* Read and parse prompts.json fresh from disk.  Called on every use so edits
+   take effect without restarting the server. Returns None on missing/bad file. *)
+let load_prompts_json () : Yojson.Safe.t option =
+  let p = prompts_path () in
+  if Sys.file_exists p then
+    try Some (Yojson.Safe.from_file p) with e ->
+      Printf.eprintf "[config] failed to parse %s: %s\n%!" p (Printexc.to_string e);
+      None
+  else (
+    Printf.eprintf "[config] prompts file not found: %s\n%!" p;
+    None)
+
+(* Look up a prompt string by key from prompts.json.  Returns the raw string
+   (with {{…}} meta-variables still in place) or the provided default. *)
+let get_prompt_raw (key : string) ~(default : string) : string =
+  match load_prompts_json () with
+  | Some json -> (
+      match json with
+      | `Assoc kv -> (
+          match List.assoc_opt key kv with
+          | Some (`String s) -> s
+          | _ -> default)
+      | _ -> default)
+  | None -> default
+
+(* Substitute meta-variables in a prompt string.
+   [vars] is a list of (pattern, replacement) pairs, e.g.
+   [("{{user_identity}}", "The user is: ..."); ("{{datetime_local}}", "2026-...")].
+   Also expands {{indexed_email_format}} by reading it from prompts.json. *)
+let substitute_prompt_vars (prompt : string) (vars : (string * string) list) : string =
+  let indexed_format = get_prompt_raw "indexed_email_format" ~default:"" in
+  let all_vars = ("{{indexed_email_format}}", indexed_format) :: vars in
+  List.fold_left
+    (fun acc (pat, rep) ->
+      let rec replace s =
+        match String.split_on_char pat.[0] s with
+        | _ when not (String.length pat > 0) -> s
+        | _ ->
+            (* Simple substring replacement *)
+            let pat_len = String.length pat in
+            let buf = Buffer.create (String.length s) in
+            let i = ref 0 in
+            while !i <= String.length s - pat_len do
+              if String.sub s !i pat_len = pat then (
+                Buffer.add_string buf rep;
+                i := !i + pat_len)
+              else (
+                Buffer.add_char buf s.[!i];
+                incr i)
+            done;
+            (* Append remaining characters *)
+            while !i < String.length s do
+              Buffer.add_char buf s.[!i];
+              incr i
+            done;
+            Buffer.contents buf
+      in
+      replace acc)
+    prompt all_vars
+
+(* Convenience: load a prompt by key, substitute meta-variables, return result.
+   Falls back to [default] if the key is missing from prompts.json. *)
+let get_prompt (key : string) ~(default : string) ~(vars : (string * string) list) : string =
+  let raw = get_prompt_raw key ~default in
+  substitute_prompt_vars raw vars
 
 (* --- Timestamp helpers --- *)
 

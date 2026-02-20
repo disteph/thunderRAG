@@ -419,11 +419,17 @@ async function onAsk() {
 
   try {
     const session_id = getSessionId();
+    let user_name = "";
+    try {
+      const d = await browser.storage.local.get("ragWhoAmI");
+      user_name = (d.ragWhoAmI || "").trim();
+    } catch (_e) { /* ignore */ }
     const res = await fetchJson(`${base}/query`, {
       session_id,
       question,
       top_k: topK,
       mode,
+      user_name,
     });
 
     const srcs = Array.isArray(res?.sources) ? res.sources : [];
