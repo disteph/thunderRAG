@@ -1,5 +1,5 @@
 {
-  "_meta": "Quality test cases for ThunderRAG. Each case runs through the full query flow and checks the answer.",
+  "_meta": "Quality test cases for ThunderRAG. Each case runs through the full query flow.",
   "user_name": "Bob Martinez <bob@acme.com>",
   "cases": [
     {
@@ -9,10 +9,16 @@
       "session_group": "session_factual_01",
       "depends_on": null,
       "criteria": {
-        "must_contain_any": ["March 15", "March 17"],
+        "must_contain_any": [
+          "March 15",
+          "March 17"
+        ],
         "must_not_contain": [],
         "must_cite_emails": true,
-        "expected_email_subjects_any": ["Project Falcon launch date", "Updated Falcon timeline"],
+        "expected_email_subjects_any": [
+          "Project Falcon launch date",
+          "Updated Falcon timeline"
+        ],
         "hallucination_keywords": []
       }
     },
@@ -23,10 +29,18 @@
       "session_group": "session_factual_02",
       "depends_on": null,
       "criteria": {
-        "must_contain_any": ["Carol", "February 20", "Feb 20"],
+        "must_contain_any": [
+          "Carol",
+          "February 20",
+          "Feb 20",
+          "February 24",
+          "Feb 24"
+        ],
         "must_not_contain": [],
         "must_cite_emails": true,
-        "expected_email_subjects_any": ["Q1 budget review"],
+        "expected_email_subjects_any": [
+          "Q1 budget review"
+        ],
         "hallucination_keywords": []
       }
     },
@@ -37,66 +51,289 @@
       "session_group": "session_factual_03",
       "depends_on": null,
       "criteria": {
-        "must_contain_any": ["2.4M", "$2.4M", "2.4 million", "revenue", "25%"],
+        "must_contain_any": [
+          "2.4M",
+          "$2.4M",
+          "2.4 million",
+          "revenue",
+          "25%"
+        ],
         "must_not_contain": [],
         "must_cite_emails": true,
-        "expected_email_subjects_any": ["Q1 financial report"],
+        "expected_email_subjects_any": [
+          "Q1 financial report"
+        ],
         "hallucination_keywords": []
       }
     },
     {
-      "id": "urgent_01",
+      "id": "factual_04",
+      "category": "factual",
+      "question": "What is the CloudStore contract renewal price and what was recommended?",
+      "session_group": "session_factual_04",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": [
+          "$40,000",
+          "40,000",
+          "40K",
+          "negotiate",
+          "Grace"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Vendor contract renewal"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "factual_05",
+      "category": "factual",
+      "question": "What critical security vulnerability was found and has it been patched?",
+      "session_group": "session_factual_05",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": [
+          "CVE-2025-1234",
+          "log4j",
+          "patched"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "CVE-2025-1234",
+          "Security scan"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "triage_01",
       "category": "triage",
       "question": "Are there any urgent emails that need immediate attention?",
-      "session_group": "session_urgent_01",
+      "session_group": "session_triage_01",
       "depends_on": null,
       "criteria": {
-        "must_contain_any": ["server", "down", "production", "Dave", "503"],
+        "must_contain_any": [
+          "server",
+          "down",
+          "production",
+          "CVE",
+          "ESCALATION",
+          "BigCorp"
+        ],
         "must_not_contain": [],
         "must_cite_emails": true,
-        "expected_email_subjects_any": ["URGENT", "Production server down"],
+        "expected_email_subjects_any": [
+          "URGENT",
+          "Production server down",
+          "ESCALATION",
+          "CRITICAL"
+        ],
         "hallucination_keywords": []
       }
     },
     {
-      "id": "thread_01",
+      "id": "triage_02",
+      "category": "triage",
+      "question": "What action items and deadlines do I have in the next two weeks?",
+      "session_group": "session_triage_02",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": [
+          "February 28",
+          "Feb 28",
+          "Feb 21",
+          "March 1",
+          "compliance",
+          "expense",
+          "benefits"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Compliance audit",
+          "expense reports",
+          "Open enrollment"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "thread_incident_01",
       "category": "thread",
-      "question": "What is the current status of the CloudStore vendor contract negotiation?",
-      "session_group": "session_thread_01",
+      "question": "Walk me through the production server incident. What happened?",
+      "session_group": "session_thread_incident",
       "depends_on": null,
       "criteria": {
-        "must_contain_any": ["$40,000", "40,000", "40K", "negotiate", "Heidi", "Grace"],
+        "must_contain_any": [
+          "connection",
+          "leak",
+          "batch job",
+          "503"
+        ],
         "must_not_contain": [],
         "must_cite_emails": true,
-        "expected_email_subjects_any": ["Vendor contract renewal"],
+        "expected_email_subjects_any": [
+          "Production server down"
+        ],
         "hallucination_keywords": []
       }
     },
     {
-      "id": "thread_02",
+      "id": "thread_incident_02",
       "category": "thread",
-      "question": "What did Grace recommend about the CloudStore contract?",
-      "session_group": "session_thread_02",
-      "depends_on": null,
+      "question": "How was it fixed and what was the impact?",
+      "session_group": "session_thread_incident",
+      "depends_on": "thread_incident_01",
       "criteria": {
-        "must_contain_any": ["negotiate", "$40,000", "40,000", "DataVault", "migration risk"],
+        "must_contain_any": [
+          "finally block",
+          "PR #847",
+          "45 minutes",
+          "postmortem"
+        ],
         "must_not_contain": [],
         "must_cite_emails": true,
-        "expected_email_subjects_any": ["Vendor contract renewal"],
+        "expected_email_subjects_any": [
+          "Production server down"
+        ],
         "hallucination_keywords": []
       }
     },
     {
-      "id": "broad_01",
+      "id": "thread_incident_03",
+      "category": "thread",
+      "question": "Were there any customer-facing consequences?",
+      "session_group": "session_thread_incident",
+      "depends_on": "thread_incident_02",
+      "criteria": {
+        "must_contain_any": [
+          "BigCorp",
+          "timeout",
+          "resolved"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "ESCALATION",
+          "BigCorp"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "thread_vendor_01",
+      "category": "thread",
+      "question": "Summarize the CloudStore vendor contract negotiation thread.",
+      "session_group": "session_thread_vendor",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": [
+          "$45,000",
+          "$40,000",
+          "Grace",
+          "DataVault"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Vendor contract renewal"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "thread_vendor_02",
+      "category": "thread",
+      "question": "What was Grace's analysis comparing CloudStore and DataVault?",
+      "session_group": "session_thread_vendor",
+      "depends_on": "thread_vendor_01",
+      "criteria": {
+        "must_contain_any": [
+          "99.9%",
+          "99.5%",
+          "migration risk",
+          "$35,000"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Vendor contract renewal"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "thread_vendor_03",
+      "category": "thread",
+      "question": "Is there anything else related to the CloudStore deal I should know about?",
+      "session_group": "session_thread_vendor",
+      "depends_on": "thread_vendor_02",
+      "criteria": {
+        "must_contain_any": [
+          "NDA",
+          "legal",
+          "AI/ML",
+          "5 years"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "NDA review",
+          "Vendor contract renewal"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "broad_mark_01",
       "category": "broad",
       "question": "What topics has Mark Johnson emailed me about?",
-      "session_group": "session_broad_01",
+      "session_group": "session_broad_mark",
       "depends_on": null,
       "criteria": {
-        "must_contain_any": ["Lisa Wong", "new hire", "renovation", "Building 3", "offsite", "April"],
+        "must_contain_any": [
+          "Lisa Wong",
+          "new hire",
+          "renovation",
+          "Building 3",
+          "offsite",
+          "April",
+          "AI",
+          "DevOps"
+        ],
         "must_not_contain": [],
         "must_cite_emails": true,
-        "expected_email_subjects_any": ["New hire", "Office renovation", "Company offsite"],
+        "expected_email_subjects_any": [
+          "New hire",
+          "Office renovation",
+          "Company offsite",
+          "Fwd:"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "broad_mark_02",
+      "category": "broad",
+      "question": "Tell me more about the new hire he mentioned.",
+      "session_group": "session_broad_mark",
+      "depends_on": "broad_mark_01",
+      "criteria": {
+        "must_contain_any": [
+          "Lisa Wong",
+          "Monday",
+          "Feb 10",
+          "backend"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "New hire"
+        ],
         "hallucination_keywords": []
       }
     },
@@ -107,52 +344,94 @@
       "session_group": "session_temporal_01",
       "depends_on": null,
       "criteria": {
-        "must_contain_any": ["March 17", "Updated Falcon timeline", "2-day delay", "marketing"],
+        "must_contain_any": [
+          "March 17",
+          "Updated Falcon timeline",
+          "2-day delay",
+          "marketing",
+          "Out of office"
+        ],
         "must_not_contain": [],
         "must_cite_emails": true,
-        "expected_email_subjects_any": ["Updated Falcon timeline"],
+        "expected_email_subjects_any": [
+          "Updated Falcon timeline",
+          "Out of office"
+        ],
         "hallucination_keywords": []
       }
     },
     {
       "id": "temporal_02",
       "category": "temporal",
-      "question": "What deadlines do I have coming up?",
+      "question": "What deadlines do I have in the next two weeks?",
       "session_group": "session_temporal_02",
       "depends_on": null,
       "criteria": {
-        "must_contain_any": ["February 28", "Feb 28", "March 3", "compliance", "audit"],
+        "must_contain_any": [
+          "February 28",
+          "Feb 28",
+          "Feb 21",
+          "March 1",
+          "compliance",
+          "expense",
+          "benefits"
+        ],
         "must_not_contain": [],
         "must_cite_emails": true,
-        "expected_email_subjects_any": ["Compliance audit", "budget review"],
+        "expected_email_subjects_any": [
+          "Compliance audit",
+          "expense reports",
+          "Open enrollment"
+        ],
         "hallucination_keywords": []
       }
     },
     {
       "id": "attachment_01",
       "category": "attachment",
-      "question": "Did anyone send me a spreadsheet or financial report?",
+      "question": "What reports and documents have been sent to me as attachments?",
       "session_group": "session_attachment_01",
       "depends_on": null,
       "criteria": {
-        "must_contain_any": ["Eve", "Q1", "financial", "report", "xlsx"],
+        "must_contain_any": [
+          "Q1",
+          "financial",
+          "security scan",
+          "budget",
+          "mockup",
+          "migration"
+        ],
         "must_not_contain": [],
         "must_cite_emails": true,
-        "expected_email_subjects_any": ["Q1 financial report"],
+        "expected_email_subjects_any": [
+          "Q1 financial report",
+          "Security scan",
+          "budget",
+          "mockups",
+          "Migration"
+        ],
         "hallucination_keywords": []
       }
     },
     {
-      "id": "crossref_01",
-      "category": "cross_reference",
-      "question": "What's the situation with the payment gateway API keys for Falcon?",
-      "session_group": "session_crossref_01",
+      "id": "attachment_02",
+      "category": "attachment",
+      "question": "What did the security scan report find?",
+      "session_group": "session_attachment_02",
       "depends_on": null,
       "criteria": {
-        "must_contain_any": ["API keys", "pending", "approval", "Dave", "vendor"],
+        "must_contain_any": [
+          "critical",
+          "CVE",
+          "log4j",
+          "High",
+          "Medium"
+        ],
         "must_not_contain": [],
         "must_cite_emails": true,
-        "expected_email_subjects_any": ["API keys for Falcon"],
+        "expected_email_subjects_any": [
+          "Security scan"
+        ],
         "hallucination_keywords": []
       }
     },
@@ -163,52 +442,1070 @@
       "session_group": "session_negative_01",
       "depends_on": null,
       "criteria": {
-        "must_contain_any": ["no ", "not ", "don't", "doesn't", "no relevant", "no emails", "not found", "couldn't find"],
+        "must_contain_any": [
+          "no ",
+          "not ",
+          "don't",
+          "doesn't",
+          "no relevant",
+          "no emails",
+          "couldn't find"
+        ],
         "must_not_contain": [],
         "must_cite_emails": false,
         "expected_email_subjects_any": [],
-        "hallucination_keywords": ["Mars colonization", "Mars project"]
+        "hallucination_keywords": [
+          "Mars colonization",
+          "Mars project"
+        ]
       }
     },
     {
-      "id": "multiturn_01",
-      "category": "multi_turn",
-      "question": "Tell me about Alice's emails regarding Project Falcon.",
-      "session_group": "session_multiturn",
+      "id": "negative_02",
+      "category": "negative",
+      "question": "What is the CEO's salary?",
+      "session_group": "session_negative_02",
       "depends_on": null,
       "criteria": {
-        "must_contain_any": ["Falcon", "launch", "Alice"],
-        "must_not_contain": [],
-        "must_cite_emails": true,
-        "expected_email_subjects_any": ["Falcon"],
-        "hallucination_keywords": []
-      }
-    },
-    {
-      "id": "multiturn_02",
-      "category": "multi_turn",
-      "question": "What did she say about the deadline change?",
-      "session_group": "session_multiturn",
-      "depends_on": "multiturn_01",
-      "criteria": {
-        "must_contain_any": ["March 17", "2-day delay", "marketing", "March 15"],
-        "must_not_contain": [],
-        "must_cite_emails": true,
-        "expected_email_subjects_any": ["Updated Falcon timeline"],
-        "hallucination_keywords": []
-      }
-    },
-    {
-      "id": "multiturn_03",
-      "category": "multi_turn",
-      "question": "And who needs to be informed about this change?",
-      "session_group": "session_multiturn",
-      "depends_on": "multiturn_02",
-      "criteria": {
-        "must_contain_any": ["QA", "Bob"],
+        "must_contain_any": [
+          "no ",
+          "not ",
+          "don't",
+          "doesn't",
+          "no information",
+          "no emails",
+          "couldn't find"
+        ],
         "must_not_contain": [],
         "must_cite_emails": false,
         "expected_email_subjects_any": [],
+        "hallucination_keywords": [
+          "CEO salary"
+        ]
+      }
+    },
+    {
+      "id": "mt_falcon_01",
+      "category": "multi_turn",
+      "question": "Tell me everything about Project Falcon.",
+      "session_group": "session_mt_falcon",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": [
+          "launch",
+          "March",
+          "Alice"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Falcon"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_falcon_02",
+      "category": "multi_turn",
+      "question": "What's the current launch date and why did it change?",
+      "session_group": "session_mt_falcon",
+      "depends_on": "mt_falcon_01",
+      "criteria": {
+        "must_contain_any": [
+          "March 17",
+          "marketing",
+          "2-day delay"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Updated Falcon timeline"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_falcon_03",
+      "category": "multi_turn",
+      "question": "What's the status of QA testing?",
+      "session_group": "session_mt_falcon",
+      "depends_on": "mt_falcon_02",
+      "criteria": {
+        "must_contain_any": [
+          "Tony",
+          "32/32",
+          "blocked",
+          "API keys"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Falcon QA status"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_falcon_04",
+      "category": "multi_turn",
+      "question": "Were there any staging environment issues?",
+      "session_group": "session_mt_falcon",
+      "depends_on": "mt_falcon_03",
+      "criteria": {
+        "must_contain_any": [
+          "migration",
+          "foreign key",
+          "Dave",
+          "fixed"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "staging"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_falcon_05",
+      "category": "multi_turn",
+      "question": "What about the UI design \u2014 is that on track?",
+      "session_group": "session_mt_falcon",
+      "depends_on": "mt_falcon_04",
+      "criteria": {
+        "must_contain_any": [
+          "Patricia",
+          "mockups",
+          "WCAG",
+          "revised"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Falcon UI mockups"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_falcon_06",
+      "category": "multi_turn",
+      "question": "What's the marketing plan for the launch?",
+      "session_group": "session_mt_falcon",
+      "depends_on": "mt_falcon_05",
+      "criteria": {
+        "must_contain_any": [
+          "Grace",
+          "Phase",
+          "$25,000",
+          "webinar"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "marketing campaign"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_falcon_07",
+      "category": "multi_turn",
+      "question": "Are there any open bugs I should know about?",
+      "session_group": "session_mt_falcon",
+      "depends_on": "mt_falcon_06",
+      "criteria": {
+        "must_contain_any": [
+          "FALCON-342",
+          "payment timeout",
+          "$10,000"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "FALCON-342",
+          "Payment timeout"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_falcon_08",
+      "category": "multi_turn",
+      "question": "Summarize all the Falcon risks and blockers right now.",
+      "session_group": "session_mt_falcon",
+      "depends_on": "mt_falcon_07",
+      "criteria": {
+        "must_contain_any": [
+          "API keys",
+          "blocked"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": false,
+        "expected_email_subjects_any": [],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_incident_01",
+      "category": "multi_turn",
+      "question": "Tell me about the production server outage.",
+      "session_group": "session_mt_incident",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": [
+          "us-east-1",
+          "503",
+          "3:05 AM"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Production server down"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_incident_02",
+      "category": "multi_turn",
+      "question": "What was the root cause?",
+      "session_group": "session_mt_incident",
+      "depends_on": "mt_incident_01",
+      "criteria": {
+        "must_contain_any": [
+          "connection leak",
+          "batch job",
+          "finally block"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Production server down"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_incident_03",
+      "category": "multi_turn",
+      "question": "How long was the outage and what was done to fix it?",
+      "session_group": "session_mt_incident",
+      "depends_on": "mt_incident_02",
+      "criteria": {
+        "must_contain_any": [
+          "45 minutes",
+          "PR #847",
+          "pool limit"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Production server down"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_incident_04",
+      "category": "multi_turn",
+      "question": "Was there a postmortem?",
+      "session_group": "session_mt_incident",
+      "depends_on": "mt_incident_03",
+      "criteria": {
+        "must_contain_any": [
+          "postmortem",
+          "monitoring",
+          "80%"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "RESOLVED",
+          "Postmortem"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_incident_05",
+      "category": "multi_turn",
+      "question": "Did any customers complain about this?",
+      "session_group": "session_mt_incident",
+      "depends_on": "mt_incident_04",
+      "criteria": {
+        "must_contain_any": [
+          "BigCorp",
+          "timeout",
+          "$500K",
+          "Sam Chen"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "ESCALATION",
+          "BigCorp"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_incident_06",
+      "category": "multi_turn",
+      "question": "Is the customer issue resolved now?",
+      "session_group": "session_mt_incident",
+      "depends_on": "mt_incident_05",
+      "criteria": {
+        "must_contain_any": [
+          "resolved",
+          "99.97%",
+          "dedicated connection pool"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "RESOLVED"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_incident_07",
+      "category": "multi_turn",
+      "question": "Were there any other infrastructure warnings related to this?",
+      "session_group": "session_mt_incident",
+      "depends_on": "mt_incident_06",
+      "criteria": {
+        "must_contain_any": [
+          "disk space",
+          "85%",
+          "CI",
+          "build"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": false,
+        "expected_email_subjects_any": [
+          "Disk space",
+          "FAILED"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_lisa_01",
+      "category": "multi_turn",
+      "question": "What do you know about Lisa Wong?",
+      "session_group": "session_mt_lisa",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": [
+          "new hire",
+          "backend",
+          "Feb 10",
+          "Monday"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Lisa Wong",
+          "New hire"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_lisa_02",
+      "category": "multi_turn",
+      "question": "Did she have any onboarding issues?",
+      "session_group": "session_mt_lisa",
+      "depends_on": "mt_lisa_01",
+      "criteria": {
+        "must_contain_any": [
+          "403",
+          "falcon-backend",
+          "access",
+          "repo"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "access",
+          "falcon-backend"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_lisa_03",
+      "category": "multi_turn",
+      "question": "What questions did she ask in her first week?",
+      "session_group": "session_mt_lisa",
+      "depends_on": "mt_lisa_02",
+      "criteria": {
+        "must_contain_any": [
+          "IDE",
+          "staging",
+          "VPN",
+          "on-call"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "First week questions"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_lisa_04",
+      "category": "multi_turn",
+      "question": "Has she submitted any code yet?",
+      "session_group": "session_mt_lisa",
+      "depends_on": "mt_lisa_03",
+      "criteria": {
+        "must_contain_any": [
+          "PR #852",
+          "OrderValidator",
+          "validation",
+          "0-quantity"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "PR review",
+          "order validation"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_lisa_05",
+      "category": "multi_turn",
+      "question": "What feedback did she get on her code?",
+      "session_group": "session_mt_lisa",
+      "depends_on": "mt_lisa_04",
+      "criteria": {
+        "must_contain_any": [
+          "configurable",
+          "snake_case",
+          "10,000",
+          "LGTM"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "PR review"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_mixed_01",
+      "category": "multi_turn",
+      "question": "Give me a high-level overview of what's been happening in my inbox.",
+      "session_group": "session_mt_mixed",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": [
+          "Falcon",
+          "server",
+          "outage",
+          "BigCorp",
+          "budget"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": false,
+        "expected_email_subjects_any": [],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_mixed_02",
+      "category": "multi_turn",
+      "question": "Let's start with the most urgent items. What needs my attention right now?",
+      "session_group": "session_mt_mixed",
+      "depends_on": "mt_mixed_01",
+      "criteria": {
+        "must_contain_any": [
+          "CVE",
+          "ESCALATION",
+          "disk space",
+          "compliance"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": false,
+        "expected_email_subjects_any": [],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_mixed_03",
+      "category": "multi_turn",
+      "question": "Tell me about the BigCorp situation specifically.",
+      "session_group": "session_mt_mixed",
+      "depends_on": "mt_mixed_02",
+      "criteria": {
+        "must_contain_any": [
+          "BigCorp",
+          "$500K",
+          "timeout",
+          "Sam Chen"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "ESCALATION",
+          "BigCorp"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_mixed_04",
+      "category": "multi_turn",
+      "question": "OK, switching topics. What's happening with Project Falcon?",
+      "session_group": "session_mt_mixed",
+      "depends_on": "mt_mixed_03",
+      "criteria": {
+        "must_contain_any": [
+          "March 17",
+          "launch",
+          "QA",
+          "marketing"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Falcon"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_mixed_05",
+      "category": "multi_turn",
+      "question": "What about the team \u2014 any HR or people updates?",
+      "session_group": "session_mt_mixed",
+      "depends_on": "mt_mixed_04",
+      "criteria": {
+        "must_contain_any": [
+          "Lisa Wong",
+          "performance review",
+          "offsite"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Lisa Wong",
+          "performance review",
+          "offsite"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_mixed_06",
+      "category": "multi_turn",
+      "question": "How was my performance review?",
+      "session_group": "session_mt_mixed",
+      "depends_on": "mt_mixed_05",
+      "criteria": {
+        "must_contain_any": [
+          "Exceeds Expectations",
+          "4/5",
+          "8%",
+          "RSU",
+          "500"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "performance review"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_mixed_07",
+      "category": "multi_turn",
+      "question": "What financial things do I need to deal with?",
+      "session_group": "session_mt_mixed",
+      "depends_on": "mt_mixed_06",
+      "criteria": {
+        "must_contain_any": [
+          "expense",
+          "$420,000",
+          "budget",
+          "benefits",
+          "Feb 21",
+          "Feb 28"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "expense",
+          "budget",
+          "benefits"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_mixed_08",
+      "category": "multi_turn",
+      "question": "Are there any conferences or travel coming up?",
+      "session_group": "session_mt_mixed",
+      "depends_on": "mt_mixed_07",
+      "criteria": {
+        "must_contain_any": [
+          "DevOps Summit",
+          "March 20",
+          "San Francisco",
+          "$3,800"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "DevOps Summit"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_mixed_09",
+      "category": "multi_turn",
+      "question": "What did I learn at that conference?",
+      "session_group": "session_mt_mixed",
+      "depends_on": "mt_mixed_08",
+      "criteria": {
+        "must_contain_any": [
+          "GitOps",
+          "OpenTelemetry",
+          "ArgoCD",
+          "platform engineering"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "DevOps Summit",
+          "takeaways"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_mixed_10",
+      "category": "multi_turn",
+      "question": "Finally, is there anything casual or low-priority I should know about?",
+      "session_group": "session_mt_mixed",
+      "depends_on": "mt_mixed_09",
+      "criteria": {
+        "must_contain_any": [
+          "lunch",
+          "Thai",
+          "holiday",
+          "AI",
+          "DevOps",
+          "article"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": false,
+        "expected_email_subjects_any": [
+          "Lunch",
+          "holiday",
+          "Fwd:"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_budget_01",
+      "category": "multi_turn",
+      "question": "What's the current state of our Q1 budget?",
+      "session_group": "session_mt_budget",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": [
+          "$420,000",
+          "infrastructure",
+          "headcount"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "budget",
+          "Q1 financial"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_budget_02",
+      "category": "multi_turn",
+      "question": "How does the revised budget compare to the original Q1 report?",
+      "session_group": "session_mt_budget",
+      "depends_on": "mt_budget_01",
+      "criteria": {
+        "must_contain_any": [
+          "$2.4M",
+          "revenue",
+          "$180,000",
+          "$150,000"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Q1 financial",
+          "budget"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_budget_03",
+      "category": "multi_turn",
+      "question": "When is the budget review meeting?",
+      "session_group": "session_mt_budget",
+      "depends_on": "mt_budget_02",
+      "criteria": {
+        "must_contain_any": [
+          "Feb 24",
+          "rescheduled",
+          "Alice",
+          "OOO"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "budget review",
+          "rescheduled"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_budget_04",
+      "category": "multi_turn",
+      "question": "What expense reports do I need to submit?",
+      "session_group": "session_mt_budget",
+      "depends_on": "mt_budget_03",
+      "criteria": {
+        "must_contain_any": [
+          "AWS",
+          "$450",
+          "team dinner",
+          "$380",
+          "JetBrains",
+          "$249"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "expense reports"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_budget_05",
+      "category": "multi_turn",
+      "question": "Are there any other financial deadlines I should know about?",
+      "session_group": "session_mt_budget",
+      "depends_on": "mt_budget_04",
+      "criteria": {
+        "must_contain_any": [
+          "Feb 28",
+          "benefits",
+          "enrollment",
+          "Feb 21"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Open enrollment",
+          "expense"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_budget_06",
+      "category": "multi_turn",
+      "question": "What's the total conference travel budget that was approved?",
+      "session_group": "session_mt_budget",
+      "depends_on": "mt_budget_05",
+      "criteria": {
+        "must_contain_any": [
+          "$3,800",
+          "DevOps Summit",
+          "Concur"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "DevOps Summit",
+          "travel approved"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_security_01",
+      "category": "multi_turn",
+      "question": "Give me a full overview of security-related emails.",
+      "session_group": "session_mt_security",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": [
+          "CVE-2025-1234",
+          "log4j",
+          "security scan",
+          "NDA"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Security scan",
+          "CVE",
+          "NDA review"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_security_02",
+      "category": "multi_turn",
+      "question": "What were all the findings in the security scan?",
+      "session_group": "session_mt_security",
+      "depends_on": "mt_security_01",
+      "criteria": {
+        "must_contain_any": [
+          "Critical",
+          "High",
+          "Medium",
+          "Low",
+          "TLS",
+          "password",
+          "debug"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Security scan"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_security_03",
+      "category": "multi_turn",
+      "question": "Has everything been addressed?",
+      "session_group": "session_mt_security",
+      "depends_on": "mt_security_02",
+      "criteria": {
+        "must_contain_any": [
+          "patched",
+          "log4j 2.17.1",
+          "WAF"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "CVE",
+          "patched"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_design_01",
+      "category": "multi_turn",
+      "question": "What's the status of the Falcon UI design?",
+      "session_group": "session_mt_design",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": [
+          "Patricia",
+          "mockups",
+          "dashboard"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Falcon UI mockups"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_design_02",
+      "category": "multi_turn",
+      "question": "What feedback was given on the initial mockups?",
+      "session_group": "session_mt_design",
+      "depends_on": "mt_design_01",
+      "criteria": {
+        "must_contain_any": [
+          "delivery time",
+          "CSV export",
+          "WCAG",
+          "confirmation dialog"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Falcon UI mockups"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_design_03",
+      "category": "multi_turn",
+      "question": "Was the feedback incorporated?",
+      "session_group": "session_mt_design",
+      "depends_on": "mt_design_02",
+      "criteria": {
+        "must_contain_any": [
+          "revised",
+          "incorporated",
+          "sign-off",
+          "v2"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Revised"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_people_01",
+      "category": "multi_turn",
+      "question": "Who are the key people I've been emailing with and what are their roles?",
+      "session_group": "session_mt_people",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": [
+          "Alice",
+          "Dave",
+          "Eve",
+          "Irene",
+          "Lisa",
+          "Henry",
+          "Patricia"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": false,
+        "expected_email_subjects_any": [],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_people_02",
+      "category": "multi_turn",
+      "question": "Tell me about my performance review.",
+      "session_group": "session_mt_people",
+      "depends_on": "mt_people_01",
+      "criteria": {
+        "must_contain_any": [
+          "Exceeds Expectations",
+          "4/5",
+          "8%",
+          "500 RSUs"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "performance review"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_people_03",
+      "category": "multi_turn",
+      "question": "What training or development activities are coming up for me?",
+      "session_group": "session_mt_people",
+      "depends_on": "mt_people_02",
+      "criteria": {
+        "must_contain_any": [
+          "compliance training",
+          "GDPR",
+          "DevOps Summit",
+          "March 1"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "compliance training",
+          "DevOps Summit"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "mt_people_04",
+      "category": "multi_turn",
+      "question": "What about the company offsite?",
+      "session_group": "session_mt_people",
+      "depends_on": "mt_people_03",
+      "criteria": {
+        "must_contain_any": [
+          "April 5",
+          "Lakeside Resort",
+          "RSVP",
+          "February 25"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Company offsite"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "crossref_01",
+      "category": "cross_reference",
+      "question": "What's the situation with the payment gateway API keys for Falcon?",
+      "session_group": "session_crossref",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": [
+          "API keys",
+          "pending",
+          "approval",
+          "Dave",
+          "vendor"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "API keys for Falcon"
+        ],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "crossref_02",
+      "category": "cross_reference",
+      "question": "How does this affect QA testing?",
+      "session_group": "session_crossref",
+      "depends_on": "crossref_01",
+      "criteria": {
+        "must_contain_any": [
+          "blocked",
+          "Tony",
+          "28/30",
+          "March 5",
+          "March 12"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [
+          "Falcon QA status"
+        ],
         "hallucination_keywords": []
       }
     }

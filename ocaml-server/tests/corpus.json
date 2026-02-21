@@ -1,117 +1,397 @@
 {
-  "_meta": "Synthetic email corpus for ThunderRAG quality testing. Each entry has rfc822 (raw email text) and metadata for the harness.",
+  "_meta": "Synthetic email corpus for ThunderRAG quality testing.",
   "emails": [
     {
       "id": "falcon-launch",
       "message_id": "<falcon-launch-001@test.example.com>",
-      "description": "Alice tells Bob the Project Falcon launch date is March 15, 2025",
+      "description": "Alice tells Bob Falcon launch date March 15",
       "mark_processed": false,
       "rfc822": "From: Alice Chen <alice@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Project Falcon launch date\r\nMessage-Id: <falcon-launch-001@test.example.com>\r\nDate: Wed, 05 Feb 2025 09:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Bob,\r\n\r\nThe launch date for Project Falcon is confirmed for March 15, 2025.\r\nPlease make sure the QA team is ready by March 10.\r\n\r\nWe also need the staging environment validated before the 12th.\r\nLet me know if you foresee any blockers.\r\n\r\nThanks,\r\nAlice"
     },
     {
       "id": "falcon-reply",
       "message_id": "<falcon-reply-002@test.example.com>",
-      "description": "Bob replies to Alice confirming QA readiness, mentions dry run on March 12",
+      "description": "Bob confirms QA readiness, mentions dry run March 12",
       "mark_processed": false,
-      "rfc822": "From: Bob Martinez <bob@acme.com>\r\nTo: Alice Chen <alice@acme.com>\r\nSubject: Re: Project Falcon launch date\r\nMessage-Id: <falcon-reply-002@test.example.com>\r\nDate: Wed, 05 Feb 2025 14:30:00 +0000\r\nIn-Reply-To: <falcon-launch-001@test.example.com>\r\nReferences: <falcon-launch-001@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Alice,\r\n\r\nGot it. QA will be ready by March 10. I've also scheduled a dry run for March 12.\r\nThe staging environment is already set up and passing basic smoke tests.\r\n\r\nOne concern: we still need the API keys for the payment gateway integration.\r\nCan you check with Dave's team?\r\n\r\nBest,\r\nBob\r\n\r\n> On Wed, 05 Feb 2025 at 09:00, Alice Chen <alice@acme.com> wrote:\r\n> The launch date for Project Falcon is confirmed for March 15, 2025.\r\n> Please make sure the QA team is ready by March 10."
+      "rfc822": "From: Bob Martinez <bob@acme.com>\r\nTo: Alice Chen <alice@acme.com>\r\nSubject: Re: Project Falcon launch date\r\nMessage-Id: <falcon-reply-002@test.example.com>\r\nDate: Wed, 05 Feb 2025 14:30:00 +0000\r\nIn-Reply-To: <falcon-launch-001@test.example.com>\r\nReferences: <falcon-launch-001@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Alice,\r\n\r\nGot it. QA will be ready by March 10. I've also scheduled a dry run for March 12.\r\nThe staging environment is already set up and passing basic smoke tests.\r\n\r\nOne concern: we still need the API keys for the payment gateway integration.\r\nCan you check with Dave's team?\r\n\r\nBest,\r\nBob\r\n\r\n> On Wed, 05 Feb 2025 at 09:00, Alice Chen wrote:\r\n> The launch date for Project Falcon is confirmed for March 15, 2025.\r\n> Please make sure the QA team is ready by March 10."
     },
     {
       "id": "budget-meeting",
       "message_id": "<budget-meeting-003@test.example.com>",
-      "description": "Carol invites team to Q1 budget review, To + Cc",
+      "description": "Carol invites team to Q1 budget review Feb 20",
       "mark_processed": false,
       "rfc822": "From: Carol Davis <carol@acme.com>\r\nTo: Engineering Team <engineering@acme.com>\r\nCc: Bob Martinez <bob@acme.com>, Finance <finance@acme.com>\r\nSubject: Q1 budget review meeting - Feb 20\r\nMessage-Id: <budget-meeting-003@test.example.com>\r\nDate: Mon, 10 Feb 2025 08:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi team,\r\n\r\nReminder: the Q1 budget review meeting is scheduled for February 20, 2025 at 2pm in Conference Room B.\r\n\r\nPlease bring your department expense reports and any budget change requests.\r\nWe need to finalize allocations before the March board meeting.\r\n\r\nAgenda:\r\n1. Q1 actuals vs. plan\r\n2. Headcount requests\r\n3. Infrastructure spending\r\n4. Travel budget adjustments\r\n\r\nRegards,\r\nCarol"
     },
     {
       "id": "server-down",
       "message_id": "<server-down-004@test.example.com>",
-      "description": "Dave urgently reports production server outage to Bob, ASAP action needed",
+      "description": "Dave urgently reports production server outage",
       "mark_processed": false,
       "rfc822": "From: Dave Wilson <dave@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nCc: Ops Team <ops@acme.com>\r\nSubject: URGENT: Production server down - immediate action needed\r\nMessage-Id: <server-down-004@test.example.com>\r\nDate: Tue, 11 Feb 2025 03:15:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nProduction server us-east-1 is DOWN. All customer-facing APIs are returning 503.\r\nThis started at 3:05 AM UTC. We need someone to investigate ASAP.\r\n\r\nThe monitoring dashboard shows:\r\n- CPU usage spiked to 100% at 3:04 AM\r\n- Database connections exhausted\r\n- No recent deployments in the last 24h\r\n\r\nI've already paged the on-call team but haven't gotten a response.\r\nPlease escalate if you can.\r\n\r\n-- Dave"
     },
     {
       "id": "holiday-schedule",
       "message_id": "<holiday-schedule-005@test.example.com>",
-      "description": "HR newsletter about 2025 holiday schedule, Bcc to all staff",
+      "description": "HR 2025 holiday schedule",
       "mark_processed": false,
       "rfc822": "From: HR Department <hr@acme.com>\r\nTo: All Staff <allstaff@acme.com>\r\nBcc: Bob Martinez <bob@acme.com>\r\nSubject: 2025 Company Holiday Schedule\r\nMessage-Id: <holiday-schedule-005@test.example.com>\r\nDate: Fri, 03 Jan 2025 10:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nDear colleagues,\r\n\r\nPlease find below the official 2025 company holiday schedule:\r\n\r\n- Jan 1: New Year's Day\r\n- Jan 20: Martin Luther King Jr. Day\r\n- Feb 17: Presidents' Day\r\n- May 26: Memorial Day\r\n- Jul 4: Independence Day\r\n- Sep 1: Labor Day\r\n- Nov 27-28: Thanksgiving\r\n- Dec 24-25: Christmas\r\n- Dec 31: New Year's Eve (half day)\r\n\r\nPlease plan your PTO requests accordingly.\r\n\r\nBest regards,\r\nHR Department"
     },
     {
       "id": "q1-report-attachment",
       "message_id": "<q1-report-006@test.example.com>",
-      "description": "Eve sends Bob Q1 report with attachment",
+      "description": "Eve sends Q1 financial report with xlsx",
       "mark_processed": false,
-      "rfc822": "From: Eve Park <eve@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Q1 financial report attached\r\nMessage-Id: <q1-report-006@test.example.com>\r\nDate: Thu, 13 Feb 2025 11:30:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"----=_Part_Q1Report\"\r\n\r\n------=_Part_Q1Report\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Bob,\r\n\r\nPlease find attached the Q1 financial report for your review before the budget meeting.\r\n\r\nKey highlights:\r\n- Revenue: $2.4M (up 15% YoY)\r\n- Operating expenses: $1.8M (within budget)\r\n- Net margin: 25%\r\n\r\nLet me know if you have questions.\r\n\r\nEve\r\n\r\n------=_Part_Q1Report\r\nContent-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\nContent-Disposition: attachment; filename=\"Q1-Financial-Report-2025.xlsx\"\r\nContent-Transfer-Encoding: base64\r\n\r\nUEsDBBQAAAAIAA==\r\n------=_Part_Q1Report--"
+      "rfc822": "From: Eve Park <eve@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Q1 financial report attached\r\nMessage-Id: <q1-report-006@test.example.com>\r\nDate: Thu, 13 Feb 2025 11:30:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"----=_Part_q1-repor\"\r\n\r\n------=_Part_q1-repor\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Bob,\r\n\r\nPlease find attached the Q1 financial report for your review before the budget meeting.\r\n\r\nKey highlights:\r\n- Revenue: $2.4M (up 15% YoY)\r\n- Operating expenses: $1.8M (within budget)\r\n- Net margin: 25%\r\n\r\nLet me know if you have questions.\r\n\r\nEve\r\n\r\n------=_Part_q1-repor\r\nContent-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\nContent-Disposition: attachment; filename=\"Q1-Financial-Report-2025.xlsx\"\r\nContent-Transfer-Encoding: base64\r\n\r\nUEsDBBQAAAAIAA==\r\n------=_Part_q1-repor--"
     },
     {
       "id": "vendor-original",
       "message_id": "<vendor-original-007@test.example.com>",
-      "description": "Frank starts a thread about vendor contract renewal",
+      "description": "Frank starts vendor contract renewal thread",
       "mark_processed": false,
       "rfc822": "From: Frank Lee <frank@acme.com>\r\nTo: Grace Kim <grace@acme.com>\r\nCc: Heidi Tanaka <heidi@acme.com>\r\nSubject: Vendor contract renewal - CloudStore Inc.\r\nMessage-Id: <vendor-original-007@test.example.com>\r\nDate: Mon, 03 Feb 2025 09:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Grace,\r\n\r\nThe CloudStore Inc. contract expires on March 31, 2025.\r\nTheir renewal proposal is $45,000/year (up from $38,000).\r\n\r\nI think we should negotiate. Their competitor DataVault is offering similar storage at $35,000/year.\r\nCan you prepare a comparison analysis?\r\n\r\nThanks,\r\nFrank"
     },
     {
       "id": "vendor-reply-1",
       "message_id": "<vendor-reply1-008@test.example.com>",
-      "description": "Grace replies with comparison analysis, quotes original",
+      "description": "Grace replies with comparison analysis",
       "mark_processed": false,
-      "rfc822": "From: Grace Kim <grace@acme.com>\r\nTo: Frank Lee <frank@acme.com>\r\nCc: Heidi Tanaka <heidi@acme.com>\r\nSubject: Re: Vendor contract renewal - CloudStore Inc.\r\nMessage-Id: <vendor-reply1-008@test.example.com>\r\nDate: Tue, 04 Feb 2025 14:00:00 +0000\r\nIn-Reply-To: <vendor-original-007@test.example.com>\r\nReferences: <vendor-original-007@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Frank,\r\n\r\nI've done the comparison. Here's what I found:\r\n\r\nCloudStore:\r\n- 5TB storage, 99.9% uptime SLA\r\n- 24/7 phone support\r\n- Already integrated with our systems\r\n- Migration risk: none\r\n- Cost: $45,000/yr\r\n\r\nDataVault:\r\n- 5TB storage, 99.5% uptime SLA\r\n- Email-only support\r\n- Would require 2-3 weeks migration\r\n- Migration risk: moderate\r\n- Cost: $35,000/yr\r\n\r\nMy recommendation: negotiate CloudStore down to $40,000 using the DataVault quote as leverage. The migration risk and downtime aren't worth the $5K savings.\r\n\r\nGrace\r\n\r\n> On Mon, 03 Feb 2025, Frank Lee wrote:\r\n> The CloudStore Inc. contract expires on March 31, 2025.\r\n> Their renewal proposal is $45,000/year (up from $38,000).\r\n> I think we should negotiate. Their competitor DataVault is offering similar storage at $35,000/year."
+      "rfc822": "From: Grace Kim <grace@acme.com>\r\nTo: Frank Lee <frank@acme.com>\r\nCc: Heidi Tanaka <heidi@acme.com>\r\nSubject: Re: Vendor contract renewal - CloudStore Inc.\r\nMessage-Id: <vendor-reply1-008@test.example.com>\r\nDate: Tue, 04 Feb 2025 14:00:00 +0000\r\nIn-Reply-To: <vendor-original-007@test.example.com>\r\nReferences: <vendor-original-007@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Frank,\r\n\r\nI've done the comparison:\r\n\r\nCloudStore: 5TB, 99.9% uptime SLA, 24/7 phone support, no migration risk. $45,000/yr\r\nDataVault: 5TB, 99.5% uptime SLA, email-only support, 2-3 weeks migration. $35,000/yr\r\n\r\nRecommendation: negotiate CloudStore to $40,000 using DataVault quote. Migration risk isn't worth $5K savings.\r\n\r\nGrace"
     },
     {
       "id": "vendor-reply-2",
       "message_id": "<vendor-reply2-009@test.example.com>",
-      "description": "Heidi replies to thread, 3-deep, quotes both previous messages",
+      "description": "Heidi agrees, will negotiate with CloudStore",
       "mark_processed": false,
-      "rfc822": "From: Heidi Tanaka <heidi@acme.com>\r\nTo: Frank Lee <frank@acme.com>, Grace Kim <grace@acme.com>\r\nSubject: Re: Re: Vendor contract renewal - CloudStore Inc.\r\nMessage-Id: <vendor-reply2-009@test.example.com>\r\nDate: Wed, 05 Feb 2025 10:00:00 +0000\r\nIn-Reply-To: <vendor-reply1-008@test.example.com>\r\nReferences: <vendor-original-007@test.example.com> <vendor-reply1-008@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nAgreed with Grace's analysis. I'll reach out to CloudStore's account manager today and push for $40K.\r\n\r\nI also want to add a clause for automatic scaling if we exceed 5TB. Our data growth rate suggests we'll hit that ceiling by Q3.\r\n\r\n-- Heidi\r\n\r\n> On Tue, 04 Feb 2025, Grace Kim wrote:\r\n> My recommendation: negotiate CloudStore down to $40,000 using the DataVault quote as leverage.\r\n> The migration risk and downtime aren't worth the $5K savings.\r\n>\r\n>> On Mon, 03 Feb 2025, Frank Lee wrote:\r\n>> The CloudStore Inc. contract expires on March 31, 2025.\r\n>> Their renewal proposal is $45,000/year (up from $38,000)."
+      "rfc822": "From: Heidi Tanaka <heidi@acme.com>\r\nTo: Frank Lee <frank@acme.com>, Grace Kim <grace@acme.com>\r\nSubject: Re: Vendor contract renewal - CloudStore Inc.\r\nMessage-Id: <vendor-reply2-009@test.example.com>\r\nDate: Wed, 05 Feb 2025 10:00:00 +0000\r\nIn-Reply-To: <vendor-reply1-008@test.example.com>\r\nReferences: <vendor-original-007@test.example.com> <vendor-reply1-008@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nAgreed with Grace. I'll reach out to CloudStore's account manager today and push for $40K.\r\n\r\nAlso want to add a clause for automatic scaling if we exceed 5TB. Our data growth suggests we'll hit that by Q3.\r\n\r\n-- Heidi"
     },
     {
       "id": "mark-topic-1",
       "message_id": "<mark-topic1-010@test.example.com>",
-      "description": "Mark emails Bob about a new hire starting",
+      "description": "Mark: new hire Lisa Wong starting Monday",
       "mark_processed": false,
       "rfc822": "From: Mark Johnson <mark@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: New hire starting Monday - Lisa Wong\r\nMessage-Id: <mark-topic1-010@test.example.com>\r\nDate: Thu, 06 Feb 2025 09:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Bob,\r\n\r\nJust a heads-up: Lisa Wong is joining the backend team this Monday, Feb 10.\r\nShe'll need access to the dev environment and a desk in Building 3.\r\n\r\nCan you set up her accounts and assign her a buddy?\r\n\r\nThanks,\r\nMark"
     },
     {
       "id": "mark-topic-2",
       "message_id": "<mark-topic2-011@test.example.com>",
-      "description": "Mark emails Bob about office renovation",
+      "description": "Mark: office renovation March 3-14",
       "mark_processed": false,
       "rfc822": "From: Mark Johnson <mark@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Office renovation schedule - Building 3\r\nMessage-Id: <mark-topic2-011@test.example.com>\r\nDate: Fri, 07 Feb 2025 15:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nThe Building 3 renovation is scheduled for March 3-14.\r\nYour team will need to relocate to Building 1 during that period.\r\n\r\nPlease identify any equipment that can't be moved and we'll arrange alternatives.\r\n\r\nMark"
     },
     {
       "id": "mark-topic-3",
       "message_id": "<mark-topic3-012@test.example.com>",
-      "description": "Mark emails Bob about the company offsite event",
+      "description": "Mark: company offsite April 5-6",
       "mark_processed": false,
       "rfc822": "From: Mark Johnson <mark@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Company offsite - April 5-6\r\nMessage-Id: <mark-topic3-012@test.example.com>\r\nDate: Mon, 10 Feb 2025 11:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Bob,\r\n\r\nThe annual company offsite is happening April 5-6 at the Lakeside Resort.\r\nPlease RSVP by February 25 and indicate any dietary restrictions.\r\n\r\nActivities include team-building exercises, a keynote from the CEO, and a dinner cruise.\r\n\r\nMark"
     },
     {
       "id": "deadline-email",
       "message_id": "<deadline-013@test.example.com>",
-      "description": "Time-sensitive email with explicit deadline of Feb 28",
+      "description": "Nora: compliance audit docs needed by Feb 28",
       "mark_processed": false,
-      "rfc822": "From: Nora Patel <nora@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Compliance audit documents needed by Feb 28\r\nMessage-Id: <deadline-013@test.example.com>\r\nDate: Wed, 12 Feb 2025 09:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Bob,\r\n\r\nThe annual compliance audit is coming up. I need the following documents from your team by February 28, 2025:\r\n\r\n1. Code review logs for Q4 2024\r\n2. Security incident reports\r\n3. Access control audit trail\r\n4. Data retention policy acknowledgments\r\n\r\nPlease coordinate with your team leads to gather these. This deadline is firm - the auditors arrive March 3.\r\n\r\nThanks,\r\nNora"
+      "rfc822": "From: Nora Patel <nora@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Compliance audit documents needed by Feb 28\r\nMessage-Id: <deadline-013@test.example.com>\r\nDate: Wed, 12 Feb 2025 09:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Bob,\r\n\r\nThe annual compliance audit is coming up. I need these documents by February 28, 2025:\r\n\r\n1. Code review logs for Q4 2024\r\n2. Security incident reports\r\n3. Access control audit trail\r\n4. Data retention policy acknowledgments\r\n\r\nThis deadline is firm - the auditors arrive March 3.\r\n\r\nThanks,\r\nNora"
     },
     {
       "id": "cross-reference",
       "message_id": "<cross-ref-014@test.example.com>",
-      "description": "Email referencing a previous email (the Falcon launch)",
+      "description": "Alice follows up on API keys for Falcon",
       "mark_processed": false,
       "rfc822": "From: Alice Chen <alice@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nCc: Dave Wilson <dave@acme.com>\r\nSubject: API keys for Falcon - following up\r\nMessage-Id: <cross-ref-014@test.example.com>\r\nDate: Fri, 07 Feb 2025 16:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nAs discussed in my previous email about the Falcon launch, we need the payment gateway API keys before March 10.\r\n\r\nI've checked with Dave's team and they say the keys are pending approval from the vendor.\r\nDave, can you provide an ETA?\r\n\r\nWe can't proceed with payment integration testing without them.\r\n\r\nAlice"
     },
     {
       "id": "processed-email",
       "message_id": "<processed-015@test.example.com>",
-      "description": "An already-dealt-with email (will be marked processed after ingest)",
+      "description": "IT password reset (will be marked processed)",
       "mark_processed": true,
-      "rfc822": "From: IT Support <it@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Password reset completed\r\nMessage-Id: <processed-015@test.example.com>\r\nDate: Mon, 03 Feb 2025 12:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Bob,\r\n\r\nYour VPN password has been reset as requested.\r\nYour new temporary password is: TempPass2025!\r\n\r\nPlease change it within 24 hours by logging into the IT portal.\r\n\r\n-- IT Support Team"
+      "rfc822": "From: IT Support <it@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Password reset completed\r\nMessage-Id: <processed-015@test.example.com>\r\nDate: Mon, 03 Feb 2025 12:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Bob,\r\n\r\nYour VPN password has been reset as requested.\r\nNew temporary password: TempPass2025!\r\n\r\nPlease change it within 24 hours via the IT portal.\r\n\r\n-- IT Support Team"
     },
     {
       "id": "alice-recent",
       "message_id": "<alice-recent-016@test.example.com>",
-      "description": "Most recent email from Alice (for temporal queries)",
+      "description": "Alice updates Falcon timeline to March 17",
       "mark_processed": false,
       "rfc822": "From: Alice Chen <alice@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Updated Falcon timeline\r\nMessage-Id: <alice-recent-016@test.example.com>\r\nDate: Thu, 13 Feb 2025 17:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nQuick update: the marketing team requested a 2-day delay for the Falcon launch.\r\nNew date is March 17, 2025 instead of March 15.\r\n\r\nAll other deadlines shift accordingly:\r\n- QA ready: March 12 (was March 10)\r\n- Dry run: March 14 (was March 12)\r\n\r\nSorry for the late change. Let me know if this causes issues.\r\n\r\nAlice"
+    },
+    {
+      "id": "server-reply-1",
+      "message_id": "<server-reply1-017@test.example.com>",
+      "description": "Bob found connection pool leak in batch job",
+      "mark_processed": false,
+      "rfc822": "From: Bob Martinez <bob@acme.com>\r\nTo: Dave Wilson <dave@acme.com>\r\nCc: Ops Team <ops@acme.com>\r\nSubject: Re: URGENT: Production server down - immediate action needed\r\nMessage-Id: <server-reply1-017@test.example.com>\r\nDate: Tue, 11 Feb 2025 03:45:00 +0000\r\nIn-Reply-To: <server-down-004@test.example.com>\r\nReferences: <server-down-004@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nDave,\r\n\r\nI'm on it. The new batch job deployed Friday has a connection leak \u2014 each run opens 50 connections and never releases them.\r\n\r\nRestarted the app server and bumped pool limit to 200. APIs responding again.\r\n\r\nWill push proper fix in the morning.\r\n\r\nBob"
+    },
+    {
+      "id": "server-reply-2",
+      "message_id": "<server-reply2-018@test.example.com>",
+      "description": "Dave confirms missing finally block, PR #847",
+      "mark_processed": false,
+      "rfc822": "From: Dave Wilson <dave@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nCc: Ops Team <ops@acme.com>\r\nSubject: Re: URGENT: Production server down - immediate action needed\r\nMessage-Id: <server-reply2-018@test.example.com>\r\nDate: Tue, 11 Feb 2025 08:30:00 +0000\r\nIn-Reply-To: <server-reply1-017@test.example.com>\r\nReferences: <server-down-004@test.example.com> <server-reply1-017@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nConfirmed: nightly analytics batch job missing a finally block in DB client. Leaking 50 connections per run since Friday.\r\n\r\nFix deployed to staging. Please review PR #847 \u2014 want it in prod before tonight's batch window.\r\n\r\nAlso added connection pool monitor to Grafana.\r\n\r\nDave"
+    },
+    {
+      "id": "server-resolved",
+      "message_id": "<server-resolved-019@test.example.com>",
+      "description": "Server incident resolved with postmortem",
+      "mark_processed": false,
+      "rfc822": "From: Dave Wilson <dave@acme.com>\r\nTo: Bob Martinez <bob@acme.com>, Alice Chen <alice@acme.com>\r\nCc: Ops Team <ops@acme.com>\r\nSubject: Re: URGENT: Production server down - RESOLVED + Postmortem\r\nMessage-Id: <server-resolved-019@test.example.com>\r\nDate: Tue, 11 Feb 2025 16:00:00 +0000\r\nIn-Reply-To: <server-reply2-018@test.example.com>\r\nReferences: <server-down-004@test.example.com> <server-reply1-017@test.example.com> <server-reply2-018@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nTeam,\r\n\r\nProduction outage fully resolved. Fix deployed to prod at 14:30 UTC.\r\n\r\nPostmortem:\r\n- Root cause: Connection leak in nightly analytics batch job (PR #831, deployed Fri Feb 7)\r\n- Impact: 45 minutes full outage, ~12 min degraded\r\n- Fix: Connection cleanup in finally block (PR #847)\r\n- Prevention: Connection pool monitoring alert at 80% capacity\r\n\r\nFull doc: https://wiki.acme.com/postmortem/2025-02-11\r\n\r\nDave"
+    },
+    {
+      "id": "falcon-qa",
+      "message_id": "<falcon-qa-020@test.example.com>",
+      "description": "Tony: Falcon QA status, 2 tests blocked on API keys",
+      "mark_processed": false,
+      "rfc822": "From: Tony Russo <tony@acme.com>\r\nTo: Alice Chen <alice@acme.com>, Bob Martinez <bob@acme.com>\r\nSubject: Falcon QA status report - Week of Feb 10\r\nMessage-Id: <falcon-qa-020@test.example.com>\r\nDate: Fri, 14 Feb 2025 10:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Alice, Bob,\r\n\r\nQA status for Project Falcon:\r\n\r\nCompleted:\r\n- User auth flow (32/32 passing)\r\n- Payment processing (28/30 \u2014 2 blocked on API keys)\r\n- Dashboard analytics (all green)\r\n\r\nBlocked:\r\n- Payment gateway integration tests (waiting for API keys)\r\n- Load testing (staging had issues earlier this week)\r\n\r\nRisk: If API keys not received by March 5, we won't hit March 12 QA deadline.\r\n\r\nTony"
+    },
+    {
+      "id": "falcon-staging",
+      "message_id": "<falcon-staging-021@test.example.com>",
+      "description": "Bob reports staging DB migration failure",
+      "mark_processed": false,
+      "rfc822": "From: Bob Martinez <bob@acme.com>\r\nTo: Alice Chen <alice@acme.com>\r\nCc: Dave Wilson <dave@acme.com>\r\nSubject: Falcon staging - database migration issue\r\nMessage-Id: <falcon-staging-021@test.example.com>\r\nDate: Wed, 12 Feb 2025 14:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nAlice,\r\n\r\nFalcon staging has a database migration issue. The v3.2 schema migration failed halfway, leaving the orders table inconsistent.\r\n\r\nAsked Dave to look into it. This blocks integration tests.\r\n\r\nDave \u2014 check if the migration script needs rollback? Error log shows foreign key constraint violation on payments table.\r\n\r\nBob"
+    },
+    {
+      "id": "falcon-staging-fix",
+      "message_id": "<falcon-staging-fix-022@test.example.com>",
+      "description": "Dave fixes staging migration",
+      "mark_processed": false,
+      "rfc822": "From: Dave Wilson <dave@acme.com>\r\nTo: Bob Martinez <bob@acme.com>, Alice Chen <alice@acme.com>\r\nSubject: Re: Falcon staging - database migration issue\r\nMessage-Id: <falcon-staging-fix-022@test.example.com>\r\nDate: Thu, 13 Feb 2025 09:00:00 +0000\r\nIn-Reply-To: <falcon-staging-021@test.example.com>\r\nReferences: <falcon-staging-021@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nFixed. Migration script was adding a foreign key before the referenced column existed. Reordered the steps.\r\n\r\nStaging back up, all migrations applied. Good to resume integration testing.\r\n\r\nDave"
+    },
+    {
+      "id": "security-scan",
+      "message_id": "<security-scan-023@test.example.com>",
+      "description": "Henry: Q1 security scan, 1 critical CVE (PDF)",
+      "mark_processed": false,
+      "rfc822": "From: Henry Liu <henry@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Q1 Security scan results\r\nMessage-Id: <security-scan-023@test.example.com>\r\nDate: Mon, 10 Feb 2025 14:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"----=_Part_security\"\r\n\r\n------=_Part_security\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nAttached is the Q1 security scan report. Summary:\r\n\r\n- Critical: 1 (CVE-2025-1234 in log4j)\r\n- High: 3 (outdated TLS, weak password policy, exposed debug endpoint)\r\n- Medium: 7\r\n- Low: 12\r\n\r\nCritical CVE must be patched within 48 hours per policy.\r\n\r\nHenry\r\n\r\n------=_Part_security\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"Q1-Security-Scan-2025.pdf\"\r\nContent-Transfer-Encoding: base64\r\n\r\nUEsDBBQAAAAIAA==\r\n------=_Part_security--"
+    },
+    {
+      "id": "cve-alert",
+      "message_id": "<cve-alert-024@test.example.com>",
+      "description": "Henry: critical CVE-2025-1234 in log4j, 48h to patch",
+      "mark_processed": false,
+      "rfc822": "From: Henry Liu <henry@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nCc: Dave Wilson <dave@acme.com>\r\nSubject: CRITICAL: CVE-2025-1234 in log4j - patch within 48h\r\nMessage-Id: <cve-alert-024@test.example.com>\r\nDate: Mon, 10 Feb 2025 15:30:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob, Dave,\r\n\r\nCVE-2025-1234: Remote code execution in log4j 2.17.0\r\nAffected: order-processing-service (production)\r\nSeverity: CVSS 9.8\r\nFix: Upgrade to log4j 2.17.1\r\n\r\nMust be patched by Wed Feb 12 EOD. Otherwise add WAF rules to block exploit vector.\r\n\r\nHenry\r\nSecurity Team"
+    },
+    {
+      "id": "cve-patched",
+      "message_id": "<cve-patched-025@test.example.com>",
+      "description": "Bob confirms CVE patched, deployed to prod",
+      "mark_processed": false,
+      "rfc822": "From: Bob Martinez <bob@acme.com>\r\nTo: Henry Liu <henry@acme.com>\r\nCc: Dave Wilson <dave@acme.com>\r\nSubject: Re: CRITICAL: CVE-2025-1234 in log4j - patch within 48h\r\nMessage-Id: <cve-patched-025@test.example.com>\r\nDate: Tue, 11 Feb 2025 11:00:00 +0000\r\nIn-Reply-To: <cve-alert-024@test.example.com>\r\nReferences: <cve-alert-024@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHenry,\r\n\r\nPatched and deployed to production at 10:45 UTC. order-processing-service now on log4j 2.17.1.\r\n\r\nScanned other services \u2014 no other vulnerable instances.\r\nDave updating WAF rules as precaution.\r\n\r\nBob"
+    },
+    {
+      "id": "escalation",
+      "message_id": "<escalation-026@test.example.com>",
+      "description": "Raj: BigCorp ($500K ARR) API timeouts, CTO threatening CEO escalation",
+      "mark_processed": false,
+      "rfc822": "From: Raj Gupta <raj@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: ESCALATION: BigCorp account - API timeout issues\r\nMessage-Id: <escalation-026@test.example.com>\r\nDate: Wed, 12 Feb 2025 10:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nBigCorp ($500K ARR, our largest enterprise customer) reporting intermittent API timeouts since Monday.\r\n\r\nCTO Sam Chen threatens CEO escalation if not resolved by Friday.\r\n\r\nAffected: POST /api/v2/orders\r\n~15% of requests timing out\r\nImpact: $20K/day in failed transactions\r\n\r\nCan you investigate urgently?\r\n\r\nRaj\r\nCustomer Success"
+    },
+    {
+      "id": "escalation-reply",
+      "message_id": "<escalation-reply-027@test.example.com>",
+      "description": "Bob: BigCorp timeouts related to batch job fix",
+      "mark_processed": false,
+      "rfc822": "From: Bob Martinez <bob@acme.com>\r\nTo: Raj Gupta <raj@acme.com>\r\nSubject: Re: ESCALATION: BigCorp account - API timeout issues\r\nMessage-Id: <escalation-reply-027@test.example.com>\r\nDate: Wed, 12 Feb 2025 14:30:00 +0000\r\nIn-Reply-To: <escalation-026@test.example.com>\r\nReferences: <escalation-026@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nRaj,\r\n\r\nIdentified the issue. Timeouts correlate with the nightly batch job \u2014 same one that caused Tuesday's outage. It consumed too many DB connections, causing contention.\r\n\r\nConnection leak fix from yesterday should resolve this. Ask BigCorp to monitor for 24 hours.\r\n\r\nIf still seeing issues, I'll set up a dedicated connection pool for their traffic.\r\n\r\nBob"
+    },
+    {
+      "id": "escalation-resolved",
+      "message_id": "<escalation-resolved-028@test.example.com>",
+      "description": "BigCorp resolved, dedicated pool added",
+      "mark_processed": false,
+      "rfc822": "From: Bob Martinez <bob@acme.com>\r\nTo: Raj Gupta <raj@acme.com>\r\nCc: Alice Chen <alice@acme.com>\r\nSubject: Re: ESCALATION: BigCorp - RESOLVED\r\nMessage-Id: <escalation-resolved-028@test.example.com>\r\nDate: Fri, 14 Feb 2025 09:00:00 +0000\r\nIn-Reply-To: <escalation-reply-027@test.example.com>\r\nReferences: <escalation-026@test.example.com> <escalation-reply-027@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nRaj,\r\n\r\nBigCorp timeouts fully resolved. Success rate back to 99.97% over last 48h.\r\n\r\nRoot cause: same connection leak as Tuesday's outage. Added dedicated connection pool and rate limit for BigCorp.\r\n\r\nAlice, FYI in case Sam raises this at quarterly review.\r\n\r\nBob"
+    },
+    {
+      "id": "bigcorp-thanks",
+      "message_id": "<bigcorp-thanks-029@test.example.com>",
+      "description": "Sam Chen (BigCorp CTO) thanks Bob",
+      "mark_processed": false,
+      "rfc822": "From: Sam Chen <sam@bigcorp.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nCc: Raj Gupta <raj@acme.com>\r\nSubject: Re: ESCALATION: BigCorp - RESOLVED\r\nMessage-Id: <bigcorp-thanks-029@test.example.com>\r\nDate: Fri, 14 Feb 2025 11:00:00 +0000\r\nIn-Reply-To: <escalation-resolved-028@test.example.com>\r\nReferences: <escalation-026@test.example.com> <escalation-reply-027@test.example.com> <escalation-resolved-028@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nThank you for the quick turnaround. Issues confirmed resolved on our end.\r\n\r\nThe dedicated connection pool gives us more confidence. Looking forward to discussing API v3 migration next month.\r\n\r\nBest,\r\nSam Chen\r\nCTO, BigCorp"
+    },
+    {
+      "id": "design-mockups",
+      "message_id": "<design-mockups-030@test.example.com>",
+      "description": "Patricia: Falcon UI mockups for review (PDF)",
+      "mark_processed": false,
+      "rfc822": "From: Patricia Owens <patricia@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nCc: Alice Chen <alice@acme.com>\r\nSubject: Falcon UI mockups for review\r\nMessage-Id: <design-mockups-030@test.example.com>\r\nDate: Mon, 10 Feb 2025 09:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"----=_Part_design-m\"\r\n\r\n------=_Part_design-m\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Bob,\r\n\r\nAttached are the Falcon customer dashboard mockups:\r\n1. Order tracking (real-time status)\r\n2. Payment history\r\n3. Analytics dashboard (order volume, revenue)\r\n4. Settings (API key mgmt, webhooks)\r\n\r\nPlease review and send feedback by Wednesday.\r\n\r\nPatricia\r\n\r\n------=_Part_design-m\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"Falcon-UI-Mockups-v1.pdf\"\r\nContent-Transfer-Encoding: base64\r\n\r\nUEsDBBQAAAAIAA==\r\n------=_Part_design-m--"
+    },
+    {
+      "id": "design-feedback",
+      "message_id": "<design-feedback-031@test.example.com>",
+      "description": "Bob: design feedback on mockups",
+      "mark_processed": false,
+      "rfc822": "From: Bob Martinez <bob@acme.com>\r\nTo: Patricia Owens <patricia@acme.com>\r\nCc: Alice Chen <alice@acme.com>\r\nSubject: Re: Falcon UI mockups for review\r\nMessage-Id: <design-feedback-031@test.example.com>\r\nDate: Wed, 12 Feb 2025 16:00:00 +0000\r\nIn-Reply-To: <design-mockups-030@test.example.com>\r\nReferences: <design-mockups-030@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nPatricia,\r\n\r\nGreat work. Feedback:\r\n1. Order tracking: Add estimated delivery time\r\n2. Payment history: Need CSV export\r\n3. Analytics: Chart colors need better contrast (WCAG AA)\r\n4. Settings: Add regenerate-key confirmation dialog\r\n\r\nOverall direction is solid.\r\n\r\nBob"
+    },
+    {
+      "id": "design-revised",
+      "message_id": "<design-revised-032@test.example.com>",
+      "description": "Patricia: revised mockups, all feedback incorporated (PDF)",
+      "mark_processed": false,
+      "rfc822": "From: Patricia Owens <patricia@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nCc: Alice Chen <alice@acme.com>\r\nSubject: Re: Falcon UI mockups - Revised\r\nMessage-Id: <design-revised-032@test.example.com>\r\nDate: Fri, 14 Feb 2025 14:00:00 +0000\r\nIn-Reply-To: <design-feedback-031@test.example.com>\r\nReferences: <design-mockups-030@test.example.com> <design-feedback-031@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"----=_Part_design-r\"\r\n\r\n------=_Part_design-r\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nRevised mockups attached:\r\n1. Added estimated delivery time\r\n2. Added CSV export to payment history\r\n3. Chart colors meet WCAG AA\r\n4. Confirmation dialog for key regeneration\r\n\r\nAll feedback incorporated. Ready for sign-off.\r\n\r\nPatricia\r\n\r\n------=_Part_design-r\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"Falcon-UI-Mockups-v2-final.pdf\"\r\nContent-Transfer-Encoding: base64\r\n\r\nUEsDBBQAAAAIAA==\r\n------=_Part_design-r--"
+    },
+    {
+      "id": "marketing-plan",
+      "message_id": "<marketing-plan-033@test.example.com>",
+      "description": "Grace: Falcon marketing campaign plan, $25K budget",
+      "mark_processed": false,
+      "rfc822": "From: Grace Kim <grace@acme.com>\r\nTo: Alice Chen <alice@acme.com>, Bob Martinez <bob@acme.com>\r\nSubject: Falcon marketing campaign - launch plan\r\nMessage-Id: <marketing-plan-033@test.example.com>\r\nDate: Wed, 12 Feb 2025 11:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Alice, Bob,\r\n\r\nFalcon launch marketing plan:\r\n\r\nPhase 1 (Mar 3-10): Teaser \u2014 social media, blog, email blast\r\nPhase 2 (Mar 10-17): Pre-launch \u2014 webinar, press releases, partners\r\nPhase 3 (Mar 17): Launch day \u2014 Product Hunt, demo video, email blast\r\nPhase 4 (Mar 17-31): Post-launch \u2014 case studies, testimonials, paid ads\r\n\r\nBudget: $25,000 ($8K ads, $7K content, $5K events, $5K tools)\r\n\r\nThis is why we requested the 2-day delay \u2014 March 17 aligns with webinar.\r\n\r\nGrace"
+    },
+    {
+      "id": "marketing-metrics",
+      "message_id": "<marketing-metrics-034@test.example.com>",
+      "description": "Grace: teaser campaign metrics (CSV)",
+      "mark_processed": false,
+      "rfc822": "From: Grace Kim <grace@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Falcon pre-launch campaign metrics\r\nMessage-Id: <marketing-metrics-034@test.example.com>\r\nDate: Fri, 14 Feb 2025 16:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"----=_Part_marketin\"\r\n\r\n------=_Part_marketin\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nEarly teaser results:\r\n- Blog views: 4,200 (2x average)\r\n- Email open rate: 34% (industry avg 21%)\r\n- Webinar registrations: 180 (target 300)\r\n- Social impressions: 28K\r\n\r\nFull breakdown attached.\r\n\r\nGrace\r\n\r\n------=_Part_marketin\r\nContent-Type: text/csv\r\nContent-Disposition: attachment; filename=\"falcon-campaign-metrics.csv\"\r\nContent-Transfer-Encoding: base64\r\n\r\nUEsDBBQAAAAIAA==\r\n------=_Part_marketin--"
+    },
+    {
+      "id": "conference-invite",
+      "message_id": "<conference-035@test.example.com>",
+      "description": "Irene nominates Bob for DevOps Summit",
+      "mark_processed": false,
+      "rfc822": "From: Irene Novak <irene@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: DevOps Summit 2025 - nomination to attend\r\nMessage-Id: <conference-035@test.example.com>\r\nDate: Thu, 06 Feb 2025 11:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nNominating you for DevOps Summit 2025 in San Francisco, March 20-22.\r\n\r\n- Keynote by CTO of Kubernetes\r\n- Workshops on GitOps and observability\r\n- Networking with engineering leads\r\n\r\nRegistration: $1,500 | Travel+hotel: ~$2,000\r\n\r\nConfirm by Feb 14 so I can get budget approval.\r\n\r\nIrene\r\nVP Engineering"
+    },
+    {
+      "id": "travel-approved",
+      "message_id": "<travel-approved-036@test.example.com>",
+      "description": "Irene: DevOps Summit travel approved, $3800 budget",
+      "mark_processed": false,
+      "rfc822": "From: Irene Novak <irene@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Re: DevOps Summit 2025 - travel approved\r\nMessage-Id: <travel-approved-036@test.example.com>\r\nDate: Fri, 14 Feb 2025 08:00:00 +0000\r\nIn-Reply-To: <conference-035@test.example.com>\r\nReferences: <conference-035@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nTravel approved:\r\n- DevOps Summit, March 20-22, Moscone Center SF\r\n- Budget: $3,800\r\n- Flight: Book via Concur, economy\r\n- Hotel: Marriott Union Square ($250/night corporate rate)\r\n\r\nSubmit travel request in Concur by Feb 21.\r\n\r\nIrene"
+    },
+    {
+      "id": "conference-summary",
+      "message_id": "<conference-summary-037@test.example.com>",
+      "description": "Bob shares DevOps Summit takeaways",
+      "mark_processed": false,
+      "rfc822": "From: Bob Martinez <bob@acme.com>\r\nTo: Engineering Team <engineering@acme.com>\r\nSubject: DevOps Summit 2025 - key takeaways\r\nMessage-Id: <conference-summary-037@test.example.com>\r\nDate: Mon, 24 Mar 2025 09:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nTeam,\r\n\r\nDevOps Summit takeaways:\r\n\r\n1. GitOps accelerating \u2014 ArgoCD + Flux dominant\r\n2. OpenTelemetry is the observability standard (migrate from Datadog agents)\r\n3. Platform engineering teams reduce onboarding 40%\r\n4. AI-assisted incident response emerging (PagerDuty AI looks promising)\r\n\r\nDetailed summary at next all-hands.\r\n\r\nBob"
+    },
+    {
+      "id": "pr-review",
+      "message_id": "<pr-review-038@test.example.com>",
+      "description": "Lisa submits first PR for order validation refactor",
+      "mark_processed": false,
+      "rfc822": "From: Lisa Wong <lisa@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: PR review request: Falcon order validation refactor\r\nMessage-Id: <pr-review-038@test.example.com>\r\nDate: Thu, 13 Feb 2025 14:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Bob,\r\n\r\nSubmitted PR #852 for the order validation refactor:\r\n- Extracted validation into OrderValidator class\r\n- Added unit tests (empty orders, negative quantities, currency mismatches)\r\n- Fixed bug: 0-quantity items were silently accepted\r\n\r\nFirst PR here \u2014 let me know if I'm missing conventions.\r\nhttps://github.acme.com/falcon/backend/pull/852\r\n\r\nThanks,\r\nLisa"
+    },
+    {
+      "id": "pr-feedback",
+      "message_id": "<pr-feedback-039@test.example.com>",
+      "description": "Bob: code review feedback on Lisa's PR",
+      "mark_processed": false,
+      "rfc822": "From: Bob Martinez <bob@acme.com>\r\nTo: Lisa Wong <lisa@acme.com>\r\nSubject: Re: PR review request: Falcon order validation refactor\r\nMessage-Id: <pr-feedback-039@test.example.com>\r\nDate: Thu, 13 Feb 2025 17:30:00 +0000\r\nIn-Reply-To: <pr-review-038@test.example.com>\r\nReferences: <pr-review-038@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nLisa,\r\n\r\nNice work! Comments:\r\n1. Make validation rules configurable for product-specific rules later\r\n2. Add test for quantities > 10,000 (business rule cap)\r\n3. Use snake_case for methods, not camelCase \u2014 see wiki.acme.com/code-style\r\n\r\nMinor changes only \u2014 LGTM. Approved with suggestions.\r\n\r\nBob"
+    },
+    {
+      "id": "lisa-questions",
+      "message_id": "<lisa-questions-040@test.example.com>",
+      "description": "Lisa asks about IDE, staging access, design docs",
+      "mark_processed": false,
+      "rfc822": "From: Lisa Wong <lisa@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: First week questions\r\nMessage-Id: <lisa-questions-040@test.example.com>\r\nDate: Tue, 11 Feb 2025 09:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nHi Bob,\r\n\r\nThanks for the warm welcome! Questions:\r\n1. Recommended IDE for Falcon backend? Using VS Code, saw some on IntelliJ.\r\n2. How to get staging DB access? Dev works but staging needs VPN config.\r\n3. Design doc for Falcon payment processing flow?\r\n4. Who handles the on-call rotation schedule?\r\n\r\nExcited to be on the team!\r\n\r\nLisa"
+    },
+    {
+      "id": "lisa-access",
+      "message_id": "<lisa-access-041@test.example.com>",
+      "description": "Lisa can't clone falcon-backend repo, needs permissions",
+      "mark_processed": false,
+      "rfc822": "From: Lisa Wong <lisa@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nCc: IT Support <it@acme.com>\r\nSubject: Can't access falcon-backend repo\r\nMessage-Id: <lisa-access-041@test.example.com>\r\nDate: Mon, 10 Feb 2025 15:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nGetting 403 trying to clone falcon-backend. Username: lwong.\r\n\r\nError: Permission to acme/falcon-backend.git denied to lwong.\r\n\r\nNeed to be added to falcon-dev team. Submitted access request in IT portal this morning.\r\n\r\nThanks,\r\nLisa"
+    },
+    {
+      "id": "jira-ticket",
+      "message_id": "<jira-342-042@test.example.com>",
+      "description": "JIRA: FALCON-342 payment timeout bug assigned to Bob",
+      "mark_processed": false,
+      "rfc822": "From: JIRA <noreply@jira.acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: [FALCON-342] Payment timeout on orders > $10,000 assigned to you\r\nMessage-Id: <jira-342-042@test.example.com>\r\nDate: Wed, 12 Feb 2025 08:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nFALCON-342: Payment timeout on orders > $10,000\r\n\r\nType: Bug | Priority: High\r\nAssignee: Bob Martinez | Reporter: Tony Russo\r\nSprint: Falcon Sprint 12\r\n\r\nOrders >$10K timeout during payment. Gateway returns timeout after 30s.\r\n\r\nSteps: 1) Create order >$10K 2) Submit payment 3) Timeout after 30s\r\n\r\nDo not reply to this email."
+    },
+    {
+      "id": "ci-failed",
+      "message_id": "<ci-failed-043@test.example.com>",
+      "description": "CI: falcon-backend build #1847 failed, 2 tests",
+      "mark_processed": false,
+      "rfc822": "From: CI System <ci-notify@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: [FAILED] falcon-backend #1847 - main branch\r\nMessage-Id: <ci-failed-043@test.example.com>\r\nDate: Thu, 13 Feb 2025 06:15:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBuild #1847 FAILED for falcon-backend (main)\r\n\r\nCommit: a3f7b2d \"Fix connection pool cleanup\"\r\nAuthor: Dave Wilson | Duration: 4m 32s\r\n\r\nFailed: test_payment_gateway_integration (timeout), test_order_processing_large_batch (assertion)\r\n2 failed, 847 passed, 3 skipped\r\n\r\nhttps://ci.acme.com/falcon-backend/1847\r\n\r\nAutomated notification."
+    },
+    {
+      "id": "monitoring-alert",
+      "message_id": "<monitoring-disk-044@test.example.com>",
+      "description": "Monitoring: prod-db-01 disk at 85%, 7 days to full",
+      "mark_processed": false,
+      "rfc822": "From: Monitoring <monitoring@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nCc: Dave Wilson <dave@acme.com>\r\nSubject: [ALERT] Disk space warning - prod-db-01 at 85%\r\nMessage-Id: <monitoring-disk-044@test.example.com>\r\nDate: Wed, 12 Feb 2025 22:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nALERT: Disk space warning\r\n\r\nHost: prod-db-01.acme.internal\r\nMetric: disk_usage_percent | Current: 85% | Threshold: 80%\r\nPartition: /data/postgres\r\n\r\nGrowing ~2%/day. Est. full in ~7 days.\r\n\r\nAction: Archive old transaction logs or expand volume.\r\n\r\nAutomated alert."
+    },
+    {
+      "id": "perf-review",
+      "message_id": "<perf-review-045@test.example.com>",
+      "description": "Irene: Bob's FY2024 performance review, Exceeds Expectations",
+      "mark_processed": false,
+      "rfc822": "From: Irene Novak <irene@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Annual performance review summary - FY2024\r\nMessage-Id: <perf-review-045@test.example.com>\r\nDate: Fri, 07 Feb 2025 17:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nFY2024 review summary:\r\n\r\nRating: Exceeds Expectations (4/5)\r\n\r\nStrengths: Technical leadership on Falcon, incident response (Q3 DB migration crisis), mentoring junior engineers.\r\n\r\nGrowth areas: Delegate more, improve team runbook documentation.\r\n\r\nCompensation: 8% salary increase (March 1). Stock refresh: 500 RSUs over 4 years.\r\n\r\nLet's discuss in our next 1:1.\r\n\r\nIrene"
+    },
+    {
+      "id": "one-on-one",
+      "message_id": "<one-on-one-046@test.example.com>",
+      "description": "Alice: 1:1 agenda covering Falcon, Lisa, incident, travel",
+      "mark_processed": false,
+      "rfc822": "From: Alice Chen <alice@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: 1:1 agenda - Feb 14\r\nMessage-Id: <one-on-one-046@test.example.com>\r\nDate: Thu, 13 Feb 2025 08:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nTopics for tomorrow's 1:1:\r\n1. Falcon timeline (March 17 launch)\r\n2. Lisa Wong onboarding \u2014 how's her first week?\r\n3. Production incident postmortem follow-up\r\n4. API keys status from vendor?\r\n5. DevOps Summit travel\r\n6. Sprint 13 capacity\r\n\r\nAnything to add?\r\n\r\nAlice"
+    },
+    {
+      "id": "revised-budget",
+      "message_id": "<revised-budget-047@test.example.com>",
+      "description": "Eve: revised Q1 engineering budget $420K (xlsx)",
+      "mark_processed": false,
+      "rfc822": "From: Eve Park <eve@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nCc: Carol Davis <carol@acme.com>\r\nSubject: Revised Q1 budget allocation - engineering\r\nMessage-Id: <revised-budget-047@test.example.com>\r\nDate: Fri, 14 Feb 2025 12:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"----=_Part_revised-\"\r\n\r\n------=_Part_revised-\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nRevised Q1 engineering allocations:\r\n- Infrastructure: $180,000 (up from $150K, cloud overruns)\r\n- Headcount: 2 new (1 senior backend, 1 SRE)\r\n- Training: $15,000\r\n- Tools: $45,000\r\nTotal: $420,000\r\n\r\nSee attached. Sign off by Feb 21.\r\n\r\nEve\r\n\r\n------=_Part_revised-\r\nContent-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\nContent-Disposition: attachment; filename=\"Q1-Engineering-Budget-Revised.xlsx\"\r\nContent-Transfer-Encoding: base64\r\n\r\nUEsDBBQAAAAIAA==\r\n------=_Part_revised---"
+    },
+    {
+      "id": "expense-deadline",
+      "message_id": "<expense-deadline-048@test.example.com>",
+      "description": "Eve: 3 outstanding expense receipts due Feb 21",
+      "mark_processed": false,
+      "rfc822": "From: Eve Park <eve@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Reminder: expense reports due Feb 21\r\nMessage-Id: <expense-deadline-048@test.example.com>\r\nDate: Mon, 17 Feb 2025 09:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nQ4 2024 expense reports due February 21.\r\n\r\nOutstanding in Concur:\r\n1. AWS training ($450) - Dec 12\r\n2. Team dinner ($380) - Dec 18\r\n3. JetBrains license ($249) - Jan 5\r\n\r\nPlease submit ASAP.\r\n\r\nEve\r\nFinance"
+    },
+    {
+      "id": "compliance-training",
+      "message_id": "<compliance-training-049@test.example.com>",
+      "description": "Nora: 4 mandatory training modules due March 1",
+      "mark_processed": false,
+      "rfc822": "From: Nora Patel <nora@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Mandatory compliance training - due March 1\r\nMessage-Id: <compliance-training-049@test.example.com>\r\nDate: Mon, 10 Feb 2025 10:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nOutstanding compliance training:\r\n1. Data Privacy & GDPR (45 min)\r\n2. Information Security Awareness (30 min)\r\n3. Anti-Harassment Policy (20 min)\r\n4. Code of Conduct Refresher (15 min)\r\n\r\nDue by March 1, 2025. Portal: https://training.acme.com\r\n\r\nNora\r\nCompliance"
+    },
+    {
+      "id": "nda-review",
+      "message_id": "<nda-review-050@test.example.com>",
+      "description": "Legal: review NDA amendment for CloudStore contract",
+      "mark_processed": false,
+      "rfc822": "From: Legal Department <legal@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nCc: Heidi Tanaka <heidi@acme.com>\r\nSubject: NDA review required - CloudStore contract amendment\r\nMessage-Id: <nda-review-050@test.example.com>\r\nDate: Thu, 13 Feb 2025 10:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nCloudStore contract renegotiation requires NDA amendment:\r\n- Extended confidentiality: 2 years to 5 years\r\n- Added AI/ML training data exclusion clause\r\n- Changed to mutual NDA (was one-way)\r\n\r\nPlease confirm the AI/ML exclusion is acceptable from engineering. Sign-off by Feb 18.\r\n\r\nLegal Department"
+    },
+    {
+      "id": "lunch",
+      "message_id": "<lunch-051@test.example.com>",
+      "description": "Dave asks Bob to lunch, casual",
+      "mark_processed": false,
+      "rfc822": "From: Dave Wilson <dave@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Lunch today?\r\nMessage-Id: <lunch-051@test.example.com>\r\nDate: Wed, 12 Feb 2025 11:30:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nWant to grab lunch at that new Thai place on 3rd? Pad see ew is amazing apparently.\r\n\r\n12:30 work?\r\n\r\nDave"
+    },
+    {
+      "id": "alice-ooo",
+      "message_id": "<alice-ooo-052@test.example.com>",
+      "description": "Alice OOO Feb 17-21, Bob is Falcon point of contact",
+      "mark_processed": false,
+      "rfc822": "From: Alice Chen <alice@acme.com>\r\nTo: Engineering Team <engineering@acme.com>\r\nSubject: Out of office Feb 17-21\r\nMessage-Id: <alice-ooo-052@test.example.com>\r\nDate: Fri, 14 Feb 2025 17:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nTeam,\r\n\r\nOOO February 17-21 (family vacation).\r\n\r\nDuring my absence:\r\n- Falcon: Bob Martinez\r\n- Budget: Carol Davis\r\n- Urgent: Text my cell\r\n\r\nLimited email, will respond to critical items within 24h.\r\n\r\nAlice"
+    },
+    {
+      "id": "meeting-reschedule",
+      "message_id": "<meeting-reschedule-053@test.example.com>",
+      "description": "Carol: budget review rescheduled to Feb 24 (Alice OOO)",
+      "mark_processed": false,
+      "rfc822": "From: Carol Davis <carol@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Q1 budget review - rescheduled to Feb 24\r\nMessage-Id: <meeting-reschedule-053@test.example.com>\r\nDate: Wed, 19 Feb 2025 09:00:00 +0000\r\nIn-Reply-To: <budget-meeting-003@test.example.com>\r\nReferences: <budget-meeting-003@test.example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nQ1 budget review rescheduled from Feb 20 to Feb 24 (Monday) 2pm, Conference Room B.\r\n\r\nAlice is OOO this week and we need her input on Falcon budget.\r\n\r\nSame agenda. Bring updated expense reports.\r\n\r\nCarol"
+    },
+    {
+      "id": "fwd-article",
+      "message_id": "<fwd-article-054@test.example.com>",
+      "description": "Mark forwards AI in DevOps article",
+      "mark_processed": false,
+      "rfc822": "From: Mark Johnson <mark@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Fwd: Interesting article on AI in DevOps\r\nMessage-Id: <fwd-article-054@test.example.com>\r\nDate: Tue, 11 Feb 2025 14:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob,\r\n\r\nThought you'd find this interesting given your DevOps Summit trip:\r\n\r\n---------- Forwarded message ----------\r\nFrom: TechDigest <newsletter@techdigest.com>\r\nSubject: How AI is Transforming DevOps in 2025\r\n\r\nKey trends:\r\n1. AIOps for automated incident detection\r\n2. AI code review reducing review time 60%\r\n3. Predictive scaling via ML\r\n4. NL infrastructure-as-code generation\r\n\r\nhttps://techdigest.com/ai-devops-2025\r\n\r\n-- Mark"
+    },
+    {
+      "id": "benefits-enrollment",
+      "message_id": "<benefits-055@test.example.com>",
+      "description": "HR: benefits open enrollment closes Feb 28",
+      "mark_processed": false,
+      "rfc822": "From: HR Department <hr@acme.com>\r\nTo: Bob Martinez <bob@acme.com>\r\nSubject: Open enrollment deadline - Feb 28\r\nMessage-Id: <benefits-055@test.example.com>\r\nDate: Mon, 17 Feb 2025 08:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nDear Bob,\r\n\r\nOpen enrollment for 2025 benefits closes February 28.\r\n\r\nChanges:\r\n- New dental plan (Delta Dental Premium)\r\n- 401(k) match increased from 4% to 5%\r\n- New $500/year wellness stipend\r\n\r\nCurrent elections roll over if no changes made.\r\n\r\nhttps://benefits.acme.com\r\n\r\nHR Department"
+    },
+    {
+      "id": "db-migration",
+      "message_id": "<db-migration-056@test.example.com>",
+      "description": "Dave: PostgreSQL 16 upgrade plan with runbook (PDF)",
+      "mark_processed": false,
+      "rfc822": "From: Dave Wilson <dave@acme.com>\r\nTo: Bob Martinez <bob@acme.com>, Alice Chen <alice@acme.com>\r\nSubject: Falcon DB migration plan - PostgreSQL 16 upgrade\r\nMessage-Id: <db-migration-056@test.example.com>\r\nDate: Mon, 10 Feb 2025 16:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"----=_Part_db-migra\"\r\n\r\n------=_Part_db-migra\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\nBob, Alice,\r\n\r\nProposing PG14 to PG16 upgrade before Falcon launch:\r\n- 2x bulk INSERT performance\r\n- Better parallel queries\r\n- JSON path queries for order metadata\r\n\r\nTimeline:\r\n- Feb 17-21: Test on staging\r\n- Feb 24-25: Dry run on prod replica\r\n- Mar 1 (Sat 2am): Production (est 4h downtime)\r\n\r\nRunbook attached.\r\n\r\nDave\r\n\r\n------=_Part_db-migra\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"PG16-Migration-Runbook.pdf\"\r\nContent-Transfer-Encoding: base64\r\n\r\nUEsDBBQAAAAIAA==\r\n------=_Part_db-migra--"
     }
   ]
 }
