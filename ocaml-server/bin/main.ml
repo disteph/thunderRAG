@@ -283,10 +283,34 @@ let get_uri ~client ~sw:_ ~(uri : Uri.t) : (Http.Response.t * string) =
   - RAG_DEBUG_OLLAMA_EMBED=1 prints the exact embeddings request JSON.
   - RAG_DEBUG_OLLAMA_CHAT=1 prints the exact chat request JSON.
 *)
-let ollama_embed ~client ~sw ~(text : string) : (float list, string) result =
+type embed_task = Search_document | Search_query
+
+(* Models known to support task-prefixed embeddings.
+   Checked case-insensitively against ollama_embed_model. *)
+let embed_task_prefix (task : embed_task) : string option =
+  let model_lower = String.lowercase_ascii ollama_embed_model in
+  let is_nomic    = contains_substring ~sub:"nomic" model_lower in
+  let is_e5       = contains_substring ~sub:"e5"    model_lower in
+  let is_arctic   = contains_substring ~sub:"snowflake-arctic-embed" model_lower in
+  if is_nomic || is_e5 || is_arctic then
+    match task with
+    | Search_document -> Some "search_document: "
+    | Search_query    -> Some "search_query: "
+  else
+    None
+
+let ollama_embed ~client ~sw ?(task : embed_task option) ~(text : string) () : (float list, string) result =
+  let prompt =
+    match task with
+    | None -> text
+    | Some t ->
+        match embed_task_prefix t with
+        | Some prefix -> prefix ^ text
+        | None -> text
+  in
   let uri = Uri.of_string (ollama_base_url ^ "/api/embeddings") in
   let body_obj : Yojson.Safe.t =
-    `Assoc [ ("model", `String ollama_embed_model); ("prompt", `String text) ]
+    `Assoc [ ("model", `String ollama_embed_model); ("prompt", `String prompt) ]
   in
   if rag_debug_ollama_embed then
     Printf.printf "\n[ollama.embed.request]\n%s\n%!" (Yojson.Safe.pretty_to_string body_obj);
@@ -1183,7 +1207,7 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
   let embedded_chunks =
     chunks
     |> List.mapi (fun i ch ->
-           match ollama_embed ~client ~sw ~text:ch with
+           match ollama_embed ~client ~sw ~task:Search_document ~text:ch () with
            | Ok v -> (i, ch, l2_normalize v)
            | Error msg -> raise (Failure ("ollama_embed failed: " ^ msg)))
   in
@@ -2708,7 +2732,7 @@ let handler ~client ~sw ~clock _socket request body =
         in
 
         let embed_and_retrieve (query_text : string) : Yojson.Safe.t list =
-          match ollama_embed ~client ~sw ~text:query_text with
+          match ollama_embed ~client ~sw ~task:Search_query ~text:query_text () with
           | Error msg ->
               Printf.eprintf "[retrieval.embed.error] %s\n%!" msg;
               []
