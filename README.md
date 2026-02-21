@@ -1,37 +1,36 @@
 # ThunderRAG
 
-This repository contains three components:
+This repository contains two components:
 
 - `ThunderRAG/`: Thunderbird add-on (XPI)
-- `ocaml-server/`: OCaml control-plane and bulk ingest tooling
-- `python-engine/`: Python RAG engine (FastAPI)
+- `ocaml-server/`: OCaml RAG server with PostgreSQL/pgvector vector store
+
+## System Prerequisites
+
+```bash
+brew install postgresql@17 pgvector libpg_query
+brew services start postgresql@17
+make setup-db
+```
+
+> **Apple Silicon note:** if `opam install` fails finding `libpq`, export:
+> ```bash
+> export PKG_CONFIG_PATH="/opt/homebrew/lib/postgresql@17/pkgconfig:$PKG_CONFIG_PATH"
+> ```
 
 ## Build
 
 From the repository root:
 
-- `make all`
-  - Builds the Thunderbird add-on XPI, the OCaml server, and ensures Python dependencies are installed.
-
-- `make xpi`
-  - Builds the add-on XPI.
-  - Output: `ThunderRAG/dist/thunderRAG.xpi`
-
-- `make ocaml`
-  - Installs OCaml deps via `opam install . --deps-only` and builds via `dune build`.
-
-- `make python`
-  - Creates/updates the Python virtualenv at `python-engine/.venv` and installs dependencies from `python-engine/requirements.txt`.
+- `make all` — Builds the Thunderbird add-on XPI and the OCaml server.
+- `make xpi` — Builds the add-on XPI (`ThunderRAG/dist/thunderRAG.xpi`).
+- `make ocaml` — Installs OCaml deps via opam and builds via dune.
+- `make setup-db` — Creates the `thunderrag` database and enables the pgvector extension.
 
 ## Run
 
-- `make run-ocaml`
-  - Runs the OCaml server on `http://127.0.0.1:8090`.
-
-- `make run-python`
-  - Runs the Python engine on `http://127.0.0.1:8000`.
+- `make run` — Builds and runs the OCaml server on `http://127.0.0.1:8090`.
 
 ## Clean
 
-- `make clean`
-  - Cleans add-on build outputs, OCaml build artifacts, and removes the Python virtualenv.
+- `make clean` — Cleans add-on build outputs and OCaml build artifacts.

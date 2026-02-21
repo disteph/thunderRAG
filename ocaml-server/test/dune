@@ -1,0 +1,9 @@
+(executable
+ (name run_tests)
+ (libraries alcotest cohttp-eio eio_main yojson uri str)
+ (modules run_tests helpers test_routing test_ingest test_admin test_delete test_query_flow))
+
+(executable
+ (name quality_harness)
+ (libraries cohttp-eio eio_main yojson uri unix)
+ (modules quality_harness))

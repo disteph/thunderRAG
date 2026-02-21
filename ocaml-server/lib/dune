@@ -1,3 +1,4 @@
 (library
  (name rag_lib)
- (libraries uri lambdasoup yojson unix mrmime angstrom base64 pecu uutf))
+ (libraries uri lambdasoup yojson unix mrmime angstrom base64 pecu uutf
+            caqti caqti-eio.unix caqti-driver-postgresql pg_query))

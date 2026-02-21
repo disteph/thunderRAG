@@ -9,10 +9,10 @@
   High-level flows
   - Ingestion:
     - Accept raw emails (RFC822), extract text (text/plain or HTML->text), build a "text_for_index" payload,
-      embed chunks via Ollama /api/embeddings, and forward embeddings + metadata to the python-engine.
+      embed chunks via Ollama /api/embeddings, and store embeddings + metadata in PostgreSQL/pgvector.
   - Query (2-phase):
     1) POST /query
-       - Runs vector retrieval via python-engine.
+       - Runs kNN vector retrieval via PostgreSQL/pgvector.
        - Returns status=need_messages + request_id + message_ids + email metadata.
     2) POST /query/evidence
        - Thunderbird uploads message/rfc822 evidence for each message id (header X-Thunderbird-Message-Id).
@@ -36,188 +36,13 @@ open Rag_lib.Config
 
 let () = ensure_dir (thunderrag_config_dir ())
 
-(*
-  Ingested-IDs ledger (deduplication)
-
-  A flat text file tracks which messages have been successfully ingested.
-  Each line is: doc_id<TAB>embed_model
-  (Legacy lines without a tab are treated as doc_id with unknown model.)
-  On startup, the file is loaded into a hash table (doc_id → embed_model).
-  After each successful ingestion (no [ERROR:] markers), the entry is
-  appended.  This prevents re-embedding the same email across restarts.
-
-  Metadata is stored locally in a lightweight JSONL file (doc_id + embed_model
-  + metadata, NO body_text).  This is the single source of truth for email
-  metadata — the python-engine is a pure vector index and stores no metadata.
-*)
-let ingested_ids_path () : string = Filename.concat (thunderrag_config_dir ()) "ingested_ids.txt"
-let ingested_details_path () : string = Filename.concat (thunderrag_config_dir ()) "ingested_details.jsonl"
-
-(* doc_id → embed_model *)
-let ingested_ids_tbl : (string, string) Hashtbl.t = Hashtbl.create 4096
-(* doc_id → JSON detail (doc_id, embed_model, metadata) *)
-let ingested_details_tbl : (string, Yojson.Safe.t) Hashtbl.t = Hashtbl.create 4096
+(* Ingestion tracking is now in PostgreSQL via Rag_lib.Pg. *)
 
 open Rag_lib.Text_util
 
 let body_text_has_error_marker (body_text : string) : bool =
   contains_substring ~sub:"[ERROR:" body_text
 
-let load_ingested_ids () : unit =
-  let path = ingested_ids_path () in
-  try
-    if not (Sys.file_exists path) then ()
-    else
-      let ic = open_in path in
-      Fun.protect
-        ~finally:(fun () -> close_in_noerr ic)
-        (fun () ->
-          (try
-             while true do
-               let line = input_line ic |> String.trim in
-               if line <> "" then
-                 match String.index_opt line '\t' with
-                 | Some i ->
-                     let doc_id = String.sub line 0 i |> String.trim in
-                     let model = String.sub line (i + 1) (String.length line - i - 1) |> String.trim in
-                     if doc_id <> "" then Hashtbl.replace ingested_ids_tbl doc_id model
-                 | None ->
-                     (* Legacy line: doc_id only, no model *)
-                     Hashtbl.replace ingested_ids_tbl line ""
-             done
-           with End_of_file -> ()))
-  with _ -> ()
-
-let load_ingested_details () : unit =
-  let path = ingested_details_path () in
-  try
-    if not (Sys.file_exists path) then ()
-    else
-      let ic = open_in path in
-      Fun.protect
-        ~finally:(fun () -> close_in_noerr ic)
-        (fun () ->
-          (try
-             while true do
-               let line = input_line ic |> String.trim in
-               if line <> "" then
-                 try
-                   let json = Yojson.Safe.from_string line in
-                   match json with
-                   | `Assoc kv -> (
-                       match List.assoc_opt "doc_id" kv with
-                       | Some (`String id) when String.trim id <> "" ->
-                           Hashtbl.replace ingested_details_tbl (String.trim id) json
-                       | _ -> ())
-                   | _ -> ()
-                 with _ -> ()
-             done
-           with End_of_file -> ()))
-  with _ -> ()
-
-let append_ingested_id ~(embed_model : string) (doc_id : string) : unit =
-  try
-    let oc =
-      open_out_gen
-        [ Open_creat; Open_text; Open_append ]
-        0o600
-        (ingested_ids_path ())
-    in
-    Fun.protect
-      ~finally:(fun () -> close_out_noerr oc)
-      (fun () -> output_string oc (doc_id ^ "\t" ^ embed_model ^ "\n"))
-  with _ -> ()
-
-let append_ingested_detail (json : Yojson.Safe.t) : unit =
-  try
-    let oc =
-      open_out_gen
-        [ Open_creat; Open_text; Open_append ]
-        0o600
-        (ingested_details_path ())
-    in
-    Fun.protect
-      ~finally:(fun () -> close_out_noerr oc)
-      (fun () -> output_string oc (Yojson.Safe.to_string json ^ "\n"))
-  with _ -> ()
-
-let sanitize_doc_id_for_ledger (doc_id : string) : string =
-  let doc_id = String.trim doc_id in
-  if doc_id = "" then ""
-  else
-    let buf = Buffer.create (String.length doc_id) in
-    String.iter
-      (fun c -> if c = '\n' || c = '\r' || c = '\t' then () else Buffer.add_char buf c)
-      doc_id;
-    Buffer.contents buf |> String.trim
-
-let mark_ingested_success ~(metadata : Yojson.Safe.t) (doc_id : string) : unit =
-  let doc_id = sanitize_doc_id_for_ledger doc_id in
-  if doc_id = "" then ()
-  else (
-    let model = ollama_embed_model in
-    let prev = Hashtbl.find_opt ingested_ids_tbl doc_id in
-    if prev = None || prev <> Some model then (
-      Hashtbl.replace ingested_ids_tbl doc_id model;
-      append_ingested_id ~embed_model:model doc_id);
-    let detail =
-      `Assoc
-        [ ("doc_id", `String doc_id)
-        ; ("embed_model", `String model)
-        ; ("triage_model", `String ollama_triage_model)
-        ; ("metadata", metadata)
-        ]
-    in
-    Hashtbl.replace ingested_details_tbl doc_id detail;
-    append_ingested_detail detail)
-
-let () = load_ingested_ids ()
-let () = load_ingested_details ()
-
-(* Update the "processed" flag inside an ingested detail's metadata.
-   Mutates the in-memory table and appends the updated entry to the JSONL
-   (last-entry-wins semantics on reload).  Returns true if the doc was found. *)
-let set_processed_flag (doc_id : string) (value : bool) : bool =
-  let doc_id = sanitize_doc_id_for_ledger doc_id in
-  if doc_id = "" then false
-  else
-    (* Try bare, <bracketed>, and unbracketed forms *)
-    let bare =
-      if String.length doc_id > 1 && doc_id.[0] = '<' && doc_id.[String.length doc_id - 1] = '>'
-      then String.sub doc_id 1 (String.length doc_id - 2) else doc_id
-    in
-    let bracketed =
-      if String.length doc_id > 0 && doc_id.[0] = '<' then doc_id else "<" ^ doc_id ^ ">"
-    in
-    let key =
-      if Hashtbl.mem ingested_details_tbl doc_id then Some doc_id
-      else if Hashtbl.mem ingested_details_tbl bracketed then Some bracketed
-      else if Hashtbl.mem ingested_details_tbl bare then Some bare
-      else None
-    in
-    match key with
-    | None -> false
-    | Some k ->
-        let detail = Hashtbl.find ingested_details_tbl k in
-        let updated =
-          match detail with
-          | `Assoc kv ->
-              let metadata =
-                match List.assoc_opt "metadata" kv with
-                | Some (`Assoc md) ->
-                    let md' = List.filter (fun (k, _) -> k <> "processed" && k <> "processed_at") md in
-                    if value then
-                      `Assoc (md' @ [ ("processed", `Bool true); ("processed_at", `String (now_utc_iso8601 ())) ])
-                    else
-                      `Assoc (md' @ [ ("processed", `Bool false) ])
-                | other -> (match other with Some v -> v | None -> `Assoc [])
-              in
-              `Assoc (List.map (fun (k, v) -> if k = "metadata" then (k, metadata) else (k, v)) kv)
-          | _ -> detail
-        in
-        Hashtbl.replace ingested_details_tbl k updated;
-        append_ingested_detail updated;
-        true
 
 let bulk_ingest_build_tag = "progress_bytes_v1"
 
@@ -973,24 +798,6 @@ let maybe_summarize_session ~client ~sw (s : session_state) : unit =
     | None -> ())
 
 
-(*
-  python-engine boundary
-
-  The python-engine owns the vector index + metadata store. This function is the
-  single place where the OCaml server calls into it.
-  - /ingest_embedded: store embeddings + metadata keyed by doc_id
-  - /query_embedded: retrieve a ranked list of doc_ids (plus metadata)
-  - /admin/reset, /admin/delete: maintenance
-*)
-let forward_json ~client ~sw ~(path : string) ~(body_json : string) : (Http.Response.t * string)
-    =
-  let uri = Uri.of_string (python_engine_base ^ path) in
-  let body = Cohttp_eio.Body.of_string body_json in
-  let resp, resp_body =
-    Cohttp_eio.Client.call client ~sw ~headers:json_headers ~body `POST uri
-  in
-  (resp, read_all resp_body)
-
 let request_header_or_empty (request : Http.Request.t) (name : string) : string =
   match Http.Header.get (Http.Request.headers request) name with
   | Some v -> v
@@ -1020,7 +827,7 @@ let doc_id_of_ingest (request : Http.Request.t) (parsed_headers : (string, strin
 (*
   Ingestion payload
 
-  make_ingest_json constructs the JSON payload sent to the python-engine.
+  make_ingest_data constructs the index text and metadata for PostgreSQL storage.
   It includes:
   - id/doc_id: the Thunderbird message-id (preferred) or a stable hash fallback
   - metadata: lightweight fields used for UI display and prompt construction
@@ -1117,7 +924,7 @@ let ingest_text_of_raw ~(doc_id : string) ~(raw : string) : (string * Yojson.Saf
   - extract normalized body text
   - build a single index string including selected headers
   - chunk + embed each chunk (Ollama /api/embeddings)
-  - send embeddings + metadata to python-engine /ingest_embedded
+  - store email metadata + chunk embeddings in PostgreSQL via Pg module
 *)
 let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
     ~(headers : (string, string) Hashtbl.t) ~(raw : string) : (Http.Response.t * string) =
@@ -1181,13 +988,13 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
     String.trim new_body <> "" || String.trim quoted_raw <> "" || String.trim attachments_section <> ""
   in
 
+  let ndoc = Rag_lib.Pg.normalize_doc_id doc_id in
   if not has_any_content then
-    Printf.printf "[ingest.note] doc_id=%s note=empty_body\n%!" (sanitize_doc_id_for_ledger doc_id);
+    Printf.printf "[ingest.note] doc_id=%s note=empty_body\n%!" ndoc;
   (
     if body_text_has_error_marker body_text then
       Printf.printf
-        "[ingest.note] doc_id=%s note=body_text_contains_error_marker\n%!"
-        (sanitize_doc_id_for_ledger doc_id);
+        "[ingest.note] doc_id=%s note=body_text_contains_error_marker\n%!" ndoc;
 
     if log then (
       Printf.printf "\n[email being processed]\n";
@@ -1200,7 +1007,7 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
       Printf.printf "Body:\n%s\n" body_text;
       flush stdout);
 
-  let index_text, metadata_json =
+  let index_text, _metadata_json =
     make_ingest_data ~doc_id ~headers ~raw ~body_text ~triage
   in
   let chunks = chunk_text index_text in
@@ -1211,35 +1018,38 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
            | Ok v -> (i, ch, l2_normalize v)
            | Error msg -> raise (Failure ("ollama_embed failed: " ^ msg)))
   in
-  let chunks_json =
-    `List
-      (List.map
-         (fun (i, ch, v) ->
-           `Assoc
-             [ ("chunk_index", `Int i)
-             ; ("text", `String ch)
-             ; ("embedding", `List (List.map (fun f -> `Float f) v))
-             ])
-         embedded_chunks)
-  in
-  let body_json =
-    `Assoc
-      [ ("id", `String doc_id)
-      ; ("metadata", metadata_json)
-      ; ("chunks", chunks_json)
-      ]
-    |> Yojson.Safe.to_string
-  in
-  let resp, resp_body = forward_json ~client ~sw ~path:"/ingest_embedded" ~body_json in
-  let code = Cohttp.Code.code_of_status (Http.Response.status resp) in
-  let ok = code >= 200 && code < 300 in
-  let strict_ok = ok && not (body_text_has_error_marker body_text) in
-  if strict_ok then mark_ingested_success ~metadata:metadata_json doc_id
-  else if ok && body_text_has_error_marker body_text then
-    Printf.eprintf
-      "[ingest.strict] not recording success for doc_id=%s because body_text contains [ERROR:] markers\n%!"
-      (sanitize_doc_id_for_ledger doc_id);
-  (resp, resp_body))
+  let attachments = extract_attachment_filenames raw in
+  let att_json = Yojson.Safe.to_string (`List (List.map (fun f -> `String f) attachments)) in
+  let action_score = match triage with Some t -> Some t.action_score | None -> None in
+  let importance_score = match triage with Some t -> Some t.importance_score | None -> None in
+  let reply_by = match triage with Some t -> t.reply_by | None -> "" in
+  let strict_ok = not (body_text_has_error_marker body_text) in
+  if not strict_ok then (
+    Printf.eprintf "[ingest.strict] not recording success for doc_id=%s because body_text contains [ERROR:] markers\n%!" ndoc;
+    let resp = Http.Response.make ~status:`OK () in
+    (resp, {|{"ok":true,"warning":"error_markers"}|}))
+  else
+    match Rag_lib.Pg.upsert_email
+      ~doc_id ~embed_model:ollama_embed_model ~triage_model:ollama_triage_model
+      ~sender:from_ ~recipient:to_ ~cc:cc_ ~bcc:bcc_ ~subject ~email_date:date_
+      ~attachments_json:att_json
+      ~action_score ~importance_score ~reply_by
+      ~ingested_at:(now_utc_iso8601 ()) ~message_id:doc_id ()
+    with
+    | Error e ->
+        Printf.eprintf "[ingest.pg.error] upsert_email: %s\n%!" e;
+        let resp = Http.Response.make ~status:`Internal_server_error () in
+        (resp, Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
+    | Ok () ->
+        match Rag_lib.Pg.insert_chunks ~doc_id embedded_chunks with
+        | Error e ->
+            Printf.eprintf "[ingest.pg.error] insert_chunks: %s\n%!" e;
+            let resp = Http.Response.make ~status:`Internal_server_error () in
+            (resp, Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
+        | Ok () ->
+            Printf.printf "[ingest.ok] doc_id=%s chunks=%d\n%!" ndoc (List.length embedded_chunks);
+            let resp = Http.Response.make ~status:`OK () in
+            (resp, {|{"ok":true}|}))
 
 (*
   Mbox file discovery and streaming
@@ -2671,7 +2481,7 @@ let handler ~client ~sw ~clock _socket request body =
     Retrieval-only query endpoint (phase 1)
 
     This endpoint does not call Ollama chat.
-    It embeds the user question, retrieves doc_ids from python-engine, and returns
+    It embeds the user question, retrieves doc_ids via pgvector kNN, and returns
     request_id + message_ids so that Thunderbird can upload full evidence.
   *)
   | `POST, "/query" ->
@@ -2741,26 +2551,11 @@ let handler ~client ~sw ~clock _socket request body =
               if debug_retrieval_enabled () then
                 Printf.printf "[retrieval.embed] query=%s\n%!"
                   (if String.length query_text > 120 then String.sub query_text 0 120 ^ "..." else query_text);
-              let obj : Yojson.Safe.t =
-                `Assoc
-                  [ ("embedding", `List (List.map (fun f -> `Float f) emb))
-                  ; ("top_k", `Int top_k)
-                  ]
-              in
-              let body = Yojson.Safe.to_string obj in
-              let resp, resp_body =
-                forward_json ~client ~sw ~path:"/query_embedded" ~body_json:body
-              in
-              if not (is_ok_status (Http.Response.status resp)) then []
-              else
-                try
-                  match Yojson.Safe.from_string resp_body with
-                  | `Assoc kv -> (
-                      match List.assoc_opt "sources" kv with
-                      | Some (`List xs) -> xs
-                      | _ -> [])
-                  | _ -> []
-                with _ -> []
+              match Rag_lib.Pg.query_knn ~embedding:emb ~top_k () with
+              | Error msg ->
+                  Printf.eprintf "[retrieval.pg.error] %s\n%!" msg;
+                  []
+              | Ok sources -> sources
         in
 
         let all_sources =
@@ -2801,64 +2596,7 @@ let handler ~client ~sw ~clock _socket request body =
               (List.length queries) (List.length lines) (String.concat "\n" lines));
 
 
-          (* Enrich sources whose metadata is empty/missing key fields
-             by looking up ingested_details_tbl (which stores the metadata
-             captured at ingestion time).  This handles emails that were
-             ingested before metadata was stored in the python-engine or
-             where the python-engine lost the metadata. *)
-          let sources_json =
-            let enrich_one (v : Yojson.Safe.t) : Yojson.Safe.t =
-              match v with
-              | `Assoc kv ->
-                  let doc_id =
-                    match List.assoc_opt "doc_id" kv with
-                    | Some (`String s) -> String.trim s
-                    | _ -> ""
-                  in
-                  let existing_md =
-                    match List.assoc_opt "metadata" kv with
-                    | Some (`Assoc md_kv) -> md_kv
-                    | _ -> []
-                  in
-                  let has_field key =
-                    match List.assoc_opt key existing_md with
-                    | Some (`String s) when String.trim s <> "" -> true
-                    | _ -> false
-                  in
-                  if doc_id <> "" && not (has_field "subject" && has_field "from" && has_field "date") then (
-                    let bare =
-                      if String.length doc_id > 1 && doc_id.[0] = '<' && doc_id.[String.length doc_id - 1] = '>'
-                      then String.sub doc_id 1 (String.length doc_id - 2) else doc_id
-                    in
-                    let bracketed = if doc_id.[0] = '<' then doc_id else "<" ^ doc_id ^ ">" in
-                    let detail =
-                      match Hashtbl.find_opt ingested_details_tbl doc_id with
-                      | Some _ as r -> r
-                      | None -> (match Hashtbl.find_opt ingested_details_tbl bracketed with
-                        | Some _ as r -> r
-                        | None -> Hashtbl.find_opt ingested_details_tbl bare)
-                    in
-                    match detail with
-                    | Some (`Assoc detail_kv) ->
-                        let stored_md =
-                          match List.assoc_opt "metadata" detail_kv with
-                          | Some (`Assoc md) -> md
-                          | _ -> []
-                        in
-                        let merged = Hashtbl.create 16 in
-                        List.iter (fun (k, v) -> Hashtbl.replace merged k v) existing_md;
-                        List.iter (fun (k, v) ->
-                          if not (has_field k) then Hashtbl.replace merged k v) stored_md;
-                        let new_md = `Assoc (Hashtbl.to_seq merged |> List.of_seq) in
-                        `Assoc (kv |> List.filter (fun (k, _) -> k <> "metadata") |> fun base -> base @ [("metadata", new_md)])
-                    | _ -> v)
-                  else v
-              | _ -> v
-            in
-            match sources_json with
-            | `List ys -> `List (List.map enrich_one ys)
-            | _ -> sources_json
-          in
+          (* Metadata is already included in Pg.query_knn results — no enrichment needed. *)
 
           let message_ids =
             match sources_json with
@@ -2916,45 +2654,27 @@ let handler ~client ~sw ~clock _socket request body =
           | _ -> []
         with _ -> []
       in
-      (* Normalize: try both bare id and <id> forms since TB may omit angle brackets. *)
-      let mem_any id =
-        Hashtbl.mem ingested_ids_tbl id
-        || (not (String.length id > 0 && id.[0] = '<') && Hashtbl.mem ingested_ids_tbl ("<" ^ id ^ ">"))
-        || (String.length id > 1 && id.[0] = '<' && id.[String.length id - 1] = '>'
-            && Hashtbl.mem ingested_ids_tbl (String.sub id 1 (String.length id - 2)))
+      let ingested, processed =
+        match Rag_lib.Pg.batch_ingested_status ids with
+        | Ok (i, p) -> (i, p)
+        | Error e ->
+            Printf.eprintf "[admin.ingested_status.error] %s\n%!" e;
+            ([], [])
       in
-      let ingested =
-        ids |> List.filter (fun id -> id <> "" && mem_any id)
-      in
-      (* Also report which of the ingested IDs are marked processed. *)
-      let is_processed id =
-        let lookup k =
-          match Hashtbl.find_opt ingested_details_tbl k with
-          | Some (`Assoc kv) -> (
-              match List.assoc_opt "metadata" kv with
-              | Some (`Assoc md) -> (
-                  match List.assoc_opt "processed" md with
-                  | Some (`Bool true) -> true
-                  | _ -> false)
-              | _ -> false)
-          | _ -> false
-        in
-        let bare =
-          if String.length id > 1 && id.[0] = '<' && id.[String.length id - 1] = '>'
-          then String.sub id 1 (String.length id - 2) else id
-        in
-        let bracketed =
-          if String.length id > 0 && id.[0] = '<' then id else "<" ^ id ^ ">"
-        in
-        lookup id || lookup bracketed || lookup bare
-      in
-      let processed =
-        ingested |> List.filter is_processed
+      (* Map normalized doc_ids back to original request IDs for TB compatibility *)
+      let norm_to_orig = Hashtbl.create 64 in
+      List.iter (fun id ->
+        Hashtbl.replace norm_to_orig (Rag_lib.Pg.normalize_doc_id id) id) ids;
+      let map_back lst =
+        List.filter_map (fun nid ->
+          match Hashtbl.find_opt norm_to_orig nid with
+          | Some orig -> Some orig
+          | None -> Some nid) lst
       in
       let body =
         `Assoc
-          [ ("ingested", `List (List.map (fun s -> `String s) ingested))
-          ; ("processed", `List (List.map (fun s -> `String s) processed))
+          [ ("ingested", `List (List.map (fun s -> `String s) (map_back ingested)))
+          ; ("processed", `List (List.map (fun s -> `String s) (map_back processed)))
           ]
         |> Yojson.Safe.to_string
       in
@@ -3064,71 +2784,58 @@ let handler ~client ~sw ~clock _socket request body =
       if id = "" then
         Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing id\n" ()
       else
-        (* Try both bare id and <id> forms. *)
-        let try_id alt = Hashtbl.mem ingested_ids_tbl alt in
-        let bare = if String.length id > 1 && id.[0] = '<' && id.[String.length id - 1] = '>'
-          then String.sub id 1 (String.length id - 2) else id in
-        let bracketed = if String.length id > 0 && id.[0] = '<' then id else "<" ^ id ^ ">" in
-        let ingested = try_id id || try_id bare || try_id bracketed in
-        let detail =
-          match Hashtbl.find_opt ingested_details_tbl id with
-          | Some _ as r -> r
-          | None -> (match Hashtbl.find_opt ingested_details_tbl bracketed with
-            | Some _ as r -> r
-            | None -> Hashtbl.find_opt ingested_details_tbl bare)
-        in
         let body =
-          match detail with
-          | Some json -> json
-          | None ->
+          match Rag_lib.Pg.get_email_detail id with
+          | Ok (Some json) -> json
+          | Ok None ->
               `Assoc
                 [ ("doc_id", `String id)
-                ; ("ingested", `Bool ingested)
+                ; ("ingested", `Bool false)
                 ; ("detail", `Null)
                 ]
+          | Error e ->
+              Printf.eprintf "[admin.ingested_detail.error] %s\n%!" e;
+              `Assoc [ ("doc_id", `String id); ("error", `String e) ]
         in
         Cohttp_eio.Server.respond_string ~status:`OK
           ~body:(Yojson.Safe.to_string body) ~headers:json_headers ()
 
   | `POST, "/admin/delete" ->
       let delete_body = read_all body in
-      let resp, resp_body = forward_json ~client ~sw ~path:"/admin/delete" ~body_json:delete_body in
-      let status = Http.Response.status resp in
-      (* Also remove from local ingested-IDs ledger and details cache. *)
-      (try
-         let json = Yojson.Safe.from_string delete_body in
-         match json with
-         | `Assoc kv -> (
-             match List.assoc_opt "id" kv with
-             | Some (`String doc_id) ->
-                 let doc_id = String.trim doc_id in
-                 let bare =
-                   if String.length doc_id > 1 && doc_id.[0] = '<'
-                      && doc_id.[String.length doc_id - 1] = '>'
-                   then String.sub doc_id 1 (String.length doc_id - 2) else doc_id
-                 in
-                 let bracketed =
-                   if String.length doc_id > 0 && doc_id.[0] = '<' then doc_id
-                   else "<" ^ doc_id ^ ">"
-                 in
-                 List.iter (fun k ->
-                   Hashtbl.remove ingested_ids_tbl k;
-                   Hashtbl.remove ingested_details_tbl k)
-                   [doc_id; bare; bracketed]
-             | _ -> ())
-         | _ -> ()
-       with _ -> ());
-      Cohttp_eio.Server.respond_string ~status ~body:resp_body ~headers:json_headers ()
+      let doc_id =
+        try
+          let json = Yojson.Safe.from_string delete_body in
+          match json with
+          | `Assoc kv -> (
+              match List.assoc_opt "id" kv with
+              | Some (`String s) -> String.trim s
+              | _ -> "")
+          | _ -> ""
+        with _ -> ""
+      in
+      if doc_id = "" then
+        Cohttp_eio.Server.respond_string ~status:`Bad_request
+          ~body:{|{"error":"missing id"}|} ~headers:json_headers ()
+      else (
+        match Rag_lib.Pg.delete_email doc_id with
+        | Ok () ->
+            Cohttp_eio.Server.respond_string ~status:`OK
+              ~body:{|{"ok":true}|} ~headers:json_headers ()
+        | Error e ->
+            Printf.eprintf "[admin.delete.error] %s\n%!" e;
+            Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+              ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
+              ~headers:json_headers ())
   | `POST, "/admin/reset" ->
-      let resp, resp_body = forward_json ~client ~sw ~path:"/admin/reset" ~body_json:"{}" in
-      let status = Http.Response.status resp in
-      if is_ok_status status then (
-        (* Clear OCaml-side ingestion ledger so column lights turn red. *)
-        Hashtbl.clear ingested_ids_tbl;
-        Hashtbl.clear ingested_details_tbl;
-        (try Sys.remove (ingested_ids_path ()) with Sys_error _ -> ());
-        (try Sys.remove (ingested_details_path ()) with Sys_error _ -> ()));
-      Cohttp_eio.Server.respond_string ~status ~body:resp_body ~headers:json_headers ()
+      (match Rag_lib.Pg.reset_all () with
+       | Ok () ->
+           Cohttp_eio.Server.respond_string ~status:`OK
+             ~body:{|{"ok":true}|} ~headers:json_headers ()
+       | Error e ->
+           Printf.eprintf "[admin.reset.error] %s\n%!" e;
+           Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+             ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
+             ~headers:json_headers ())
   | `POST, "/admin/mark_processed" ->
       let raw = read_all body in
       (* Accept either JSON {"id":"..."} or raw RFC822 (from filter action) *)
@@ -3151,14 +2858,16 @@ let handler ~client ~sw ~clock _socket request body =
       in
       if id = "" then
         Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing id\n" ()
-      else if set_processed_flag id true then
-        Cohttp_eio.Server.respond_string ~status:`OK
-          ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool true); ("id", `String id); ("processed", `Bool true) ]))
-          ~headers:json_headers ()
-      else
-        Cohttp_eio.Server.respond_string ~status:`Not_found
-          ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String "not ingested") ]))
-          ~headers:json_headers ()
+      else (
+        match Rag_lib.Pg.set_processed id true with
+        | Ok true ->
+            Cohttp_eio.Server.respond_string ~status:`OK
+              ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool true); ("id", `String id); ("processed", `Bool true) ]))
+              ~headers:json_headers ()
+        | Ok false | Error _ ->
+            Cohttp_eio.Server.respond_string ~status:`Not_found
+              ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String "not ingested") ]))
+              ~headers:json_headers ())
 
   | `POST, "/admin/mark_unprocessed" ->
       let raw = read_all body in
@@ -3182,14 +2891,16 @@ let handler ~client ~sw ~clock _socket request body =
       in
       if id = "" then
         Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing id\n" ()
-      else if set_processed_flag id false then
-        Cohttp_eio.Server.respond_string ~status:`OK
-          ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool true); ("id", `String id); ("processed", `Bool false) ]))
-          ~headers:json_headers ()
-      else
-        Cohttp_eio.Server.respond_string ~status:`Not_found
-          ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String "not ingested") ]))
-          ~headers:json_headers ()
+      else (
+        match Rag_lib.Pg.set_processed id false with
+        | Ok true ->
+            Cohttp_eio.Server.respond_string ~status:`OK
+              ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool true); ("id", `String id); ("processed", `Bool false) ]))
+              ~headers:json_headers ()
+        | Ok false | Error _ ->
+            Cohttp_eio.Server.respond_string ~status:`Not_found
+              ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String "not ingested") ]))
+              ~headers:json_headers ())
 
   | `POST, "/debug/stdout" ->
       let msg = read_all body |> String.trim in
@@ -3239,6 +2950,17 @@ let () =
     try Eio.Time.with_timeout_exn env#clock seconds fn
     with Eio.Time.Timeout ->
       raise (Failure (Printf.sprintf "ollama request timed out after %.0fs" seconds)));
+  (* Initialise PostgreSQL connection pool and schema *)
+  let pg_stdenv : Caqti_eio.stdenv = object
+    method net = (env#net :> [`Generic] Eio.Net.ty Eio.Std.r)
+    method clock = env#clock
+    method mono_clock = env#mono_clock
+  end in
+  (match Rag_lib.Pg.init ~sw ~stdenv:pg_stdenv with
+   | Ok () -> ()
+   | Error e ->
+       Printf.eprintf "FATAL: PostgreSQL init failed: %s\n%!" e;
+       exit 1);
   let socket =
     try
       Eio.Net.listen env#net ~sw ~backlog:128 ~reuse_addr:true

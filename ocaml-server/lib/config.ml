@@ -114,9 +114,6 @@ let env_bool (name : string) (fallback : bool) : bool =
 
 (* --- Resolved configuration values used throughout the server --- *)
 
-(* Base URL of the Python FAISS vector engine. *)
-let python_engine_base = "http://127.0.0.1:8000"
-
 (* Maximum seconds to wait for any single Ollama HTTP request. *)
 let ollama_timeout_seconds : float =
   let default = 300.0 in
@@ -209,6 +206,11 @@ let rag_attachment_use_pandoc : bool =
    (multi-query) and merges results for better recall. *)
 let rag_query_rewrite : bool =
   env_bool "RAG_QUERY_REWRITE" (setting_bool [ "rag"; "query"; "rewrite" ] ~default:true)
+
+(* PostgreSQL connection string for pgvector store. *)
+let pg_connection_string =
+  env_string "THUNDERRAG_PG_URL"
+    (setting_string [ "pg"; "connection_string" ] ~default:"postgresql://localhost/thunderrag")
 
 (* --- Debug flags: enable verbose logging for specific subsystems --- *)
 

@@ -18,6 +18,10 @@ depends: [
   "lambdasoup"
   "logs"
   "fmt"
+  "caqti"
+  "caqti-eio"
+  "caqti-driver-postgresql"
+  "pg_query"
   "odoc" {with-doc}
 ]
 build: [

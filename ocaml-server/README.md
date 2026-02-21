@@ -1,14 +1,14 @@
 # ThunderRAG OCaml Server
 
-The OCaml server is the **central orchestrator** of the ThunderRAG system. It sits between the Thunderbird add-on (which provides raw email content) and the python-engine (which owns the FAISS vector index), and it is the only component that talks to the LLM (Ollama).
+The OCaml server is the **central orchestrator** of the ThunderRAG system. It sits between the Thunderbird add-on (which provides raw email content) and PostgreSQL/pgvector (which stores email metadata and vector embeddings), and it is the only component that talks to the LLM (Ollama).
 
 ## Architecture Overview
 
 ```
-Thunderbird Add-on ──── raw RFC822 ────▸ OCaml Server ──── embeddings ────▸ python-engine
+Thunderbird Add-on ──── raw RFC822 ────▸ OCaml Server ──── embeddings ────▸ PostgreSQL + pgvector
         │                                    │                                   │
-        │  (browser.messages.getRaw)         │  (Ollama /api/embeddings)         │  (FAISS + SQLite)
-        │                                    │  (Ollama /api/chat)               │
+        │  (browser.messages.getRaw)         │  (Ollama /api/embeddings)         │  (vector kNN search)
+        │                                    │  (Ollama /api/chat)               │  (email metadata)
         ▼                                    ▼                                   ▼
    Source of truth              Orchestrator / prompt builder          Vector index + metadata
    for email content            Session state + conversation          Chunk-level retrieval
@@ -34,8 +34,8 @@ Accepts a single raw RFC822 email message for ingestion into the vector index.
   4. Optionally summarize quoted context and attachments via Ollama
   5. Build `text_for_index` (From/To/Cc/Bcc/Subject/Date + body)
   6. Chunk text, embed each chunk via Ollama `/api/embeddings`
-  7. Forward embeddings + metadata to python-engine `/ingest_embedded`
-- **Response**: JSON `{ "status": "ok", "chunks_ingested": N }` or error
+  7. Store email metadata + chunk embeddings in PostgreSQL via `Pg` module
+- **Response**: JSON `{ "ok": true }` or error
 
 #### `POST /admin/bulk_ingest`
 
@@ -61,7 +61,7 @@ Retrieval only — does **not** call Ollama chat.
      - `rewrite` (multi-turn only): Self-contained search query with pronouns, relative dates, and implicit references resolved.
      - `hypothetical` (HyDE): A hypothetical email in the exact indexed format (From/To/Cc/Subject/Date headers + body) to maximize cosine similarity with relevant stored emails.
   2. Embed each query variant via Ollama `/api/embeddings`
-  3. Query python-engine `/query_embedded` for top-K similar documents per variant, merge by doc_id (max score)
+  3. Query PostgreSQL/pgvector for top-K similar documents per variant, merge by doc_id (max score)
   4. Generate a `request_id` and store a pending query entry (including `resolved_question`)
 - **Response**: JSON:
   ```json
@@ -111,8 +111,8 @@ Final answer generation.
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/admin/delete` | POST | Delete a doc_id from the vector index (proxied to python-engine) |
-| `/admin/reset` | POST | Hard reset: wipe the entire vector index (proxied to python-engine) |
+| `/admin/delete` | POST | Delete a doc_id from the vector index |
+| `/admin/reset` | POST | Hard reset: wipe the entire vector index |
 | `/admin/session/debug` | POST | Dump session state (tail, summaries) for debugging |
 | `/admin/session/reset` | POST | Clear a session's conversation history |
 | `/admin/bulk_state/reset` | POST | Clear the bulk ingestion progress state file |
@@ -141,8 +141,10 @@ ocaml-server/
 │   │                         # leaf part collection, attachment filename extraction
 │   ├── body_extract.ml       # Email body extraction: new vs quoted text splitting,
 │   │                         # mrmime streaming parser with simple-MIME fallback
+│   ├── pg.ml                 # PostgreSQL/pgvector: connection pool, schema, CRUD, kNN retrieval
+│   ├── sql_validate.ml       # SQL fragment validation via libpg_query AST walking
 │   └── dune                  # Library dependencies: uri lambdasoup yojson unix mrmime
-│                             # angstrom base64 pecu uutf
+│                             # angstrom base64 pecu uutf caqti caqti-eio caqti-driver-postgresql pg_query
 ├── bin/dune                  # Executable dependencies: rag_lib + eio cohttp-eio
 └── rag_email_server.opam     # Package metadata
 ```
@@ -224,7 +226,16 @@ All configuration is via environment variables (with fallbacks to `~/.thunderrag
 
 ## Build / Run
 
-Requires OCaml 5.x and opam:
+Requires OCaml 5.x, opam, and PostgreSQL 17+ with pgvector and libpg_query:
+
+```bash
+brew install postgresql@17 pgvector libpg_query
+brew services start postgresql@17
+createdb thunderrag
+psql -d thunderrag -c "CREATE EXTENSION IF NOT EXISTS vector;"
+```
+
+Then build and run:
 
 ```bash
 opam switch create . ocaml-base-compiler.5.2.0   # first time only
@@ -233,7 +244,7 @@ dune build
 dune exec -- rag-email-server -p 8080
 ```
 
-The server listens on the specified port (default 8080). Configure the Thunderbird filter action endpoint as `http://localhost:8080/ingest`.
+The server listens on the specified port (default 8080). On startup it connects to PostgreSQL (default `postgresql://localhost/thunderrag`, override with `THUNDERRAG_PG_URL`) and creates the schema if needed.
 
 ## Dependencies
 
@@ -243,3 +254,5 @@ The server listens on the specified port (default 8080). Configure the Thunderbi
 - **mrmime** / **angstrom**: MIME structure parsing and RFC2047 encoded-word decoding
 - **base64** / **pecu** / **uutf**: Content-Transfer-Encoding decoding and UTF-8 sanitization
 - **uri**: Percent-encoding/decoding
+- **caqti** / **caqti-eio** / **caqti-driver-postgresql**: PostgreSQL connection pooling and typed queries
+- **pg_query**: SQL parsing via libpg_query (validates LLM-generated SQL fragments)

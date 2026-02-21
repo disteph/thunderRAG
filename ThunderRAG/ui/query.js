@@ -3,7 +3,7 @@
 
   This page implements a 2-phase RAG query flow:
   1) POST /query (OCaml server)
-     - Server runs retrieval only (vector search via python-engine).
+     - Server runs retrieval only (vector search via PostgreSQL/pgvector).
      - Response includes status=need_messages, request_id, message_ids, and source metadata.
   2) For each message_id:
      - UI asks background.js to fetch raw RFC822 via browser.messages.getRaw.

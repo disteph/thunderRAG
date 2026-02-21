@@ -20,4 +20,8 @@
    bigstringaf
    lambdasoup
    logs
-   fmt))
+   fmt
+   caqti
+   caqti-eio
+   caqti-driver-postgresql
+   pg_query))

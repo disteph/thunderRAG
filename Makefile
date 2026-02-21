@@ -1,18 +1,16 @@
 SHELL := /bin/bash
 
 XPI_NAME ?= thunderRAG.xpi
-PYTHON_ENGINE_DIR := python-engine
 OCAML_SERVER_DIR := ocaml-server
 ADDON_DIR := ThunderRAG
 
-.PHONY: all deps xpi ocaml python \
-	python-deps ocaml-deps \
-	clean clean-xpi clean-ocaml clean-python \
-	run-ocaml run-python run
+.PHONY: all deps xpi ocaml ocaml-deps \
+	clean clean-xpi clean-ocaml \
+	setup-db run
 
-all: xpi ocaml python
+all: xpi ocaml
 
-deps: ocaml-deps python-deps
+deps: ocaml-deps
 
 xpi:
 	$(MAKE) -C "$(ADDON_DIR)" xpi XPI_NAME="$(XPI_NAME)"
@@ -29,22 +27,15 @@ ocaml-deps:
 		echo "error: dune not found. Ensure your opam switch has dune installed." 1>&2; \
 		exit 2; \
 	fi
+	@echo "Note: system deps required: brew install postgresql@17 pgvector libpg_query"
 	cd "$(OCAML_SERVER_DIR)" && opam install . --deps-only -y
 
-python: python-deps
+setup-db:
+	@echo "Creating thunderrag database (if not exists) and enabling pgvector..."
+	@createdb thunderrag 2>/dev/null || true
+	@psql -d thunderrag -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>&1
 
-python-deps:
-	@if ! command -v python3 >/dev/null 2>&1; then \
-		echo "error: python3 not found." 1>&2; \
-		exit 2; \
-	fi
-	@if [ ! -d "$(PYTHON_ENGINE_DIR)/.venv" ]; then \
-		python3 -m venv "$(PYTHON_ENGINE_DIR)/.venv"; \
-	fi
-	"$(PYTHON_ENGINE_DIR)/.venv/bin/python" -m pip install --upgrade pip
-	"$(PYTHON_ENGINE_DIR)/.venv/bin/python" -m pip install -r "$(PYTHON_ENGINE_DIR)/requirements.txt"
-
-clean: clean-xpi clean-ocaml clean-python
+clean: clean-xpi clean-ocaml
 
 clean-xpi:
 	$(MAKE) -C "$(ADDON_DIR)" clean
@@ -54,18 +45,5 @@ clean-ocaml:
 		cd "$(OCAML_SERVER_DIR)" && opam exec -- dune clean || true; \
 	fi
 
-clean-python:
-	rm -rf "$(PYTHON_ENGINE_DIR)/.venv"
-
-run-ocaml: ocaml
+run: ocaml
 	cd "$(OCAML_SERVER_DIR)" && opam exec -- dune exec rag-email-server -- -p 8090
-
-run-python: python
-	cd "$(PYTHON_ENGINE_DIR)" && .venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000
-
-run: python ocaml
-	@set -euo pipefail; \
-	( cd "$(PYTHON_ENGINE_DIR)" && .venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000 ) & PY_PID=$$!; \
-	( cd "$(OCAML_SERVER_DIR)" && opam exec -- dune exec rag-email-server -- -p 8090 ) & OCAML_PID=$$!; \
-	trap 'kill $$PY_PID $$OCAML_PID 2>/dev/null || true' INT TERM EXIT; \
-	wait
