@@ -7,7 +7,8 @@
       "{{datetime_utc}}": "Current UTC date/time in ISO 8601",
       "{{max_lines}}": "Maximum output lines (integer, context-dependent)",
       "{{max_chars}}": "Maximum output characters (integer, context-dependent)",
-      "{{filename}}": "Attachment filename (only in compress_attachment)"
+      "{{filename}}": "Attachment filename (only in compress_attachment)",
+      "{{retrieved_email_table}}": "Table of retrieved email metadata (only in select_evidence)"
     }
   },
 
@@ -70,13 +71,14 @@
     "CRITICAL RULE: NEVER invent or fabricate information. Use ONLY what is explicitly stated in the user's question and the conversation context. For any detail you do not know, write \"...\" (three dots) as a placeholder.",
     "",
     "Output ONLY a JSON object with these fields:",
+    "- \"no_retrieval\": Boolean. Set to true if the question can clearly be answered without searching the email archive. You MUST set this to true for: greetings and small talk (\"Hi\", \"Hello\", \"How are you?\", \"Thanks\"), general knowledge questions unrelated to the user's emails (\"What is DKIM?\", \"Explain TCP/IP\", \"What day is it?\"), meta questions about the conversation itself, or arithmetic/logic questions. Set to false ONLY when the question is about the user's emails, contacts, meetings, projects, or anything that would require looking up actual email content.",
     "{{rewrite_field}}- \"resolved_question\": Rewrite the user's last message so that relative references (e.g. \"the second email\", \"that one\") are replaced by concrete identifiers from the conversation context. Also resolve pronouns, relative dates, and implicit references. NEVER add information that is not in the original question or conversation context. If the question is already self-contained, return it EXACTLY as-is, word for word.",
     "- \"hyp_from\": The From header of a hypothetical email matching the question. Use names/emails from the question or context. If unknown, write \"...\".",
     "- \"hyp_to\": The To header. Use names/emails from the question or context. If unknown, write \"...\".",
     "- \"hyp_subject\": A Subject line using ONLY terms from the question. Do NOT invent a specific topic. If the question is broad (e.g. \"what does X write about\"), use \"...\" as the subject.",
     "- \"hyp_body\": 1-2 sentences using ONLY terms from the question. Use \"...\" for any unknown details. Write in first person as the sender. NEVER invent specific facts, projects, or topics not mentioned in the question.",
     "",
-    "You MUST populate ALL fields.",
+    "You MUST populate ALL fields. If no_retrieval is true, still populate the other fields with best-effort values.",
     "",
     "Current date/time: {{datetime_local}}.",
     "Output raw JSON only, no markdown fencing, no explanation."
@@ -152,6 +154,31 @@
     "You are compressing quoted thread context from an email for use as evidence in a Q&A context.",
     "Preserve ALL concrete facts, names, dates, numbers, decisions, and action items.",
     "Write in the third person. Output plain text only. Do not invent."
+  ],
+
+  "select_evidence": [
+    "You are helping decide which retrieved emails need their full content loaded to answer a user's question.",
+    "{{user_identity}}",
+    "Below is a table of emails retrieved from the user's archive by semantic similarity. Each row shows metadata only (no body text).",
+    "",
+    "{{retrieved_email_table}}",
+    "",
+    "The user's question is:",
+    "{{resolved_question}}",
+    "",
+    "Select ONLY the emails whose full body content is likely needed to answer the question.",
+    "Consider:",
+    "- Subject line relevance to the question",
+    "- Sender/recipient relevance",
+    "- Date relevance (e.g. if the user asks about recent emails)",
+    "- Whether the question could be answered from headers alone (e.g. \"who emailed me about X?\" may only need headers)",
+    "- Triage metadata (action_score, importance_score) if the question is about urgency or priorities",
+    "",
+    "Output ONLY a JSON array of the 1-based row numbers of relevant emails.",
+    "Example: [1, 3, 5]",
+    "If ALL emails seem relevant, return all their numbers.",
+    "If NONE seem relevant, return an empty array: []",
+    "Output raw JSON only, no markdown fencing, no explanation."
   ],
 
   "compress_attachment": [

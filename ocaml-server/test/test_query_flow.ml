@@ -185,6 +185,81 @@ let test_complete_missing_evidence () =
   let json2 = json_of_string body in
   Alcotest.(check string) "status=missing_evidence" "missing_evidence" (json_string_field "status" json2)
 
+(* ---------- No-retrieval shortcut ---------- *)
+
+(* Test the protocol: when status=no_retrieval, message_ids is empty
+   and the full roundtrip through /query/complete still works.
+   We send multiple candidate questions and use whichever one the LLM
+   classifies as no_retrieval.  If none do, we skip — this is an LLM
+   judgment test and may vary between models. *)
+
+let try_no_retrieval_query sid question =
+  let code, body = post_json ~path:"/query"
+    ~body_str:(Printf.sprintf
+      {|{"session_id":"%s","question":"%s","top_k":3}|} sid (String.escaped question)) in
+  if code <> 200 then None
+  else
+    let json = json_of_string body in
+    let status = json_string_field "status" json in
+    if status = "no_retrieval" then Some (json, question)
+    else None
+
+let test_no_retrieval_protocol () =
+  skip_if_unreachable ();
+  let sid = fresh_session_id () in
+  let candidates = [
+    "Hi, how are you?";
+    "What day of the week is it today?";
+    "What is DKIM?";
+    "Can you explain what the acronym SMTP stands for?";
+    "Hello!";
+  ] in
+  let result = List.fold_left (fun acc q ->
+    match acc with Some _ -> acc | None -> try_no_retrieval_query sid q
+  ) None candidates in
+  match result with
+  | None ->
+      Printf.printf "[no_retrieval test] LLM did not return no_retrieval for any candidate — skipping\n%!";
+      ()
+  | Some (json, question) ->
+      Printf.printf "[no_retrieval test] LLM returned no_retrieval for: %s\n%!" question;
+      (* Verify the protocol invariants *)
+      let mids = json_list_field "message_ids" json in
+      Alcotest.(check int) "empty message_ids" 0 (List.length mids);
+      let sources = json_list_field "sources" json in
+      Alcotest.(check int) "empty sources" 0 (List.length sources);
+      let request_id = json_string_field "request_id" json in
+      Alcotest.(check bool) "has request_id" true (request_id <> "")
+
+let test_no_retrieval_roundtrip () =
+  skip_if_unreachable ();
+  let sid = fresh_session_id () in
+  let candidates = [
+    "Hi there!";
+    "What does DKIM stand for?";
+    "What day is it?";
+    "Hello, good morning!";
+  ] in
+  let result = List.fold_left (fun acc q ->
+    match acc with Some _ -> acc | None -> try_no_retrieval_query sid q
+  ) None candidates in
+  match result with
+  | None ->
+      Printf.printf "[no_retrieval roundtrip] LLM did not return no_retrieval — skipping\n%!";
+      ()
+  | Some (json, question) ->
+      Printf.printf "[no_retrieval roundtrip] using: %s\n%!" question;
+      let request_id = json_string_field "request_id" json in
+      (* Skip Phase 2 — no evidence needed *)
+      (* Phase 3 — /query/complete should answer without evidence *)
+      let code3, body3 = post_json ~path:"/query/complete"
+        ~body_str:(Printf.sprintf {|{"session_id":"%s","request_id":"%s"}|} sid request_id) in
+      Alcotest.(check int) "complete 200" 200 code3;
+      let json3 = json_of_string body3 in
+      let answer = json_string_field "answer" json3 in
+      Alcotest.(check bool) "answer non-empty" true (String.length answer > 0);
+      ignore question
+
 (* ---------- Full roundtrip ---------- *)
 
 let test_full_roundtrip () =
@@ -296,6 +371,9 @@ let tests =
   ; Alcotest.test_case "complete: unknown request_id"    `Quick test_complete_unknown_request_id
   ; Alcotest.test_case "complete: session mismatch"      `Slow  test_complete_session_mismatch
   ; Alcotest.test_case "complete: missing evidence"      `Slow  test_complete_missing_evidence
+  (* No-retrieval shortcut *)
+  ; Alcotest.test_case "no_retrieval: protocol"          `Slow  test_no_retrieval_protocol
+  ; Alcotest.test_case "no_retrieval: full roundtrip"    `Slow  test_no_retrieval_roundtrip
   (* Full roundtrip *)
   ; Alcotest.test_case "full roundtrip"                  `Slow  test_full_roundtrip
   ; Alcotest.test_case "session state persists"          `Slow  test_session_state_persists

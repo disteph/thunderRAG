@@ -1508,6 +1508,79 @@
         ],
         "hallucination_keywords": []
       }
+    },
+    {
+      "id": "no_retrieval_01",
+      "category": "no_retrieval",
+      "question": "Hi! How are you doing today?",
+      "session_group": "session_no_retrieval_01",
+      "depends_on": null,
+      "criteria": {
+        "expect_no_retrieval": true,
+        "must_contain_any": [],
+        "must_not_contain": [],
+        "must_cite_emails": false,
+        "expected_email_subjects_any": [],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "no_retrieval_02",
+      "category": "no_retrieval",
+      "question": "What is DKIM and how does it work?",
+      "session_group": "session_no_retrieval_02",
+      "depends_on": null,
+      "criteria": {
+        "expect_no_retrieval": true,
+        "must_contain_any": [
+          "DKIM",
+          "DomainKeys",
+          "signature",
+          "authentication",
+          "DNS",
+          "email"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": false,
+        "expected_email_subjects_any": [],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "no_retrieval_03",
+      "category": "no_retrieval",
+      "question": "What day of the week is it today?",
+      "session_group": "session_no_retrieval_03",
+      "depends_on": null,
+      "criteria": {
+        "expect_no_retrieval": true,
+        "must_contain_any": [],
+        "must_not_contain": [],
+        "must_cite_emails": false,
+        "expected_email_subjects_any": [],
+        "hallucination_keywords": []
+      }
+    },
+    {
+      "id": "no_retrieval_04",
+      "category": "no_retrieval",
+      "question": "Can you explain the difference between IMAP and POP3?",
+      "session_group": "session_no_retrieval_04",
+      "depends_on": null,
+      "criteria": {
+        "expect_no_retrieval": true,
+        "must_contain_any": [
+          "IMAP",
+          "POP3",
+          "server",
+          "download",
+          "sync"
+        ],
+        "must_not_contain": [],
+        "must_cite_emails": false,
+        "expected_email_subjects_any": [],
+        "hallucination_keywords": []
+      }
     }
   ]
 }

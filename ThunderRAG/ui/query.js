@@ -434,51 +434,55 @@ async function onAsk() {
 
     const srcs = Array.isArray(res?.sources) ? res.sources : [];
 
-    if (String(res?.status || "") === "need_messages") {
+    const status = String(res?.status || "");
+    if (status === "need_messages" || status === "no_retrieval") {
       const requestId = String(res?.request_id || "");
       const messageIds = Array.isArray(res?.message_ids) ? res.message_ids : [];
 
       setAssistantMessage(assistant.bubble, "", srcs);
-      setSourcesProgress(assistant.bubble, 0, messageIds.length);
 
-      if (!requestId || !messageIds.length) {
-        throw new Error("Server requested messages but did not return request_id/message_ids");
+      if (!requestId) {
+        throw new Error("Server did not return request_id");
       }
 
-      async function postEvidence(headerMessageId, raw) {
-        const enc = new TextEncoder();
-        const bytes = enc.encode(String(raw || ""));
-        const blob = new Blob([bytes], { type: "message/rfc822" });
-        const headers = new Headers();
-        headers.set("Content-Type", "message/rfc822");
-        headers.set("X-Thunderbird-Message-Id", headerMessageId);
-        headers.set("X-RAG-Request-Id", requestId);
+      if (messageIds.length > 0) {
+        setSourcesProgress(assistant.bubble, 0, messageIds.length);
 
-        const resp = await fetch(`${base}/query/evidence`, {
-          method: "POST",
-          headers,
-          body: blob,
-        });
-        const text = await resp.text();
-        if (!resp.ok) {
-          throw new Error(`Evidence upload failed: HTTP ${resp.status}: ${text}`);
+        async function postEvidence(headerMessageId, raw) {
+          const enc = new TextEncoder();
+          const bytes = enc.encode(String(raw || ""));
+          const blob = new Blob([bytes], { type: "message/rfc822" });
+          const headers = new Headers();
+          headers.set("Content-Type", "message/rfc822");
+          headers.set("X-Thunderbird-Message-Id", headerMessageId);
+          headers.set("X-RAG-Request-Id", requestId);
+
+          const resp = await fetch(`${base}/query/evidence`, {
+            method: "POST",
+            headers,
+            body: blob,
+          });
+          const text = await resp.text();
+          if (!resp.ok) {
+            throw new Error(`Evidence upload failed: HTTP ${resp.status}: ${text}`);
+          }
         }
-      }
 
-      for (let i = 0; i < messageIds.length; i++) {
-        const mid = String(messageIds[i] || "").trim();
-        if (!mid) continue;
-        $("status").textContent = `Fetching evidence ${i + 1}/${messageIds.length}...`;
-        const got = await browser.runtime.sendMessage({
-          type: "getRawMessageByHeaderMessageId",
-          headerMessageId: mid,
-        });
-        const raw = got?.raw;
-        await postEvidence(mid, raw);
-        setSourcesProgress(assistant.bubble, i + 1, messageIds.length);
-      }
+        for (let i = 0; i < messageIds.length; i++) {
+          const mid = String(messageIds[i] || "").trim();
+          if (!mid) continue;
+          $("status").textContent = `Fetching evidence ${i + 1}/${messageIds.length}...`;
+          const got = await browser.runtime.sendMessage({
+            type: "getRawMessageByHeaderMessageId",
+            headerMessageId: mid,
+          });
+          const raw = got?.raw;
+          await postEvidence(mid, raw);
+          setSourcesProgress(assistant.bubble, i + 1, messageIds.length);
+        }
 
-      hideSourcesProgress(assistant.bubble);
+        hideSourcesProgress(assistant.bubble);
+      }
       setTypingDots(assistant.bubble);
 
       const chatModel = $("chatModel").value || "";

@@ -1733,8 +1733,8 @@ let handle_bulk_ingest ~client ~sw ~clock (body : string) : (Http.Response.t * s
 *)
 let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
     ~(history_summary : string) ~(tail : chat_message list)
-    ~(user_name : string) : string list * string =
-  if not rag_query_rewrite then ([question], question)
+    ~(user_name : string) : string list * string * bool =
+  if not rag_query_rewrite then ([question], question, false)
   else
     let has_context = String.trim history_summary <> "" || tail <> [] in
     let user_identity =
@@ -1802,6 +1802,14 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
                  | _ -> None)
              | _ -> None
            in
+           let no_retrieval =
+             match json with
+             | `Assoc kv -> (match List.assoc_opt "no_retrieval" kv with
+                 | Some (`Bool b) -> b
+                 | Some (`String s) -> String.lowercase_ascii (String.trim s) = "true"
+                 | _ -> false)
+             | _ -> false
+           in
            let resolved = match get_str "resolved_question" with
              | Some rq -> rq
              | None -> question
@@ -1838,14 +1846,16 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
                Printf.printf "[retrieval.rewrite.%d] %s\n%!" i
                  (if String.length q > 200 then String.sub q 0 200 ^ "..." else q))
                !queries;
-           (!queries, resolved)
+           if no_retrieval then
+             Printf.printf "[retrieval.rewrite] no_retrieval=true, skipping embedding\n%!";
+           (!queries, resolved, no_retrieval)
          with _ ->
            Printf.eprintf "[retrieval.rewrite.error] failed to parse JSON response: %s\n%!"
              (if String.length raw_resp > 200 then String.sub raw_resp 0 200 ^ "..." else raw_resp);
-           ([question], question))
+           ([question], question, false))
     | Error err ->
         Printf.eprintf "[retrieval.rewrite.error] %s\n%!" (truncate_chars err ~max_chars:200);
-        ([question], question)
+        ([question], question, false)
 
 (* Merge email entries from multiple retrievals.
    Deduplicates by doc_id, keeping the entry with the highest score.
@@ -1877,6 +1887,141 @@ let merge_multi_query_sources (all_sources : Yojson.Safe.t list) (top_k : int) :
   in
   let capped = if top_k > 0 && List.length sorted > top_k then take top_k sorted else sorted in
   `List (List.map (fun (_, (_, src)) -> src) capped)
+
+(* Given a list of retrieved sources (with metadata) and the user's question,
+   ask the LLM which emails actually need their full body content loaded.
+   Returns the filtered list of doc_ids.  Falls back to all doc_ids on error. *)
+let select_relevant_sources ~client ~sw ~(resolved_question : string)
+    ~(user_name : string) (sources_json : Yojson.Safe.t) : string list =
+  let all_doc_ids =
+    match sources_json with
+    | `List ys ->
+        ys |> List.filter_map (function
+          | `Assoc kv -> (match List.assoc_opt "doc_id" kv with
+              | Some (`String s) when String.trim s <> "" -> Some (String.trim s)
+              | _ -> None)
+          | _ -> None)
+    | _ -> []
+  in
+  let n = List.length all_doc_ids in
+  if n = 0 then []
+  else if n <= 3 then (
+    Printf.printf "[select_evidence] %d sources ≤ 3, selecting all\n%!" n;
+    all_doc_ids)
+  else
+  let table_lines =
+    match sources_json with
+    | `List ys ->
+        ys |> List.mapi (fun i v ->
+          match v with
+          | `Assoc kv ->
+              let s key = match List.assoc_opt key kv with
+                | Some (`String s) -> s | _ -> ""
+              in
+              let md = match List.assoc_opt "metadata" kv with
+                | Some (`Assoc mkv) -> mkv | _ -> []
+              in
+              let ms key = match List.assoc_opt key md with
+                | Some (`String s) -> s | _ -> ""
+              in
+              let mi key = match List.assoc_opt key md with
+                | Some (`Int n) -> Some (string_of_int n) | _ -> None
+              in
+              let score = match List.assoc_opt "score" kv with
+                | Some (`Float f) -> Printf.sprintf "%.2f" f
+                | _ -> "?"
+              in
+              let parts =
+                [ Printf.sprintf "[%d]" (i + 1)
+                ; Printf.sprintf "score=%s" score
+                ; Printf.sprintf "from=%s" (ms "from")
+                ; Printf.sprintf "to=%s" (ms "to")
+                ]
+                @ (let cc = ms "cc" in if String.trim cc <> "" then [Printf.sprintf "cc=%s" cc] else [])
+                @ [ Printf.sprintf "subject=%s" (ms "subject")
+                  ; Printf.sprintf "date=%s" (ms "date")
+                  ]
+                @ (match mi "action_score", mi "importance_score" with
+                   | Some a, Some imp -> [Printf.sprintf "action=%s/100 importance=%s/100" a imp]
+                   | _ -> [])
+                @ (let rb = ms "reply_by" in
+                   if String.trim rb <> "" && rb <> "none" then [Printf.sprintf "reply_by=%s" rb] else [])
+                @ (let atts = match List.assoc_opt "attachments" md with
+                     | Some (`List xs) -> xs |> List.filter_map (function `String s -> Some s | _ -> None)
+                     | _ -> []
+                   in if atts <> [] then [Printf.sprintf "attachments=[%s]" (String.concat "; " atts)] else [])
+                @ (let p = match List.assoc_opt "processed" md with
+                     | Some (`Bool true) -> true | _ -> false
+                   in if p then ["processed=true"] else [])
+              in
+              ignore (s "doc_id");
+              String.concat " " parts
+          | _ -> Printf.sprintf "[%d] (unknown)" (i + 1))
+    | _ -> []
+  in
+  let table_str = String.concat "\n" table_lines in
+  let user_identity =
+    if String.trim user_name <> ""
+    then Printf.sprintf "The user (the email account owner) is: %s.\n" user_name
+    else ""
+  in
+  let system =
+    get_prompt "select_evidence"
+      ~default:"You are helping decide which retrieved emails need their full content loaded. Output a JSON array of 1-based row numbers."
+      ~vars:[
+        ("{{user_identity}}", user_identity);
+        ("{{retrieved_email_table}}", table_str);
+        ("{{resolved_question}}", resolved_question);
+      ]
+  in
+  let messages : Yojson.Safe.t list =
+    [ `Assoc [ ("role", `String "system"); ("content", `String system) ] ]
+  in
+  match ollama_chat ~client ~sw ~model:ollama_summarize_model ~messages () with
+  | Error err ->
+      Printf.eprintf "[select_evidence.error] %s, selecting all\n%!" (truncate_chars err ~max_chars:200);
+      all_doc_ids
+  | Ok raw_resp ->
+      let raw_resp = String.trim raw_resp in
+      let raw_resp =
+        if starts_with "```" raw_resp then
+          let lines = String.split_on_char '\n' raw_resp in
+          let lines = match lines with _ :: rest -> rest | [] -> [] in
+          let lines = List.rev lines in
+          let lines = match lines with
+            | l :: rest when starts_with "```" (String.trim l) -> List.rev rest
+            | _ -> List.rev lines
+          in
+          String.concat "\n" lines
+        else raw_resp
+      in
+      (try
+         let json = Yojson.Safe.from_string raw_resp in
+         let indices = match json with
+           | `List xs ->
+               xs |> List.filter_map (function
+                 | `Int n -> Some n
+                 | `Float f -> Some (int_of_float f)
+                 | `String s -> (try Some (int_of_string (String.trim s)) with _ -> None)
+                 | _ -> None)
+           | _ ->
+               Printf.eprintf "[select_evidence.warning] expected JSON array, got: %s\n%!"
+                 (if String.length raw_resp > 200 then String.sub raw_resp 0 200 ^ "..." else raw_resp);
+               List.init n (fun i -> i + 1)
+         in
+         let selected =
+           indices |> List.filter_map (fun idx ->
+             if idx >= 1 && idx <= n then List.nth_opt all_doc_ids (idx - 1)
+             else None)
+         in
+         let selected = if selected = [] then all_doc_ids else selected in
+         Printf.printf "[select_evidence] %d/%d emails selected for rehydration\n%!"
+           (List.length selected) n;
+         selected
+       with _ ->
+         Printf.eprintf "[select_evidence.error] failed to parse response: %s, selecting all\n%!"
+           (if String.length raw_resp > 200 then String.sub raw_resp 0 200 ^ "..." else raw_resp);
+         all_doc_ids)
 
 let handler ~client ~sw ~clock _socket request body =
   (*
@@ -2536,11 +2681,37 @@ let handler ~client ~sw ~clock _socket request body =
             (s.history_summary, s.tail))
         in
 
-        let queries, resolved_question =
+        let queries, resolved_question, no_retrieval =
           rewrite_queries_for_retrieval ~client ~sw ~question
             ~history_summary ~tail ~user_name:(s.user_name)
         in
 
+        if no_retrieval then (
+          (* No retrieval needed — register a pending_query with empty message_ids
+             so that /query/complete can answer directly from conversation context. *)
+          let request_id = fresh_request_id session_id question in
+          let p : pending_query =
+            { mu = Eio.Mutex.create ()
+            ; session_id
+            ; question
+            ; resolved_question
+            ; message_ids = []
+            ; sources_json = `List []
+            ; evidence_by_id = Hashtbl.create 0
+            }
+          in
+          Eio.Mutex.use_rw ~protect:true pending_tbl_mu (fun () -> Hashtbl.replace pending_tbl request_id p);
+          let body =
+            `Assoc
+              [ ("status", `String "no_retrieval")
+              ; ("request_id", `String request_id)
+              ; ("message_ids", `List [])
+              ; ("sources", `List [])
+              ]
+            |> Yojson.Safe.to_string
+          in
+          Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ())
+        else (
         let embed_and_retrieve (query_text : string) : Yojson.Safe.t list =
           match ollama_embed ~client ~sw ~task:Search_query ~text:query_text () with
           | Error msg ->
@@ -2596,20 +2767,12 @@ let handler ~client ~sw ~clock _socket request body =
               (List.length queries) (List.length lines) (String.concat "\n" lines));
 
 
-          (* Metadata is already included in Pg.query_knn results — no enrichment needed. *)
-
+          (* Selective rehydration: ask the LLM which emails need full content. *)
           let message_ids =
-            match sources_json with
-            | `List ys ->
-                ys
-                |> List.filter_map (function
-                     | `Assoc kv -> (
-                         match List.assoc_opt "doc_id" kv with
-                         | Some (`String s) when String.trim s <> "" -> Some (String.trim s)
-                         | _ -> None)
-                     | _ -> None)
-            | _ -> []
+            select_relevant_sources ~client ~sw ~resolved_question
+              ~user_name:(s.user_name) sources_json
           in
+
           let request_id = fresh_request_id session_id question in
           let p : pending_query =
             { mu = Eio.Mutex.create ()
@@ -2632,7 +2795,7 @@ let handler ~client ~sw ~clock _socket request body =
               ]
             |> Yojson.Safe.to_string
           in
-          Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()))
+          Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ())))
   (*
     Batch ingestion status check
 

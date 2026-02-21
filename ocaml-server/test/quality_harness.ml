@@ -131,6 +131,8 @@ let run_query sid question user_name corpus_tbl =
 
 let analyze result corpus =
   let a = ref [] in let add s = a := s :: !a in
+  let query_resp = match result with `Assoc kv -> (match List.assoc_opt "query_response" kv with Some j -> j | _ -> `Null) | _ -> `Null in
+  ignore query_resp;
   let complete = match result with `Assoc kv -> (match List.assoc_opt "complete_response" kv with Some j -> j | _ -> `Null) | _ -> `Null in
   (match jstr "error" complete with "" -> () | e -> add ("ERROR: "^e));
   let answer = jstr "answer" complete and sources = jlist "sources" complete in
@@ -156,6 +158,7 @@ let analyze result corpus =
   List.rev !a
 
 let score result criteria =
+  let query_resp = match result with `Assoc kv -> (match List.assoc_opt "query_response" kv with Some j -> j | _ -> `Null) | _ -> `Null in
   let complete = match result with `Assoc kv -> (match List.assoc_opt "complete_response" kv with Some j -> j | _ -> `Null) | _ -> `Null in
   if jstr "error" complete <> "" then 0.0
   else
@@ -163,6 +166,13 @@ let score result criteria =
     let sources = jlist "sources" complete in
     let ss = ref [] in let add s = ss := s :: !ss in
     let strs k = jlist k criteria |> List.filter_map (function `String s -> Some s | _ -> None) in
+    (* Check expect_no_retrieval *)
+    if jbool "expect_no_retrieval" criteria then begin
+      let status = jstr "status" query_resp in
+      let mids = jlist "message_ids" query_resp in
+      add (if status = "no_retrieval" then 1.0 else 0.0);
+      add (if mids = [] then 1.0 else 0.0)
+    end;
     (match strs "must_contain_any" with [] -> add 1.0 | mc -> add (if List.exists (fun kw -> contains_ci al kw) mc then 1.0 else 0.0));
     (match strs "must_not_contain" with [] -> add 1.0 | mn -> add (if List.for_all (fun kw -> not (contains_ci al kw)) mn then 1.0 else 0.0));
     if jbool "must_cite_emails" criteria then begin
