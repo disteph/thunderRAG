@@ -124,7 +124,8 @@ let embed_task_prefix (task : embed_task) : string option =
   else
     None
 
-let ollama_embed ~client ~sw ?(task : embed_task option) ~(text : string) () : (float list, string) result =
+let ollama_embed ~client ~sw ?(task : embed_task option) ?(label = "") ~(text : string) () : (float list, string) result =
+  let t0 = Unix.gettimeofday () in
   let prompt =
     match task with
     | None -> text
@@ -142,31 +143,38 @@ let ollama_embed ~client ~sw ?(task : embed_task option) ~(text : string) () : (
   let body_json = Yojson.Safe.to_string body_obj in
   let call () = post_json_uri ~client ~sw ~uri ~body_json in
   let resp, resp_body = !global_with_timeout !ollama_timeout_seconds call in
-  if not (is_ok_status (Http.Response.status resp)) then Error resp_body
-  else
-    try
-      let json = Yojson.Safe.from_string resp_body in
-      match json with
-      | `Assoc kv -> (
-          match List.assoc_opt "embedding" kv with
-          | Some (`List xs) ->
-              let vec =
-                xs
-                |> List.filter_map (function
-                     | `Float f -> Some f
-                     | `Int i -> Some (float_of_int i)
-                     | `Intlit s -> (try Some (float_of_string s) with
-                        | _ -> None)
-                     | `String s -> (try Some (float_of_string s) with
-                        | _ -> None)
-                     | _ -> None)
-              in
-              if vec = [] then Error "empty embedding" else Ok vec
-          | _ -> Error "missing embedding")
-      | _ -> Error "bad embedding response"
-    with ex -> Error (Printexc.to_string ex)
+  let result =
+    if not (is_ok_status (Http.Response.status resp)) then Error resp_body
+    else
+      try
+        let json = Yojson.Safe.from_string resp_body in
+        match json with
+        | `Assoc kv -> (
+            match List.assoc_opt "embedding" kv with
+            | Some (`List xs) ->
+                let vec =
+                  xs
+                  |> List.filter_map (function
+                       | `Float f -> Some f
+                       | `Int i -> Some (float_of_int i)
+                       | `Intlit s -> (try Some (float_of_string s) with
+                          | _ -> None)
+                       | `String s -> (try Some (float_of_string s) with
+                          | _ -> None)
+                       | _ -> None)
+                in
+                if vec = [] then Error "empty embedding" else Ok vec
+            | _ -> Error "missing embedding")
+        | _ -> Error "bad embedding response"
+      with ex -> Error (Printexc.to_string ex)
+  in
+  let dt = Unix.gettimeofday () -. t0 in
+  let tag = if label = "" then "embed" else "embed." ^ label in
+  Printf.eprintf "[timer] %s: %.3fs\n%!" tag dt;
+  result
 
-let ollama_chat ~client ~sw ?(model = "") ~(messages : Yojson.Safe.t list) () : (string, string) result =
+let ollama_chat ~client ~sw ?(label = "") ?(model = "") ~(messages : Yojson.Safe.t list) () : (string, string) result =
+  let t0 = Unix.gettimeofday () in
   let effective_model = if String.trim model <> "" then String.trim model else !ollama_llm_model in
   let uri = Uri.of_string (!ollama_base_url ^ "/api/chat") in
   let body_obj : Yojson.Safe.t =
@@ -181,20 +189,26 @@ let ollama_chat ~client ~sw ?(model = "") ~(messages : Yojson.Safe.t list) () : 
   let body_json = Yojson.Safe.to_string body_obj in
   let call () = post_json_uri ~client ~sw ~uri ~body_json in
   let resp, resp_body = !global_with_timeout !ollama_timeout_seconds call in
-  if not (is_ok_status (Http.Response.status resp)) then Error resp_body
-  else
-    try
-      let json = Yojson.Safe.from_string resp_body in
-      match json with
-      | `Assoc kv -> (
-          match List.assoc_opt "message" kv with
-          | Some (`Assoc mv) -> (
-              match List.assoc_opt "content" mv with
-              | Some (`String s) -> Ok s
-              | _ -> Error "missing chat content")
-          | _ -> Error "missing chat message")
-      | _ -> Error "bad chat response"
-    with ex -> Error (Printexc.to_string ex)
+  let result =
+    if not (is_ok_status (Http.Response.status resp)) then Error resp_body
+    else
+      try
+        let json = Yojson.Safe.from_string resp_body in
+        match json with
+        | `Assoc kv -> (
+            match List.assoc_opt "message" kv with
+            | Some (`Assoc mv) -> (
+                match List.assoc_opt "content" mv with
+                | Some (`String s) -> Ok s
+                | _ -> Error "missing chat content")
+            | _ -> Error "missing chat message")
+        | _ -> Error "bad chat response"
+      with ex -> Error (Printexc.to_string ex)
+  in
+  let dt = Unix.gettimeofday () -. t0 in
+  let tag = if label = "" then "chat" else "chat." ^ label in
+  Printf.eprintf "[timer] %s (%s): %.3fs\n%!" tag effective_model dt;
+  result
 
 (* Helper: create a JSON log entry for an LLM call.
    Used by the quality harness to inspect every prompt sent to every LLM. *)
@@ -291,7 +305,7 @@ let summarize_to_fit ~client ~sw ~system_prompt ~max_input_chars ~max_chars
         ; `Assoc [ ("role", `String "user"); ("content", `String chunk) ]
         ]
       in
-      match ollama_chat ~client ~sw ~model:!ollama_summarize_model ~messages () with
+      match ollama_chat ~client ~sw ~label:("summarize." ^ label) ~model:!ollama_summarize_model ~messages () with
       | Ok s ->
           if !rag_debug_ollama_chat then Printf.printf "\n[%s.summary.response]\n%s\n%!" label s;
           (match llm_log with Some log ->
@@ -407,7 +421,7 @@ let triage_email ~client ~sw ~(whoami : string)
     ; `Assoc [ ("role", `String "user"); ("content", `String user_msg) ]
     ]
   in
-  match ollama_chat ~client ~sw ~model:!ollama_triage_model ~messages () with
+  match ollama_chat ~client ~sw ~label:"triage" ~model:!ollama_triage_model ~messages () with
   | Ok raw_resp ->
       if !rag_debug_ollama_chat then Printf.printf "\n[triage.response]\n%s\n%!" raw_resp;
       (* Strip markdown code fences if the model wraps its JSON *)
@@ -821,7 +835,7 @@ let call_ollama_summarize ~client ~sw ~(text : string) ~(target_chars : int)
     ; `Assoc [ ("role", `String "user"); ("content", `String text) ]
     ]
   in
-  match ollama_chat ~client ~sw ~messages () with
+  match ollama_chat ~client ~sw ~label:"session_summary" ~messages () with
   | Ok s -> Some (trim_to_max (String.trim s) target_chars)
   | Error _ -> None
 
@@ -1065,7 +1079,7 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
   let embedded_chunks =
     chunks
     |> List.mapi (fun i ch ->
-           match ollama_embed ~client ~sw ~task:Search_document ~text:ch () with
+           match ollama_embed ~client ~sw ~task:Search_document ~label:"ingest" ~text:ch () with
            | Ok v -> (i, ch, l2_normalize v)
            | Error msg -> raise (Failure ("ollama_embed failed: " ^ msg)))
   in
@@ -1838,7 +1852,7 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
       in
       base @ summary @ turns @ final
     in
-    match ollama_chat ~client ~sw ~model:!ollama_rewrite_model ~messages () with
+    match ollama_chat ~client ~sw ~label:"rewrite" ~model:!ollama_rewrite_model ~messages () with
     | Ok raw_resp ->
         if !rag_debug_ollama_chat then
           Printf.printf "\n[retrieval.rewrite.response]\n%s\n%!" raw_resp;
@@ -2084,7 +2098,7 @@ let select_relevant_sources ~client ~sw ~(resolved_question : string)
   let messages : Yojson.Safe.t list =
     [ `Assoc [ ("role", `String "system"); ("content", `String system) ] ]
   in
-  match ollama_chat ~client ~sw ~model:!ollama_summarize_model ~messages () with
+  match ollama_chat ~client ~sw ~label:"select_evidence" ~model:!ollama_summarize_model ~messages () with
   | Error err ->
       (match llm_log with Some log ->
         log := !log @ [make_llm_call_entry ~label:"select_evidence"
@@ -2772,7 +2786,7 @@ let handler ~client ~sw ~clock _socket request body =
                     if String.trim chat_model_override <> "" then chat_model_override
                     else !ollama_llm_model
                   in
-                  match ollama_chat ~client ~sw ~model:chat_model_override ~messages () with
+                  match ollama_chat ~client ~sw ~label:"chat" ~model:chat_model_override ~messages () with
                   | Ok s ->
                       if !rag_debug_ollama_chat then
                         Printf.printf "\n[chat.raw_answer]\n%s\n%!" s;
@@ -2924,7 +2938,7 @@ let handler ~client ~sw ~clock _socket request body =
         let retrieval_sqls = ref [] in
         let retrieval_queries = ref [] in
         let embed_and_retrieve (query_text : string) : Yojson.Safe.t list =
-          match ollama_embed ~client ~sw ~task:Search_query ~text:query_text () with
+          match ollama_embed ~client ~sw ~task:Search_query ~label:"query" ~text:query_text () with
           | Error msg ->
               Printf.eprintf "[retrieval.embed.error] %s\n%!" msg;
               []

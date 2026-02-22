@@ -133,6 +133,7 @@ let upsert_email
     ~(action_score : int option) ~(importance_score : int option)
     ~(reply_by : string) ~(ingested_at : string)
     () : (unit, string) result =
+  let t0 = Unix.gettimeofday () in
   let doc_id = normalize_doc_id doc_id in
   let sql = {|
     INSERT INTO emails
@@ -165,15 +166,20 @@ let upsert_email
         (t4 (option int) (option int) string string)))
   in
   let req = Caqti_request.Infix.(pt ->. unit) ~oneshot:true sql in
-  use (fun (module C : Caqti_eio.CONNECTION) ->
-    C.exec req
-      ((doc_id, embed_model, triage_model, sender),
-       ((recipient, cc, bcc, subject),
-        ((email_date, attachments_json),
-         (action_score, importance_score, reply_by, ingested_at)))))
+  let result =
+    use (fun (module C : Caqti_eio.CONNECTION) ->
+      C.exec req
+        ((doc_id, embed_model, triage_model, sender),
+         ((recipient, cc, bcc, subject),
+          ((email_date, attachments_json),
+           (action_score, importance_score, reply_by, ingested_at)))))
+  in
+  Printf.eprintf "[timer] pg.upsert_email: %.3fs\n%!" (Unix.gettimeofday () -. t0);
+  result
 
 let insert_chunks ~(doc_id : string)
     (chunks : (int * string * float list) list) : (unit, string) result =
+  let t0 = Unix.gettimeofday () in
   let doc_id = normalize_doc_id doc_id in
   let sql = {|
     INSERT INTO email_chunks (doc_id, chunk_index, chunk_text, embedding)
@@ -181,16 +187,20 @@ let insert_chunks ~(doc_id : string)
   |} in
   let open Caqti_type in
   let req = Caqti_request.Infix.(t4 string int string string ->. unit) ~oneshot:true sql in
-  use (fun (module C : Caqti_eio.CONNECTION) ->
-    let rec run = function
-      | [] -> Ok ()
-      | (idx, text, emb) :: rest ->
-          let vec_str = float_list_to_pgvector emb in
-          (match C.exec req (doc_id, idx, text, vec_str) with
-           | Ok () -> run rest
-           | Error _ as e -> e)
-    in
-    run chunks)
+  let result =
+    use (fun (module C : Caqti_eio.CONNECTION) ->
+      let rec run = function
+        | [] -> Ok ()
+        | (idx, text, emb) :: rest ->
+            let vec_str = float_list_to_pgvector emb in
+            (match C.exec req (doc_id, idx, text, vec_str) with
+             | Ok () -> run rest
+             | Error _ as e -> e)
+      in
+      run chunks)
+  in
+  Printf.eprintf "[timer] pg.insert_chunks (%d): %.3fs\n%!" (List.length chunks) (Unix.gettimeofday () -. t0);
+  result
 
 let delete_email (doc_id : string) : (unit, string) result =
   let doc_id = normalize_doc_id doc_id in
@@ -369,6 +379,7 @@ let knn_row_type =
 let query_knn ~(embedding : float list) ~(top_k : int)
     ?(filter : string option) ?(score_expr : string option)
     () : (Yojson.Safe.t list * string, string) result =
+  let t0 = Unix.gettimeofday () in
   let vec = float_list_to_pgvector embedding in
   let order_clause =
     match score_expr with
@@ -408,7 +419,11 @@ let query_knn ~(embedding : float list) ~(top_k : int)
     parts := !parts @ [Printf.sprintf "LIMIT %d" top_k];
     String.concat " " !parts
   in
-  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
-    match C.collect_list req (vec, top_k) with
-    | Error _ as e -> e
-    | Ok rows -> Ok (List.map row_to_source_json rows, display_sql))
+  let result =
+    use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+      match C.collect_list req (vec, top_k) with
+      | Error _ as e -> e
+      | Ok rows -> Ok (List.map row_to_source_json rows, display_sql))
+  in
+  Printf.eprintf "[timer] pg.query_knn (top_k=%d): %.3fs\n%!" top_k (Unix.gettimeofday () -. t0);
+  result
