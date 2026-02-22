@@ -55,47 +55,43 @@ type error = string
 
 let fail msg = Error msg
 
-let rec walk (json : Yojson.Safe.t) : (unit, error) result =
+let rec walk_with_template (tn : SS.t) (json : Yojson.Safe.t) : (unit, error) result =
   match json with
-  | `Assoc kv -> walk_assoc kv
-  | `List items -> walk_list items
+  | `Assoc kv -> walk_assoc tn kv
+  | `List items -> walk_list tn items
   | _ -> Ok ()
 
-and walk_list items =
+and walk_list tn items =
   let rec go = function
     | [] -> Ok ()
     | x :: rest ->
-        (match walk x with Ok () -> go rest | Error _ as e -> e)
+        (match walk_with_template tn x with Ok () -> go rest | Error _ as e -> e)
   in
   go items
 
-and walk_assoc kv =
-  (* If this object has a single key that looks like a node type name,
-     validate the node type and then walk its children. *)
+and walk_assoc tn kv =
   match kv with
   | [(node_type, children)] when String.length node_type > 0
       && Char.uppercase_ascii node_type.[0] = node_type.[0] ->
-      check_node node_type children
+      check_node tn node_type children
   | _ ->
-      (* Walk all values *)
-      walk_list (List.map snd kv)
+      walk_list tn (List.map snd kv)
 
-and check_node (node_type : string) (children : Yojson.Safe.t) : (unit, error) result =
-  (* Always allow structural wrappers *)
-  if node_type = "RawStmt" || node_type = "SelectStmt" || node_type = "ResTarget" || node_type = "JoinExpr" then
-    walk children
+and check_node tn (node_type : string) (children : Yojson.Safe.t) : (unit, error) result =
+  (* Allow any node type that the wrapper template itself produces *)
+  if SS.mem node_type tn then
+    walk_with_template tn children
   else if not (SS.mem node_type allowed_node_types) then
     fail (Printf.sprintf "forbidden SQL node type: %s" node_type)
   else
     match node_type with
     | "ColumnRef" -> check_column_ref children
-    | "FuncCall" -> check_func_call children
-    | "TypeCast" -> check_type_cast children
+    | "FuncCall" -> check_func_call tn children
+    | "TypeCast" -> check_type_cast tn children
     | "SubLink" -> fail "subqueries (SubLink) are not allowed"
-    | _ -> walk children
+    | _ -> walk_with_template tn children
 
 and check_column_ref (children : Yojson.Safe.t) : (unit, error) result =
-  (* Extract column name from fields list *)
   let fields =
     match children with
     | `Assoc kv -> (
@@ -119,7 +115,7 @@ and check_column_ref (children : Yojson.Safe.t) : (unit, error) result =
   else
     fail (Printf.sprintf "forbidden column reference: %s" col_name)
 
-and check_func_call (children : Yojson.Safe.t) : (unit, error) result =
+and check_func_call tn (children : Yojson.Safe.t) : (unit, error) result =
   let funcname =
     match children with
     | `Assoc kv -> (
@@ -136,14 +132,13 @@ and check_func_call (children : Yojson.Safe.t) : (unit, error) result =
         | _ -> "")
     | _ -> ""
   in
-  if funcname = "" then walk children
+  if funcname = "" then walk_with_template tn children
   else if SS.mem (String.lowercase_ascii funcname) allowed_functions then
-    walk children
+    walk_with_template tn children
   else
     fail (Printf.sprintf "forbidden function: %s" funcname)
 
-and check_type_cast (children : Yojson.Safe.t) : (unit, error) result =
-  (* Extract target type name *)
+and check_type_cast tn (children : Yojson.Safe.t) : (unit, error) result =
   let type_name =
     match children with
     | `Assoc kv -> (
@@ -166,11 +161,31 @@ and check_type_cast (children : Yojson.Safe.t) : (unit, error) result =
   if type_name <> "" && not (SS.mem (String.lowercase_ascii type_name) allowed_types) then
     fail (Printf.sprintf "forbidden type cast: %s" type_name)
   else
-    walk children
+    walk_with_template tn children
+
+(* ---------- template node discovery ---------- *)
+
+let rec collect_node_types acc (json : Yojson.Safe.t) : SS.t =
+  match json with
+  | `Assoc [(node_type, children)] when String.length node_type > 0
+      && Char.uppercase_ascii node_type.[0] = node_type.[0] ->
+      collect_node_types (SS.add node_type acc) children
+  | `Assoc kv -> List.fold_left (fun a (_, v) -> collect_node_types a v) acc kv
+  | `List items -> List.fold_left collect_node_types acc items
+  | _ -> acc
+
+let template_node_types ~(wrapper : string) : SS.t =
+  let sql = Scanf.format_from_string wrapper "%s" |> fun fmt -> Printf.sprintf fmt "1=1" in
+  match Pg_query.parse sql with
+  | Error _ -> SS.empty
+  | Ok tree ->
+      match Yojson.Safe.from_string tree with
+      | exception _ -> SS.empty
+      | json -> collect_node_types SS.empty json
 
 (* ---------- public API ---------- *)
 
-let validate_fragment ~(wrapper : string) (fragment : string) : (string, string) result =
+let validate_fragment ~(wrapper : string) ~(template_nodes : SS.t) (fragment : string) : (string, string) result =
   let fragment = String.trim fragment in
   if fragment = "" then Error "empty SQL fragment"
   else
@@ -181,12 +196,18 @@ let validate_fragment ~(wrapper : string) (fragment : string) : (string, string)
         match Yojson.Safe.from_string parse_tree with
         | exception _ -> Error "failed to parse libpg_query JSON output"
         | json ->
-            match walk json with
+            match walk_with_template template_nodes json with
             | Ok () -> Ok fragment
             | Error msg -> Error msg
 
+let filter_wrapper = "SELECT 1 FROM emails e JOIN email_chunks ec ON true WHERE (%s)"
+let filter_template_nodes = template_node_types ~wrapper:filter_wrapper
+
+let score_wrapper = "SELECT (%s) AS score FROM emails e JOIN email_chunks ec ON true"
+let score_template_nodes = template_node_types ~wrapper:score_wrapper
+
 let validate_filter (fragment : string) : (string, string) result =
-  validate_fragment ~wrapper:"SELECT 1 FROM emails e JOIN email_chunks ec ON true WHERE (%s)" fragment
+  validate_fragment ~wrapper:filter_wrapper ~template_nodes:filter_template_nodes fragment
 
 let validate_score (fragment : string) : (string, string) result =
-  validate_fragment ~wrapper:"SELECT (%s) AS score FROM emails e JOIN email_chunks ec ON true" fragment
+  validate_fragment ~wrapper:score_wrapper ~template_nodes:score_template_nodes fragment
