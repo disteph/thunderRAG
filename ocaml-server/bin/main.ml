@@ -108,6 +108,36 @@ let get_uri ~client ~sw:_ ~(uri : Uri.t) : (Http.Response.t * string) =
   - RAG_DEBUG_OLLAMA_EMBED=1 prints the exact embeddings request JSON.
   - RAG_DEBUG_OLLAMA_CHAT=1 prints the exact chat request JSON.
 *)
+type call_stats = { mutable total : float; mutable count : int }
+let make_stats () = { total = 0.; count = 0 }
+let record s dt = s.total <- s.total +. dt; s.count <- s.count + 1
+
+let stats_embed_ingest    = make_stats ()
+let stats_embed_query     = make_stats ()
+let stats_chat_triage     = make_stats ()
+let stats_chat_summarize  = make_stats ()
+let stats_chat_session    = make_stats ()
+let stats_chat_rewrite    = make_stats ()
+let stats_chat_select     = make_stats ()
+let stats_chat_answer     = make_stats ()
+let stats_pg_upsert       = make_stats ()
+let stats_pg_insert       = make_stats ()
+let stats_pg_query_knn    = make_stats ()
+
+let all_stats = [
+  ("embed.ingest",       stats_embed_ingest);
+  ("embed.query",        stats_embed_query);
+  ("chat.triage",        stats_chat_triage);
+  ("chat.summarize",     stats_chat_summarize);
+  ("chat.session",       stats_chat_session);
+  ("chat.rewrite",       stats_chat_rewrite);
+  ("chat.select",        stats_chat_select);
+  ("chat.answer",        stats_chat_answer);
+  ("pg.upsert_email",    stats_pg_upsert);
+  ("pg.insert_chunks",   stats_pg_insert);
+  ("pg.query_knn",       stats_pg_query_knn);
+]
+
 type embed_task = Search_document | Search_query
 
 (* Models known to support task-prefixed embeddings.
@@ -124,7 +154,7 @@ let embed_task_prefix (task : embed_task) : string option =
   else
     None
 
-let ollama_embed ~client ~sw ?(task : embed_task option) ?(label = "") ~(text : string) () : (float list, string) result =
+let ollama_embed ~client ~sw ?(task : embed_task option) ?(label = "") ?(stats : call_stats option) ~(text : string) () : (float list, string) result =
   let t0 = Unix.gettimeofday () in
   let prompt =
     match task with
@@ -171,9 +201,10 @@ let ollama_embed ~client ~sw ?(task : embed_task option) ?(label = "") ~(text : 
   let dt = Unix.gettimeofday () -. t0 in
   let tag = if label = "" then "embed" else "embed." ^ label in
   Printf.eprintf "[timer] %s: %.3fs\n%!" tag dt;
+  (match stats with Some s -> record s dt | None -> ());
   result
 
-let ollama_chat ~client ~sw ?(label = "") ?(model = "") ~(messages : Yojson.Safe.t list) () : (string, string) result =
+let ollama_chat ~client ~sw ?(label = "") ?(stats : call_stats option) ?(model = "") ~(messages : Yojson.Safe.t list) () : (string, string) result =
   let t0 = Unix.gettimeofday () in
   let effective_model = if String.trim model <> "" then String.trim model else !ollama_llm_model in
   let uri = Uri.of_string (!ollama_base_url ^ "/api/chat") in
@@ -208,6 +239,7 @@ let ollama_chat ~client ~sw ?(label = "") ?(model = "") ~(messages : Yojson.Safe
   let dt = Unix.gettimeofday () -. t0 in
   let tag = if label = "" then "chat" else "chat." ^ label in
   Printf.eprintf "[timer] %s (%s): %.3fs\n%!" tag effective_model dt;
+  (match stats with Some s -> record s dt | None -> ());
   result
 
 (* Helper: create a JSON log entry for an LLM call.
@@ -305,7 +337,7 @@ let summarize_to_fit ~client ~sw ~system_prompt ~max_input_chars ~max_chars
         ; `Assoc [ ("role", `String "user"); ("content", `String chunk) ]
         ]
       in
-      match ollama_chat ~client ~sw ~label:("summarize." ^ label) ~model:!ollama_summarize_model ~messages () with
+      match ollama_chat ~client ~sw ~label:("summarize." ^ label) ~stats:stats_chat_summarize ~model:!ollama_summarize_model ~messages () with
       | Ok s ->
           if !rag_debug_ollama_chat then Printf.printf "\n[%s.summary.response]\n%s\n%!" label s;
           (match llm_log with Some log ->
@@ -421,7 +453,7 @@ let triage_email ~client ~sw ~(whoami : string)
     ; `Assoc [ ("role", `String "user"); ("content", `String user_msg) ]
     ]
   in
-  match ollama_chat ~client ~sw ~label:"triage" ~model:!ollama_triage_model ~messages () with
+  match ollama_chat ~client ~sw ~label:"triage" ~stats:stats_chat_triage ~model:!ollama_triage_model ~messages () with
   | Ok raw_resp ->
       if !rag_debug_ollama_chat then Printf.printf "\n[triage.response]\n%s\n%!" raw_resp;
       (* Strip markdown code fences if the model wraps its JSON *)
@@ -835,7 +867,7 @@ let call_ollama_summarize ~client ~sw ~(text : string) ~(target_chars : int)
     ; `Assoc [ ("role", `String "user"); ("content", `String text) ]
     ]
   in
-  match ollama_chat ~client ~sw ~label:"session_summary" ~messages () with
+  match ollama_chat ~client ~sw ~label:"session_summary" ~stats:stats_chat_session ~messages () with
   | Ok s -> Some (trim_to_max (String.trim s) target_chars)
   | Error _ -> None
 
@@ -1079,7 +1111,7 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
   let embedded_chunks =
     chunks
     |> List.mapi (fun i ch ->
-           match ollama_embed ~client ~sw ~task:Search_document ~label:"ingest" ~text:ch () with
+           match ollama_embed ~client ~sw ~task:Search_document ~label:"ingest" ~stats:stats_embed_ingest ~text:ch () with
            | Ok v -> (i, ch, l2_normalize v)
            | Error msg -> raise (Failure ("ollama_embed failed: " ^ msg)))
   in
@@ -1111,14 +1143,15 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
       ~email_date:(parse_rfc822_to_iso8601 date_)
       ~attachments_json:att_pg_array
       ~action_score ~importance_score ~reply_by
-      ~ingested_at:(now_utc_iso8601 ()) ()
+      ~ingested_at:(now_utc_iso8601 ())
+      ~on_done:(record stats_pg_upsert) ()
     with
     | Error e ->
         Printf.eprintf "[ingest.pg.error] upsert_email: %s\n%!" e;
         let resp = Http.Response.make ~status:`Internal_server_error () in
         (resp, Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
     | Ok () ->
-        match Rag_lib.Pg.insert_chunks ~doc_id embedded_chunks with
+        match Rag_lib.Pg.insert_chunks ~doc_id ~on_done:(record stats_pg_insert) embedded_chunks with
         | Error e ->
             Printf.eprintf "[ingest.pg.error] insert_chunks: %s\n%!" e;
             let resp = Http.Response.make ~status:`Internal_server_error () in
@@ -1852,7 +1885,7 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
       in
       base @ summary @ turns @ final
     in
-    match ollama_chat ~client ~sw ~label:"rewrite" ~model:!ollama_rewrite_model ~messages () with
+    match ollama_chat ~client ~sw ~label:"rewrite" ~stats:stats_chat_rewrite ~model:!ollama_rewrite_model ~messages () with
     | Ok raw_resp ->
         if !rag_debug_ollama_chat then
           Printf.printf "\n[retrieval.rewrite.response]\n%s\n%!" raw_resp;
@@ -2098,7 +2131,7 @@ let select_relevant_sources ~client ~sw ~(resolved_question : string)
   let messages : Yojson.Safe.t list =
     [ `Assoc [ ("role", `String "system"); ("content", `String system) ] ]
   in
-  match ollama_chat ~client ~sw ~label:"select_evidence" ~model:!ollama_summarize_model ~messages () with
+  match ollama_chat ~client ~sw ~label:"select_evidence" ~stats:stats_chat_select ~model:!ollama_summarize_model ~messages () with
   | Error err ->
       (match llm_log with Some log ->
         log := !log @ [make_llm_call_entry ~label:"select_evidence"
@@ -2166,6 +2199,16 @@ let handler ~client ~sw ~clock _socket request body =
     - /query/complete: final prompt construction + Ollama chat
   *)
   match Http.Request.meth request, Http.Request.resource request with
+  | `GET, "/admin/timers" ->
+      let entries = all_stats |> List.map (fun (name, s) ->
+        `Assoc [
+          ("name", `String name);
+          ("count", `Int s.count);
+          ("total", `Float s.total);
+          ("avg", `Float (if s.count > 0 then s.total /. float_of_int s.count else 0.));
+        ]) in
+      let body = Yojson.Safe.to_string (`List entries) in
+      Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
   | `GET, "/admin/config" ->
       (* Return current settings.json and prompts.json content for test archival *)
       let read_file_opt path =
@@ -2786,7 +2829,7 @@ let handler ~client ~sw ~clock _socket request body =
                     if String.trim chat_model_override <> "" then chat_model_override
                     else !ollama_llm_model
                   in
-                  match ollama_chat ~client ~sw ~label:"chat" ~model:chat_model_override ~messages () with
+                  match ollama_chat ~client ~sw ~label:"chat" ~stats:stats_chat_answer ~model:chat_model_override ~messages () with
                   | Ok s ->
                       if !rag_debug_ollama_chat then
                         Printf.printf "\n[chat.raw_answer]\n%s\n%!" s;
@@ -2938,7 +2981,7 @@ let handler ~client ~sw ~clock _socket request body =
         let retrieval_sqls = ref [] in
         let retrieval_queries = ref [] in
         let embed_and_retrieve (query_text : string) : Yojson.Safe.t list =
-          match ollama_embed ~client ~sw ~task:Search_query ~label:"query" ~text:query_text () with
+          match ollama_embed ~client ~sw ~task:Search_query ~label:"query" ~stats:stats_embed_query ~text:query_text () with
           | Error msg ->
               Printf.eprintf "[retrieval.embed.error] %s\n%!" msg;
               []

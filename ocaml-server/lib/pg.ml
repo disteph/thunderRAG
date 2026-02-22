@@ -132,6 +132,7 @@ let upsert_email
     ~(attachments_json : string)
     ~(action_score : int option) ~(importance_score : int option)
     ~(reply_by : string) ~(ingested_at : string)
+    ?(on_done : (float -> unit) option)
     () : (unit, string) result =
   let t0 = Unix.gettimeofday () in
   let doc_id = normalize_doc_id doc_id in
@@ -174,10 +175,12 @@ let upsert_email
           ((email_date, attachments_json),
            (action_score, importance_score, reply_by, ingested_at)))))
   in
-  Printf.eprintf "[timer] pg.upsert_email: %.3fs\n%!" (Unix.gettimeofday () -. t0);
+  let dt = Unix.gettimeofday () -. t0 in
+  Printf.eprintf "[timer] pg.upsert_email: %.3fs\n%!" dt;
+  (match on_done with Some f -> f dt | None -> ());
   result
 
-let insert_chunks ~(doc_id : string)
+let insert_chunks ~(doc_id : string) ?(on_done : (float -> unit) option)
     (chunks : (int * string * float list) list) : (unit, string) result =
   let t0 = Unix.gettimeofday () in
   let doc_id = normalize_doc_id doc_id in
@@ -199,7 +202,9 @@ let insert_chunks ~(doc_id : string)
       in
       run chunks)
   in
-  Printf.eprintf "[timer] pg.insert_chunks (%d): %.3fs\n%!" (List.length chunks) (Unix.gettimeofday () -. t0);
+  let dt = Unix.gettimeofday () -. t0 in
+  Printf.eprintf "[timer] pg.insert_chunks (%d): %.3fs\n%!" (List.length chunks) dt;
+  (match on_done with Some f -> f dt | None -> ());
   result
 
 let delete_email (doc_id : string) : (unit, string) result =
@@ -378,6 +383,7 @@ let knn_row_type =
 
 let query_knn ~(embedding : float list) ~(top_k : int)
     ?(filter : string option) ?(score_expr : string option)
+    ?(on_done : (float -> unit) option)
     () : (Yojson.Safe.t list * string, string) result =
   let t0 = Unix.gettimeofday () in
   let vec = float_list_to_pgvector embedding in
@@ -425,5 +431,7 @@ let query_knn ~(embedding : float list) ~(top_k : int)
       | Error _ as e -> e
       | Ok rows -> Ok (List.map row_to_source_json rows, display_sql))
   in
-  Printf.eprintf "[timer] pg.query_knn (top_k=%d): %.3fs\n%!" top_k (Unix.gettimeofday () -. t0);
+  let dt = Unix.gettimeofday () -. t0 in
+  Printf.eprintf "[timer] pg.query_knn (top_k=%d): %.3fs\n%!" top_k dt;
+  (match on_done with Some f -> f dt | None -> ());
   result

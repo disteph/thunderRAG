@@ -249,11 +249,6 @@ function setAssistantMessage(bubble, answer, sources, retrievalInfo) {
   const meta = document.createElement("div");
   meta.className = "assistant-meta";
 
-  const details = document.createElement("details");
-  const summary = document.createElement("summary");
-  const summaryRow = document.createElement("div");
-  summaryRow.className = "summary-row";
-
   const summaryProgress = document.createElement("span");
   summaryProgress.className = "summary-progress";
   summaryProgress.style.display = "none";
@@ -267,10 +262,15 @@ function setAssistantMessage(bubble, answer, sources, retrievalInfo) {
 
   summaryProgress.appendChild(progressLabel);
   summaryProgress.appendChild(progress);
-  summaryRow.appendChild(summaryProgress);
+  meta.appendChild(summaryProgress);
+
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = "";
+  details.appendChild(summary);
 
   if (retrievalQueries.length > 0 || retrievalSql) {
-    const infoSpan = document.createElement("span");
+    const infoSpan = document.createElement("div");
     infoSpan.className = "retrieval-info";
     const parts = [];
     if (retrievalQueries.length > 0) {
@@ -283,18 +283,18 @@ function setAssistantMessage(bubble, answer, sources, retrievalInfo) {
     infoSpan.title = (retrievalQueries.length > 0
       ? "Embedded queries:\n" + retrievalQueries.map((q, i) => `  ${i + 1}. ${q}`).join("\n") + "\n"
       : "") + (retrievalSql ? "SQL clauses: " + retrievalSql : "");
-    summaryRow.appendChild(infoSpan);
+    details.appendChild(infoSpan);
   }
-
-  summary.appendChild(summaryRow);
-  details.appendChild(summary);
 
   const sourcesContainer = document.createElement("div");
   sourcesContainer.className = "sources";
   renderSourcesInto(sourcesContainer, sources || []);
   details.appendChild(sourcesContainer);
 
-  meta.appendChild(details);
+  const hasAnswer = String(answer || "").trim() !== "";
+  if (hasAnswer) {
+    meta.appendChild(details);
+  }
   bubble.appendChild(meta);
 
   const answerEl = document.createElement("div");
@@ -388,8 +388,8 @@ function setAssistantMessage(bubble, answer, sources, retrievalInfo) {
 
 function setSourcesProgress(bubble, current, total) {
   /*
-    Show and update the inline progress bar inside the Sources summary header.
-    This remains visible even while the Sources <details> is collapsed.
+    Show and update the inline progress bar above the answer area.
+    Visible during evidence upload, hidden once complete.
   */
   const s = bubble && bubble.__rag;
   if (!s) return;

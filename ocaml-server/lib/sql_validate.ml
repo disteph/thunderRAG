@@ -82,7 +82,7 @@ and walk_assoc kv =
 
 and check_node (node_type : string) (children : Yojson.Safe.t) : (unit, error) result =
   (* Always allow structural wrappers *)
-  if node_type = "RawStmt" || node_type = "SelectStmt" || node_type = "ResTarget" then
+  if node_type = "RawStmt" || node_type = "SelectStmt" || node_type = "ResTarget" || node_type = "JoinExpr" then
     walk children
   else if not (SS.mem node_type allowed_node_types) then
     fail (Printf.sprintf "forbidden SQL node type: %s" node_type)
