@@ -77,15 +77,14 @@ let schema_statements =
        cc            TEXT NOT NULL DEFAULT '',
        bcc           TEXT NOT NULL DEFAULT '',
        subject       TEXT NOT NULL DEFAULT '',
-       email_date    TEXT NOT NULL DEFAULT '',
-       attachments   JSONB NOT NULL DEFAULT '[]',
+       email_date    TIMESTAMPTZ,
+       attachments   TEXT[] NOT NULL DEFAULT '{}',
        action_score  INT,
        importance_score INT,
-       reply_by      TEXT NOT NULL DEFAULT '',
+       reply_by      TIMESTAMPTZ,
        processed     BOOLEAN NOT NULL DEFAULT FALSE,
-       processed_at  TEXT,
-       ingested_at   TEXT NOT NULL DEFAULT '',
-       message_id    TEXT NOT NULL DEFAULT ''
+       processed_at  TIMESTAMPTZ,
+       ingested_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
      )|}
   ; {|CREATE TABLE IF NOT EXISTS email_chunks (
        id          SERIAL PRIMARY KEY,
@@ -95,29 +94,33 @@ let schema_statements =
        embedding   vector(768) NOT NULL
      )|}
   ; {|CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON email_chunks(doc_id)|}
+  (* Migration: drop redundant message_id column (identical to doc_id) *)
+  ; {|ALTER TABLE emails DROP COLUMN IF EXISTS message_id|}
   ]
 
+let init_schema_with (module C : Caqti_eio.CONNECTION) =
+  let rec run = function
+    | [] -> Ok ()
+    | sql :: rest ->
+        let req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true sql in
+        (match C.exec req () with
+         | Ok () -> run rest
+         | Error _ as e -> e)
+  in
+  run schema_statements
+
 let init_schema () : (unit, string) result =
-  use (fun (module C : Caqti_eio.CONNECTION) ->
-    let rec run = function
-      | [] -> Ok ()
-      | sql :: rest ->
-          let req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true sql in
-          (match C.exec req () with
-           | Ok () -> run rest
-           | Error _ as e -> e)
-    in
-    run schema_statements)
+  use (fun (module C : Caqti_eio.CONNECTION) -> init_schema_with (module C))
 
 (* ---------- init ---------- *)
 
 let init ~(sw : Eio.Switch.t) ~(stdenv : Caqti_eio.stdenv) : (unit, string) result =
-  let uri = Uri.of_string pg_connection_string in
+  let uri = Uri.of_string !pg_connection_string in
   match Caqti_eio_unix.connect_pool ~sw ~stdenv uri with
   | Error e -> Error (Caqti_error.show e)
   | Ok p ->
       pool_ref := Some p;
-      Printf.printf "[pg] connected to %s\n%!" pg_connection_string;
+      Printf.printf "[pg] connected to %s\n%!" !pg_connection_string;
       init_schema ()
 
 (* ---------- email CRUD ---------- *)
@@ -128,15 +131,15 @@ let upsert_email
     ~(subject : string) ~(email_date : string)
     ~(attachments_json : string)
     ~(action_score : int option) ~(importance_score : int option)
-    ~(reply_by : string) ~(ingested_at : string) ~(message_id : string)
+    ~(reply_by : string) ~(ingested_at : string)
     () : (unit, string) result =
   let doc_id = normalize_doc_id doc_id in
   let sql = {|
     INSERT INTO emails
       (doc_id, embed_model, triage_model, sender, recipient, cc, bcc,
        subject, email_date, attachments, action_score, importance_score,
-       reply_by, processed, ingested_at, message_id)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,FALSE,$14,$15)
+       reply_by, processed, ingested_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')::timestamptz,$10::text[],$11,$12,NULLIF($13,'')::timestamptz,FALSE,NULLIF($14,'')::timestamptz)
     ON CONFLICT (doc_id) DO UPDATE SET
       embed_model = EXCLUDED.embed_model,
       triage_model = EXCLUDED.triage_model,
@@ -146,12 +149,11 @@ let upsert_email
       bcc = EXCLUDED.bcc,
       subject = EXCLUDED.subject,
       email_date = EXCLUDED.email_date,
-      attachments = EXCLUDED.attachments,
+      attachments = EXCLUDED.attachments::text[],
       action_score = EXCLUDED.action_score,
       importance_score = EXCLUDED.importance_score,
       reply_by = EXCLUDED.reply_by,
-      ingested_at = EXCLUDED.ingested_at,
-      message_id = EXCLUDED.message_id
+      ingested_at = EXCLUDED.ingested_at
   |} in
   let open Caqti_type in
   let pt = t2
@@ -160,9 +162,7 @@ let upsert_email
       (t4 string string string string)
       (t2
         (t2 string string)
-        (t2
-          (t4 (option int) (option int) string string)
-          string)))
+        (t4 (option int) (option int) string string)))
   in
   let req = Caqti_request.Infix.(pt ->. unit) ~oneshot:true sql in
   use (fun (module C : Caqti_eio.CONNECTION) ->
@@ -170,8 +170,7 @@ let upsert_email
       ((doc_id, embed_model, triage_model, sender),
        ((recipient, cc, bcc, subject),
         ((email_date, attachments_json),
-         ((action_score, importance_score, reply_by, ingested_at),
-          message_id)))))
+         (action_score, importance_score, reply_by, ingested_at)))))
 
 let insert_chunks ~(doc_id : string)
     (chunks : (int * string * float list) list) : (unit, string) result =
@@ -200,9 +199,17 @@ let delete_email (doc_id : string) : (unit, string) result =
   use (fun (module C : Caqti_eio.CONNECTION) -> C.exec req doc_id)
 
 let reset_all () : (unit, string) result =
-  let sql = "TRUNCATE emails CASCADE" in
-  let req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) sql in
-  use (fun (module C : Caqti_eio.CONNECTION) -> C.exec req ())
+  use (fun (module C : Caqti_eio.CONNECTION) ->
+    let exec sql =
+      let req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true sql in
+      C.exec req ()
+    in
+    match exec "DROP TABLE IF EXISTS email_chunks" with
+    | Error _ as e -> e
+    | Ok () ->
+      match exec "DROP TABLE IF EXISTS emails" with
+      | Error _ as e -> e
+      | Ok () -> init_schema_with (module C : Caqti_eio.CONNECTION))
 
 (* ---------- status queries ---------- *)
 
@@ -237,8 +244,14 @@ let get_email_detail (doc_id : string) : (Yojson.Safe.t option, string) result =
   let doc_id = normalize_doc_id doc_id in
   let sql = {|
     SELECT doc_id, embed_model, triage_model, sender, recipient, cc, bcc,
-           subject, email_date, attachments::text, action_score, importance_score,
-           reply_by, processed, COALESCE(processed_at,''), ingested_at, message_id
+           subject,
+           COALESCE(email_date::text, ''),
+           COALESCE(array_to_json(attachments)::text, '[]'),
+           action_score, importance_score,
+           COALESCE(TO_CHAR(reply_by, 'YYYY-MM-DD'), ''),
+           processed,
+           COALESCE(processed_at::text, ''),
+           COALESCE(ingested_at::text, '')
     FROM emails WHERE doc_id = $1
   |} in
   let open Caqti_type in
@@ -250,7 +263,7 @@ let get_email_detail (doc_id : string) : (Yojson.Safe.t option, string) result =
         (t2 string string)
         (t2
           (t4 (option int) (option int) string bool)
-          (t3 string string string))))
+          (t2 string string))))
   in
   let req = Caqti_request.Infix.(string ->? rt) ~oneshot:true sql in
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
@@ -261,7 +274,7 @@ let get_email_detail (doc_id : string) : (Yojson.Safe.t option, string) result =
                 ((recipient, cc, bcc, subject),
                  ((email_date, att_text),
                   ((action_score, importance_score, reply_by, processed),
-                   (processed_at, ingested_at, message_id)))))) ->
+                   (processed_at, ingested_at)))))) ->
         let attachments = try Yojson.Safe.from_string att_text with _ -> `List [] in
         let metadata =
           `Assoc
@@ -272,7 +285,6 @@ let get_email_detail (doc_id : string) : (Yojson.Safe.t option, string) result =
             ; ("subject", `String subject)
             ; ("date", `String email_date)
             ; ("attachments", attachments)
-            ; ("message_id", `String message_id)
             ; ("action_score", match action_score with Some s -> `Int s | None -> `Null)
             ; ("importance_score", match importance_score with Some s -> `Int s | None -> `Null)
             ; ("reply_by", `String reply_by)
@@ -292,7 +304,7 @@ let set_processed (doc_id : string) (value : bool) : (bool, string) result =
   let doc_id = normalize_doc_id doc_id in
   if value then
     let sql = {|
-      UPDATE emails SET processed = TRUE, processed_at = $2
+      UPDATE emails SET processed = TRUE, processed_at = $2::timestamptz
       WHERE doc_id = $1
     |} in
     let req = Caqti_request.Infix.(Caqti_type.(t2 string string) ->. Caqti_type.unit) ~oneshot:true sql in
@@ -317,7 +329,7 @@ let row_to_source_json
     ((doc_id, chunk_text, distance, sender),
      ((recipient, cc, bcc, subject),
       ((email_date, att_text, action_score, importance_score),
-       (reply_by, processed, ingested_at, message_id))))
+       (reply_by, processed, ingested_at))))
     : Yojson.Safe.t =
   let score = 1.0 -. distance in
   let attachments = try Yojson.Safe.from_string att_text with _ -> `List [] in
@@ -330,7 +342,6 @@ let row_to_source_json
        ; ("subject", `String subject)
        ; ("date", `String email_date)
        ; ("attachments", attachments)
-       ; ("message_id", `String message_id)
        ; ("reply_by", `String reply_by)
        ; ("processed", `Bool processed)
        ; ("ingested_at", `String ingested_at)
@@ -353,7 +364,7 @@ let knn_row_type =
       (t4 string string string string)
       (t2
         (t4 string string (option int) (option int))
-        (t4 string bool string string)))
+        (t3 string bool string)))
 
 let query_knn ~(embedding : float list) ~(top_k : int)
     ?(filter : string option) ?(score_expr : string option)
@@ -372,9 +383,12 @@ let query_knn ~(embedding : float list) ~(top_k : int)
   let sql = Printf.sprintf {|
     SELECT ec.doc_id, ec.chunk_text,
            ec.embedding <=> $1::vector AS distance,
-           e.sender, e.recipient, e.cc, e.bcc, e.subject, e.email_date,
-           e.attachments::text, e.action_score, e.importance_score,
-           e.reply_by, e.processed, e.ingested_at, e.message_id
+           e.sender, e.recipient, e.cc, e.bcc, e.subject, COALESCE(e.email_date::text, ''),
+           COALESCE(array_to_json(e.attachments)::text, '[]'),
+           e.action_score, e.importance_score,
+           COALESCE(TO_CHAR(e.reply_by, 'YYYY-MM-DD'), ''),
+           e.processed,
+           COALESCE(e.ingested_at::text, '')
     FROM email_chunks ec
     JOIN emails e ON ec.doc_id = e.doc_id
     %s
@@ -383,25 +397,16 @@ let query_knn ~(embedding : float list) ~(top_k : int)
   |} where_clause order_clause in
   let open Caqti_type in
   let req = Caqti_request.Infix.(t2 string int ->* knn_row_type) ~oneshot:true sql in
-  let replace_all ~(pat : string) ~(rep : string) (s : string) : string =
-    let pl = String.length pat in
-    let sl = String.length s in
-    if pl = 0 then s
-    else
-      let buf = Buffer.create sl in
-      let rec scan i =
-        if i > sl - pl then (Buffer.add_substring buf s i (sl - i); Buffer.contents buf)
-        else if String.sub s i pl = pat then
-          (Buffer.add_string buf rep; scan (i + pl))
-        else (Buffer.add_char buf s.[i]; scan (i + 1))
-      in
-      scan 0
-  in
   let display_sql =
-    let s = String.trim sql in
-    let s = replace_all ~pat:"$1::vector" ~rep:(Printf.sprintf "'[…%d dims…]'::vector" (List.length embedding)) s in
-    let s = replace_all ~pat:"$2" ~rep:(string_of_int top_k) s in
-    s
+    let parts = ref [] in
+    (match filter with
+     | Some f -> parts := !parts @ [Printf.sprintf "WHERE %s" f]
+     | None -> ());
+    (match score_expr with
+     | Some expr -> parts := !parts @ [Printf.sprintf "ORDER BY (%s) DESC" expr]
+     | None -> ());
+    parts := !parts @ [Printf.sprintf "LIMIT %d" top_k];
+    String.concat " " !parts
   in
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
     match C.collect_list req (vec, top_k) with

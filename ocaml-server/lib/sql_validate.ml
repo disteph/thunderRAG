@@ -18,12 +18,9 @@ module SS = Set.Make(String)
 let allowed_columns = SS.of_list
   [ "doc_id"; "sender"; "recipient"; "cc"; "bcc"; "subject"; "email_date"
   ; "attachments"; "action_score"; "importance_score"; "reply_by"
-  ; "processed"; "ingested_at"; "message_id"
-  (* table-qualified variants *)
-  ; "e.doc_id"; "e.sender"; "e.recipient"; "e.cc"; "e.bcc"; "e.subject"
-  ; "e.email_date"; "e.attachments"; "e.action_score"; "e.importance_score"
-  ; "e.reply_by"; "e.processed"; "e.ingested_at"; "e.message_id"
-  ; "ec.doc_id"; "ec.chunk_text"; "ec.embedding"; "ec.chunk_index"
+  ; "processed"; "ingested_at"
+  (* virtual column — expanded to (ec.embedding <=> $1::vector) by OCaml *)
+  ; "cosine_distance"
   ]
 
 let allowed_functions = SS.of_list
@@ -39,7 +36,7 @@ let allowed_types = SS.of_list
   (List.map String.lowercase_ascii
     [ "float"; "float4"; "float8"; "int"; "int4"; "int8"; "integer"
     ; "bigint"; "text"; "varchar"; "boolean"; "bool"; "timestamptz"
-    ; "timestamp"; "interval"; "vector"; "jsonb"
+    ; "timestamp"; "interval"; "vector"; "jsonb"; "date"
     ])
 
 let allowed_node_types = SS.of_list

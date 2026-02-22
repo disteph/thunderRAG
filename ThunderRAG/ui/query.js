@@ -182,30 +182,68 @@ function renderSourcesInto(container, sources) {
     header.appendChild(left);
     header.appendChild(right);
 
+    const to_ = String(md?.to || "").trim();
+    const cc = String(md?.cc || "").trim();
+    const score = s?.score;
+    const actionScore = md?.action_score;
+    const importanceScore = md?.importance_score;
+    const replyBy = String(md?.reply_by || "").trim();
+    const attachments = Array.isArray(md?.attachments) ? md.attachments : [];
+    const rehydrated = s?.rehydrated === true;
+    const bodyText = String(s?.text || "").trim();
+
     const meta = document.createElement("div");
     meta.className = "source-meta";
     const metaLines = [];
     if (from) metaLines.push(`From: ${from}`);
+    if (to_) metaLines.push(`To: ${to_}`);
+    if (cc) metaLines.push(`Cc: ${cc}`);
+    if (typeof score === "number") metaLines.push(`Score: ${score.toFixed(4)}`);
+    if (typeof actionScore === "number" || typeof importanceScore === "number") {
+      const parts = [];
+      if (typeof actionScore === "number") parts.push(`action=${actionScore}/100`);
+      if (typeof importanceScore === "number") parts.push(`importance=${importanceScore}/100`);
+      if (replyBy && replyBy !== "none") parts.push(`reply_by=${replyBy}`);
+      metaLines.push(parts.join("  "));
+    }
+    if (attachments.length > 0) metaLines.push(`Attachments: ${attachments.join(", ")}`);
     meta.textContent = metaLines.join("\n");
 
     card.appendChild(header);
     if (meta.textContent.trim()) {
       card.appendChild(meta);
     }
+
+    if (rehydrated && bodyText) {
+      const bodyToggle = document.createElement("details");
+      bodyToggle.className = "source-body-toggle";
+      const bodySummary = document.createElement("summary");
+      bodySummary.textContent = "Body";
+      bodyToggle.appendChild(bodySummary);
+      const bodyContent = document.createElement("div");
+      bodyContent.className = "source-body-content";
+      bodyContent.textContent = bodyText;
+      bodyToggle.appendChild(bodyContent);
+      bodyToggle.addEventListener("click", (e) => e.stopPropagation());
+      card.appendChild(bodyToggle);
+    }
+
     container.appendChild(card);
   }
 }
 
-function setAssistantMessage(bubble, answer, sources, retrievalSql) {
+function setAssistantMessage(bubble, answer, sources, retrievalInfo) {
   /*
     Renders a single assistant "bubble" with three pieces:
     - A debug-only collapsible triangle (no label) that expands the full sources list.
-      If retrievalSql is provided, it is shown inline on the same line as the triangle.
+      retrievalInfo = { sql, queries } is shown inline on the same line as the triangle.
     - The final answer text, with citations post-processed into clickable links.
     - Below the answer: tiles for only the sources actually cited as [Email N].
 
     bubble.__rag is used to keep references to the progress bar + answer element for updates.
   */
+  const retrievalSql = retrievalInfo?.sql || "";
+  const retrievalQueries = Array.isArray(retrievalInfo?.queries) ? retrievalInfo.queries : [];
   bubble.textContent = "";
 
   const meta = document.createElement("div");
@@ -231,12 +269,21 @@ function setAssistantMessage(bubble, answer, sources, retrievalSql) {
   summaryProgress.appendChild(progress);
   summaryRow.appendChild(summaryProgress);
 
-  if (retrievalSql) {
-    const sqlLabel = document.createElement("span");
-    sqlLabel.className = "retrieval-sql";
-    sqlLabel.textContent = retrievalSql.replace(/\s+/g, " ").trim();
-    sqlLabel.title = retrievalSql;
-    summaryRow.appendChild(sqlLabel);
+  if (retrievalQueries.length > 0 || retrievalSql) {
+    const infoSpan = document.createElement("span");
+    infoSpan.className = "retrieval-info";
+    const parts = [];
+    if (retrievalQueries.length > 0) {
+      parts.push(retrievalQueries.map(q => `\u201c${q}\u201d`).join(" + "));
+    }
+    if (retrievalSql) {
+      parts.push(retrievalSql.replace(/\s+/g, " ").trim());
+    }
+    infoSpan.textContent = parts.join(" \u2014 ");
+    infoSpan.title = (retrievalQueries.length > 0
+      ? "Embedded queries:\n" + retrievalQueries.map((q, i) => `  ${i + 1}. ${q}`).join("\n") + "\n"
+      : "") + (retrievalSql ? "SQL clauses: " + retrievalSql : "");
+    summaryRow.appendChild(infoSpan);
   }
 
   summary.appendChild(summaryRow);
@@ -448,8 +495,11 @@ async function onAsk() {
       const requestId = String(res?.request_id || "");
       const messageIds = Array.isArray(res?.message_ids) ? res.message_ids : [];
 
-      const retrievalSql = String(res?.retrieval_sql || "");
-      setAssistantMessage(assistant.bubble, "", srcs, retrievalSql);
+      const retrievalInfo = {
+        sql: String(res?.retrieval_sql || ""),
+        queries: Array.isArray(res?.retrieval_queries) ? res.retrieval_queries : [],
+      };
+      setAssistantMessage(assistant.bubble, "", srcs, retrievalInfo);
 
       if (!requestId) {
         throw new Error("Server did not return request_id");
@@ -506,7 +556,7 @@ async function onAsk() {
 
       const answer = String(final?.answer || "");
       const sources = Array.isArray(final?.sources) ? final.sources : srcs;
-      setAssistantMessage(assistant.bubble, answer, sources, retrievalSql);
+      setAssistantMessage(assistant.bubble, answer, sources, retrievalInfo);
       $("status").textContent = "";
       return;
     } else {

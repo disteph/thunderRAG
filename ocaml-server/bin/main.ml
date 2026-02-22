@@ -113,7 +113,7 @@ type embed_task = Search_document | Search_query
 (* Models known to support task-prefixed embeddings.
    Checked case-insensitively against ollama_embed_model. *)
 let embed_task_prefix (task : embed_task) : string option =
-  let model_lower = String.lowercase_ascii ollama_embed_model in
+  let model_lower = String.lowercase_ascii !ollama_embed_model in
   let is_nomic    = contains_substring ~sub:"nomic" model_lower in
   let is_e5       = contains_substring ~sub:"e5"    model_lower in
   let is_arctic   = contains_substring ~sub:"snowflake-arctic-embed" model_lower in
@@ -133,15 +133,15 @@ let ollama_embed ~client ~sw ?(task : embed_task option) ~(text : string) () : (
         | Some prefix -> prefix ^ text
         | None -> text
   in
-  let uri = Uri.of_string (ollama_base_url ^ "/api/embeddings") in
+  let uri = Uri.of_string (!ollama_base_url ^ "/api/embeddings") in
   let body_obj : Yojson.Safe.t =
-    `Assoc [ ("model", `String ollama_embed_model); ("prompt", `String prompt) ]
+    `Assoc [ ("model", `String !ollama_embed_model); ("prompt", `String prompt) ]
   in
-  if rag_debug_ollama_embed then
+  if !rag_debug_ollama_embed then
     Printf.printf "\n[ollama.embed.request]\n%s\n%!" (Yojson.Safe.pretty_to_string body_obj);
   let body_json = Yojson.Safe.to_string body_obj in
   let call () = post_json_uri ~client ~sw ~uri ~body_json in
-  let resp, resp_body = !global_with_timeout ollama_timeout_seconds call in
+  let resp, resp_body = !global_with_timeout !ollama_timeout_seconds call in
   if not (is_ok_status (Http.Response.status resp)) then Error resp_body
   else
     try
@@ -167,8 +167,8 @@ let ollama_embed ~client ~sw ?(task : embed_task option) ~(text : string) () : (
     with ex -> Error (Printexc.to_string ex)
 
 let ollama_chat ~client ~sw ?(model = "") ~(messages : Yojson.Safe.t list) () : (string, string) result =
-  let effective_model = if String.trim model <> "" then String.trim model else ollama_llm_model in
-  let uri = Uri.of_string (ollama_base_url ^ "/api/chat") in
+  let effective_model = if String.trim model <> "" then String.trim model else !ollama_llm_model in
+  let uri = Uri.of_string (!ollama_base_url ^ "/api/chat") in
   let body_obj : Yojson.Safe.t =
     `Assoc
       [ ("model", `String effective_model)
@@ -176,11 +176,11 @@ let ollama_chat ~client ~sw ?(model = "") ~(messages : Yojson.Safe.t list) () : 
       ; ("stream", `Bool false)
       ]
   in
-  if rag_debug_ollama_chat then
+  if !rag_debug_ollama_chat then
     Printf.printf "\n[ollama.chat.request]\n%s\n%!" (Yojson.Safe.pretty_to_string body_obj);
   let body_json = Yojson.Safe.to_string body_obj in
   let call () = post_json_uri ~client ~sw ~uri ~body_json in
-  let resp, resp_body = !global_with_timeout ollama_timeout_seconds call in
+  let resp, resp_body = !global_with_timeout !ollama_timeout_seconds call in
   if not (is_ok_status (Http.Response.status resp)) then Error resp_body
   else
     try
@@ -195,6 +195,17 @@ let ollama_chat ~client ~sw ?(model = "") ~(messages : Yojson.Safe.t list) () : 
           | _ -> Error "missing chat message")
       | _ -> Error "bad chat response"
     with ex -> Error (Printexc.to_string ex)
+
+(* Helper: create a JSON log entry for an LLM call.
+   Used by the quality harness to inspect every prompt sent to every LLM. *)
+let make_llm_call_entry ~label ~model ~(messages : Yojson.Safe.t list)
+    ~(response : string) : Yojson.Safe.t =
+  `Assoc
+    [ ("label", `String label)
+    ; ("model", `String model)
+    ; ("messages", `List messages)
+    ; ("response", `String response)
+    ]
 
 (*
   Recursive chunked summarization — single factored-out implementation.
@@ -252,7 +263,7 @@ let strip_summary_preamble (s : string) : string =
   String.concat "\n" (drop lines)
 
 let summarize_to_fit ~client ~sw ~system_prompt ~max_input_chars ~max_chars
-    ~label (text : string) : string =
+    ~label ?(llm_log : Yojson.Safe.t list ref option) (text : string) : string =
   let clean = String.trim text in
   if String.length clean <= max_chars then clean
   else
@@ -280,15 +291,23 @@ let summarize_to_fit ~client ~sw ~system_prompt ~max_input_chars ~max_chars
         ; `Assoc [ ("role", `String "user"); ("content", `String chunk) ]
         ]
       in
-      match ollama_chat ~client ~sw ~model:ollama_summarize_model ~messages () with
+      match ollama_chat ~client ~sw ~model:!ollama_summarize_model ~messages () with
       | Ok s ->
-          if rag_debug_ollama_chat then Printf.printf "\n[%s.summary.response]\n%s\n%!" label s;
+          if !rag_debug_ollama_chat then Printf.printf "\n[%s.summary.response]\n%s\n%!" label s;
+          (match llm_log with Some log ->
+            log := !log @ [make_llm_call_entry ~label:("summarize:" ^ label)
+              ~model:!ollama_summarize_model ~messages ~response:s]
+          | None -> ());
           let s = strip_summary_preamble s |> String.trim in
           if s = "" then (
             Printf.eprintf "[%s.summary.error] empty response from ollama\n%!" label;
             None)
           else Some s
       | Error err ->
+          (match llm_log with Some log ->
+            log := !log @ [make_llm_call_entry ~label:("summarize:" ^ label)
+              ~model:!ollama_summarize_model ~messages ~response:("ERROR: " ^ err)]
+          | None -> ());
           let err = String.trim err in
           let err = if err = "" then "unknown error" else err in
           let err = truncate_chars err ~max_chars:400 |> String.trim in
@@ -319,14 +338,14 @@ let summarize_to_fit ~client ~sw ~system_prompt ~max_input_chars ~max_chars
     chunk_and_summarize clean 0
 
 let summarize_quoted_context ~client ~sw ~(quoted_text : string) : string option =
-  if (not rag_quoted_context_summarize) || String.trim quoted_text = "" then None
+  if (not !rag_quoted_context_summarize) || String.trim quoted_text = "" then None
   else
     let quoted_clean = String.trim quoted_text in
     if String.length quoted_clean < 40 then None
     else
-      let max_lines = rag_quoted_context_max_lines in
-      let max_chars = rag_quoted_context_max_chars in
-      let max_input = rag_quoted_context_max_input_chars in
+      let max_lines = !rag_quoted_context_max_lines in
+      let max_chars = !rag_quoted_context_max_chars in
+      let max_input = !rag_quoted_context_max_input_chars in
       let system_prompt =
         get_prompt "compress_quoted_context_ingest"
           ~default:"Compress quoted email thread history. Third person only. Preserve facts. No preamble."
@@ -367,8 +386,13 @@ let triage_email ~client ~sw ~(whoami : string)
     None)
   else
   let body_excerpt = String.trim body_text in
+  let user_identity =
+    if String.trim whoami <> ""
+    then Printf.sprintf "The user (the email account owner) is: %s. " (String.trim whoami)
+    else ""
+  in
   let system =
-    get_prompt "triage" ~default:"You are an email triage assistant. Respond with ONLY a JSON object: {\"action_score\": <int 0-100>, \"importance_score\": <int 0-100>, \"reply_by\": \"YYYY-MM-DD or none\"}" ~vars:[]
+    get_prompt "triage" ~default:"You are an email triage assistant. Respond with ONLY a JSON object: {\"action_score\": <int 0-100>, \"importance_score\": <int 0-100>, \"reply_by\": \"YYYY-MM-DD or none\"}" ~vars:[("{{user_identity}}", user_identity)]
   in
   let user_msg =
     Printf.sprintf
@@ -383,9 +407,9 @@ let triage_email ~client ~sw ~(whoami : string)
     ; `Assoc [ ("role", `String "user"); ("content", `String user_msg) ]
     ]
   in
-  match ollama_chat ~client ~sw ~model:ollama_triage_model ~messages () with
+  match ollama_chat ~client ~sw ~model:!ollama_triage_model ~messages () with
   | Ok raw_resp ->
-      if rag_debug_ollama_chat then Printf.printf "\n[triage.response]\n%s\n%!" raw_resp;
+      if !rag_debug_ollama_chat then Printf.printf "\n[triage.response]\n%s\n%!" raw_resp;
       (* Strip markdown code fences if the model wraps its JSON *)
       let trimmed =
         let s = String.trim raw_resp in
@@ -462,12 +486,12 @@ let decode_part_body (headers : (string, string) Hashtbl.t) (body : string) : st
 let attachment_text_of_part ~(filename : string) ~(content_type : string) ~(decoded : string) : string option =
   let ct_lower = String.lowercase_ascii (String.trim content_type) in
   let decoded =
-    if String.length decoded > rag_attachment_max_bytes then String.sub decoded 0 rag_attachment_max_bytes
+    if String.length decoded > !rag_attachment_max_bytes then String.sub decoded 0 !rag_attachment_max_bytes
     else decoded
   in
   if starts_with "text/plain" ct_lower then Some (sanitize_utf8 decoded |> String.trim)
   else if starts_with "text/html" ct_lower then Some (strip_html decoded |> sanitize_utf8 |> String.trim)
-  else if rag_attachment_use_pdftotext && (ends_with ".pdf" (String.lowercase_ascii filename) || starts_with "application/pdf" ct_lower)
+  else if !rag_attachment_use_pdftotext && (ends_with ".pdf" (String.lowercase_ascii filename) || starts_with "application/pdf" ct_lower)
   then (
     try
       let tmp = Filename.temp_file "rag_att_" ".pdf" in
@@ -479,7 +503,7 @@ let attachment_text_of_part ~(filename : string) ~(content_type : string) ~(deco
       (try Sys.remove tmp with _ -> ());
       Option.map (fun s -> sanitize_utf8 s |> String.trim) out
     with _ -> None)
-  else if rag_attachment_use_pandoc && (
+  else if !rag_attachment_use_pandoc && (
     ends_with ".docx" (String.lowercase_ascii filename)
     || ends_with ".md" (String.lowercase_ascii filename)
     || ends_with ".rtf" (String.lowercase_ascii filename)
@@ -498,16 +522,16 @@ let attachment_text_of_part ~(filename : string) ~(content_type : string) ~(deco
   else None
 
 let summarize_attachment ~client ~sw ~(filename : string) ~(text : string) : string option =
-  if (not rag_attachment_summarize) || String.trim text = "" then None
+  if (not !rag_attachment_summarize) || String.trim text = "" then None
   else
     let system_prompt =
       get_prompt "compress_attachment"
         ~default:"Summarize an email attachment. Preserve key facts. Output plain text only."
-        ~vars:[("{{filename}}", filename); ("{{max_chars}}", string_of_int rag_attachment_max_chars)]
+        ~vars:[("{{filename}}", filename); ("{{max_chars}}", string_of_int !rag_attachment_max_chars)]
     in
     let result = summarize_to_fit ~client ~sw ~system_prompt
-      ~max_input_chars:rag_attachment_max_input_chars
-      ~max_chars:rag_attachment_max_chars
+      ~max_input_chars:!rag_attachment_max_input_chars
+      ~max_chars:!rag_attachment_max_chars
       ~label:(Printf.sprintf "attachment[%s]" filename)
       text
     in
@@ -545,7 +569,7 @@ let attachment_summaries_of_raw ~client ~sw ~(raw : string) : Yojson.Safe.t list
                                ; ("summary", `String (sanitize_utf8 summary))
                                ])))
   in
-  if List.length items > rag_attachment_max_attachments then take rag_attachment_max_attachments items
+  if List.length items > !rag_attachment_max_attachments then take !rag_attachment_max_attachments items
   else items
 
 let format_attachment_summaries_for_text (summaries : Yojson.Safe.t list) : string =
@@ -569,7 +593,7 @@ let format_attachment_summaries_for_text (summaries : Yojson.Safe.t list) : stri
   if lines = [] then "" else "ATTACHMENTS (summaries):\n" ^ String.concat "\n\n" lines
 
 let debug_retrieval_enabled () : bool =
-  rag_debug_retrieval
+  !rag_debug_retrieval
 
 type chat_message =
   { role : string
@@ -597,10 +621,38 @@ type pending_query =
   { mu : Eio.Mutex.t
   ; session_id : string
   ; question : string
+      (** The user's original, verbatim question.  Used for:
+          - the no-evidence prompt path (no retrieved emails, so no ambiguity)
+          - storing the user turn in session tail (preserves the user's words) *)
   ; resolved_question : string
+      (** Contextually rewritten version of the question produced by
+          rewrite_queries_for_retrieval.  Pronouns, relative references like
+          "the second email" or "that bug" are resolved into self-contained
+          form.  Used for:
+          - building search queries (better retrieval)
+          - the WITH-evidence prompt path: because retrieved emails are
+            inserted BEFORE the question in the final LLM prompt, an
+            anaphoric reference like "the second email" would be
+            misinterpreted as referring to the second *retrieved* email
+            rather than the second email from the previous assistant answer.
+            The resolved_question avoids this ambiguity.
+          - select_relevant_sources (deciding which emails to rehydrate)
+          CAVEAT: the rewrite LLM can fail and produce garbage (e.g. "...").
+          The no-evidence path uses p.question as a safe fallback. *)
   ; message_ids : string list
   ; sources_json : Yojson.Safe.t
   ; evidence_by_id : (string, string) Hashtbl.t
+  ; llm_calls : Yojson.Safe.t list
+      (** Accumulated log of EVERY LLM call made during this request.
+          Each entry is a JSON object:
+            { "label": "<call-site name>",
+              "model": "<model used>",
+              "messages": [ ... the messages sent ... ],
+              "response": "<raw LLM response>" }
+          Populated during /query (rewrite, select_evidence) and
+          /query/complete (summarize, chat).  Returned in the
+          /query/complete response so the quality harness can inspect
+          every prompt sent to every LLM. *)
   }
 
 let session_tbl : (string, session_state) Hashtbl.t = Hashtbl.create 64
@@ -856,7 +908,6 @@ let make_ingest_data ~doc_id ~(headers : (string, string) Hashtbl.t) ~(raw : str
         ; ("subject", `String subject)
         ; ("date", `String date_)
         ; ("attachments", `List (List.map (fun f -> `String f) attachments))
-        ; ("message_id", `String doc_id)
         ]
        @ (match triage with
           | Some t ->
@@ -903,8 +954,8 @@ let ingest_text_of_raw ~(doc_id : string) ~(raw : string) : (string * Yojson.Saf
   let quoted_capped =
     if String.trim quoted_raw = "" then ""
     else
-      truncate_lines quoted_raw ~max_lines:rag_quoted_context_max_lines
-      |> truncate_chars ~max_chars:rag_quoted_context_max_input_chars
+      truncate_lines quoted_raw ~max_lines:!rag_quoted_context_max_lines
+      |> truncate_chars ~max_chars:!rag_quoted_context_max_input_chars
       |> String.trim
   in
   let body_text =
@@ -942,8 +993,8 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
   let quoted_capped_untrimmed =
     if String.trim quoted_raw = "" then ""
     else
-      truncate_lines quoted_raw ~max_lines:rag_quoted_context_max_lines
-      |> truncate_chars ~max_chars:rag_quoted_context_max_input_chars
+      truncate_lines quoted_raw ~max_lines:!rag_quoted_context_max_lines
+      |> truncate_chars ~max_chars:!rag_quoted_context_max_input_chars
   in
   let quoted_capped = String.trim quoted_capped_untrimmed in
   let overflow_start = String.length quoted_capped_untrimmed in
@@ -971,8 +1022,8 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
   let new_body_capped =
     summarize_to_fit ~client ~sw
       ~system_prompt:(get_prompt "compress_new_content_ingest" ~default:"Compress email body. Preserve all facts. Third person. Do not invent." ~vars:[])
-      ~max_input_chars:rag_summarize_max_input_chars
-      ~max_chars:rag_new_content_max_chars
+      ~max_input_chars:!rag_summarize_max_input_chars
+      ~max_chars:!rag_new_content_max_chars
       ~label:"new_content"
       new_body
   in
@@ -1019,10 +1070,21 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
            | Error msg -> raise (Failure ("ollama_embed failed: " ^ msg)))
   in
   let attachments = extract_attachment_filenames raw in
-  let att_json = Yojson.Safe.to_string (`List (List.map (fun f -> `String f) attachments)) in
+  (* Format as PostgreSQL TEXT[] literal: {"file1.pdf","file2.xlsx"} *)
+  let att_pg_array =
+    let escaped = List.map (fun f ->
+      "\"" ^ String.concat "\\\"" (String.split_on_char '"' f) ^ "\"") attachments in
+    "{" ^ String.concat "," escaped ^ "}"
+  in
   let action_score = match triage with Some t -> Some t.action_score | None -> None in
   let importance_score = match triage with Some t -> Some t.importance_score | None -> None in
-  let reply_by = match triage with Some t -> t.reply_by | None -> "" in
+  (* reply_by from triage is YYYY-MM-DD or "none" — convert "none"/empty to
+     empty string which becomes NULL via the ::timestamptz cast on empty string.
+     For non-empty, append T00:00:00Z for midnight UTC. *)
+  let reply_by = match triage with
+    | Some t when t.reply_by <> "" && t.reply_by <> "none" -> t.reply_by ^ "T00:00:00Z"
+    | _ -> ""
+  in
   let strict_ok = not (body_text_has_error_marker body_text) in
   if not strict_ok then (
     Printf.eprintf "[ingest.strict] not recording success for doc_id=%s because body_text contains [ERROR:] markers\n%!" ndoc;
@@ -1030,11 +1092,12 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
     (resp, {|{"ok":true,"warning":"error_markers"}|}))
   else
     match Rag_lib.Pg.upsert_email
-      ~doc_id ~embed_model:ollama_embed_model ~triage_model:ollama_triage_model
-      ~sender:from_ ~recipient:to_ ~cc:cc_ ~bcc:bcc_ ~subject ~email_date:date_
-      ~attachments_json:att_json
+      ~doc_id ~embed_model:!ollama_embed_model ~triage_model:!ollama_triage_model
+      ~sender:from_ ~recipient:to_ ~cc:cc_ ~bcc:bcc_ ~subject
+      ~email_date:(parse_rfc822_to_iso8601 date_)
+      ~attachments_json:att_pg_array
       ~action_score ~importance_score ~reply_by
-      ~ingested_at:(now_utc_iso8601 ()) ~message_id:doc_id ()
+      ~ingested_at:(now_utc_iso8601 ()) ()
     with
     | Error e ->
         Printf.eprintf "[ingest.pg.error] upsert_email: %s\n%!" e;
@@ -1733,8 +1796,9 @@ let handle_bulk_ingest ~client ~sw ~clock (body : string) : (Http.Response.t * s
 *)
 let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
     ~(history_summary : string) ~(tail : chat_message list)
-    ~(user_name : string) : string list * string * bool =
-  if not rag_query_rewrite then ([question], question, false)
+    ~(user_name : string) ?(llm_log : Yojson.Safe.t list ref option)
+    () : string list * string * bool * string option * string option =
+  if not !rag_query_rewrite then ([question], question, false, None, None)
   else
     let has_context = String.trim history_summary <> "" || tail <> [] in
     let user_identity =
@@ -1774,10 +1838,14 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
       in
       base @ summary @ turns @ final
     in
-    match ollama_chat ~client ~sw ~model:ollama_summarize_model ~messages () with
+    match ollama_chat ~client ~sw ~model:!ollama_rewrite_model ~messages () with
     | Ok raw_resp ->
-        if rag_debug_ollama_chat then
+        if !rag_debug_ollama_chat then
           Printf.printf "\n[retrieval.rewrite.response]\n%s\n%!" raw_resp;
+        (match llm_log with Some log ->
+          log := !log @ [make_llm_call_entry ~label:"rewrite"
+            ~model:!ollama_rewrite_model ~messages ~response:raw_resp]
+        | None -> ());
         let raw_resp = String.trim raw_resp in
         let raw_resp =
           if starts_with "```" raw_resp then
@@ -1848,14 +1916,52 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
                !queries;
            if no_retrieval then
              Printf.printf "[retrieval.rewrite] no_retrieval=true, skipping embedding\n%!";
-           (!queries, resolved, no_retrieval)
+           (* Parse optional SQL filter and score_expr for query_knn.
+              The LLM sees a flat "emails" table with a virtual cosine_distance column.
+              We substitute cosine_distance -> the real expression before use. *)
+           let expand_virtual_cols s =
+             let target = "cosine_distance" and repl = "(ec.embedding <=> $1::vector)" in
+             let tlen = String.length target in
+             let buf = Buffer.create (String.length s) in
+             let i = ref 0 in
+             while !i <= String.length s - tlen do
+               if String.sub s !i tlen = target then
+                 (Buffer.add_string buf repl; i := !i + tlen)
+               else
+                 (Buffer.add_char buf s.[!i]; incr i)
+             done;
+             if !i < String.length s then
+               Buffer.add_string buf (String.sub s !i (String.length s - !i));
+             Buffer.contents buf
+           in
+           let validated_filter =
+             match get_str "filter" with
+             | None -> None
+             | Some f ->
+                 match Rag_lib.Sql_validate.validate_filter f with
+                 | Ok validated ->
+                     let expanded = expand_virtual_cols validated in
+                     Printf.printf "[retrieval.rewrite] filter=%s\n%!" expanded; Some expanded
+                 | Error err -> Printf.eprintf "[retrieval.rewrite.warning] rejected filter %S: %s\n%!" f err; None
+           in
+           let validated_score =
+             match get_str "score_expr" with
+             | None -> None
+             | Some s ->
+                 match Rag_lib.Sql_validate.validate_score s with
+                 | Ok validated ->
+                     let expanded = expand_virtual_cols validated in
+                     Printf.printf "[retrieval.rewrite] score_expr=%s\n%!" expanded; Some expanded
+                 | Error err -> Printf.eprintf "[retrieval.rewrite.warning] rejected score_expr %S: %s\n%!" s err; None
+           in
+           (!queries, resolved, no_retrieval, validated_filter, validated_score)
          with _ ->
            Printf.eprintf "[retrieval.rewrite.error] failed to parse JSON response: %s\n%!"
              (if String.length raw_resp > 200 then String.sub raw_resp 0 200 ^ "..." else raw_resp);
-           ([question], question, false))
+           ([question], question, false, None, None))
     | Error err ->
         Printf.eprintf "[retrieval.rewrite.error] %s\n%!" (truncate_chars err ~max_chars:200);
-        ([question], question, false)
+        ([question], question, false, None, None)
 
 (* Merge email entries from multiple retrievals.
    Deduplicates by doc_id, keeping the entry with the highest score.
@@ -1892,7 +1998,8 @@ let merge_multi_query_sources (all_sources : Yojson.Safe.t list) (top_k : int) :
    ask the LLM which emails actually need their full body content loaded.
    Returns the filtered list of doc_ids.  Falls back to all doc_ids on error. *)
 let select_relevant_sources ~client ~sw ~(resolved_question : string)
-    ~(user_name : string) (sources_json : Yojson.Safe.t) : string list =
+    ~(user_name : string) ?(llm_log : Yojson.Safe.t list ref option)
+    (sources_json : Yojson.Safe.t) : string list =
   let all_doc_ids =
     match sources_json with
     | `List ys ->
@@ -1977,11 +2084,19 @@ let select_relevant_sources ~client ~sw ~(resolved_question : string)
   let messages : Yojson.Safe.t list =
     [ `Assoc [ ("role", `String "system"); ("content", `String system) ] ]
   in
-  match ollama_chat ~client ~sw ~model:ollama_summarize_model ~messages () with
+  match ollama_chat ~client ~sw ~model:!ollama_summarize_model ~messages () with
   | Error err ->
+      (match llm_log with Some log ->
+        log := !log @ [make_llm_call_entry ~label:"select_evidence"
+          ~model:!ollama_summarize_model ~messages ~response:("ERROR: " ^ err)]
+      | None -> ());
       Printf.eprintf "[select_evidence.error] %s, selecting all\n%!" (truncate_chars err ~max_chars:200);
       all_doc_ids
   | Ok raw_resp ->
+      (match llm_log with Some log ->
+        log := !log @ [make_llm_call_entry ~label:"select_evidence"
+          ~model:!ollama_summarize_model ~messages ~response:raw_resp]
+      | None -> ());
       let raw_resp = String.trim raw_resp in
       let raw_resp =
         if starts_with "```" raw_resp then
@@ -2037,11 +2152,31 @@ let handler ~client ~sw ~clock _socket request body =
     - /query/complete: final prompt construction + Ollama chat
   *)
   match Http.Request.meth request, Http.Request.resource request with
+  | `GET, "/admin/config" ->
+      (* Return current settings.json and prompts.json content for test archival *)
+      let read_file_opt path =
+        if Sys.file_exists path then
+          try let ic = open_in_bin path in
+              let n = in_channel_length ic in
+              let buf = Bytes.create n in
+              really_input ic buf 0 n;
+              close_in ic;
+              Some (Bytes.to_string buf)
+          with _ -> None
+        else None
+      in
+      let settings_raw = match read_file_opt (settings_path ()) with Some s -> s | None -> "{}" in
+      let prompts_raw = match read_file_opt (prompts_path ()) with Some s -> s | None -> "{}" in
+      let body = Printf.sprintf {|{"config_dir":%s,"settings":%s,"prompts":%s}|}
+        (Yojson.Safe.to_string (`String (thunderrag_config_dir ())))
+        settings_raw prompts_raw
+      in
+      Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
   | `GET, "/admin/models" ->
       (* Query Ollama /api/tags for available models and return the list
          along with the current default chat model from settings. *)
       (try
-         let uri = Uri.of_string (ollama_base_url ^ "/api/tags") in
+         let uri = Uri.of_string (!ollama_base_url ^ "/api/tags") in
          let call () = get_uri ~client ~sw ~uri in
          let _resp, resp_body = !global_with_timeout 10.0 call in
          let all_models =
@@ -2062,7 +2197,7 @@ let handler ~client ~sw ~clock _socket request body =
            with _ -> []
          in
          (* Filter out the embedding model — it is not useful for chat. *)
-         let embed = String.lowercase_ascii ollama_embed_model in
+         let embed = String.lowercase_ascii !ollama_embed_model in
          let strip_latest s =
            let low = String.lowercase_ascii s in
            if String.length low > 7 && String.sub low (String.length low - 7) 7 = ":latest"
@@ -2073,12 +2208,12 @@ let handler ~client ~sw ~clock _socket request body =
            all_models
            |> List.filter (fun name ->
                 let low = String.lowercase_ascii name in
-                low <> embed && strip_latest name <> strip_latest ollama_embed_model)
+                low <> embed && strip_latest name <> strip_latest !ollama_embed_model)
          in
          let body =
            `Assoc
              [ ("models", `List (List.map (fun s -> `String s) models))
-             ; ("default_chat_model", `String ollama_llm_model)
+             ; ("default_chat_model", `String !ollama_llm_model)
              ]
            |> Yojson.Safe.to_string
          in
@@ -2284,6 +2419,10 @@ let handler ~client ~sw ~clock _socket request body =
                     (s.tail, s.history_summary, s.user_name))
                 in
 
+                (* Mutable ref into p.llm_calls — used to accumulate LLM call
+                   logs from summarize_to_fit and the final chat call. *)
+                let p_llm_log = ref p.llm_calls in
+
                 let cached_md_by_doc : (string, Yojson.Safe.t) Hashtbl.t = Hashtbl.create 32 in
                 (match p.sources_json with
                 | `List ys ->
@@ -2322,7 +2461,7 @@ let handler ~client ~sw ~clock _socket request body =
                             let tbl = Hashtbl.create 32 in
                             List.iter (fun (k, v) -> Hashtbl.replace tbl k v) cached_kv;
                             let override_keys =
-                              [ "from"; "to"; "cc"; "bcc"; "subject"; "date"; "attachments"; "message_id" ]
+                              [ "from"; "to"; "cc"; "bcc"; "subject"; "date"; "attachments" ]
                             in
                             List.iter
                               (fun (k, v) ->
@@ -2336,9 +2475,9 @@ let handler ~client ~sw ~clock _socket request body =
                       let new_body_capped =
                         summarize_to_fit ~client ~sw
                           ~system_prompt:(get_prompt "compress_new_content_evidence" ~default:"Compress email body for Q&A evidence. Preserve all facts. Third person. Do not invent." ~vars:[])
-                          ~max_input_chars:rag_summarize_max_input_chars
-                          ~max_chars:rag_max_evidence_chars_per_email
-                          ~label:"evidence"
+                          ~max_input_chars:!rag_summarize_max_input_chars
+                          ~max_chars:!rag_max_evidence_chars_per_email
+                          ~label:"evidence" ~llm_log:p_llm_log
                           new_body
                       in
                       let quoted_raw = String.trim parts.quoted_text |> sanitize_utf8 in
@@ -2348,9 +2487,9 @@ let handler ~client ~sw ~clock _socket request body =
                           let quoted_capped =
                             summarize_to_fit ~client ~sw
                               ~system_prompt:(get_prompt "compress_quoted_context_evidence" ~default:"Compress quoted thread context for Q&A evidence. Preserve facts. Third person. Do not invent." ~vars:[])
-                              ~max_input_chars:rag_summarize_max_input_chars
-                              ~max_chars:(rag_max_evidence_chars_per_email / 2)
-                              ~label:"evidence-quoted"
+                              ~max_input_chars:!rag_summarize_max_input_chars
+                              ~max_chars:(!rag_max_evidence_chars_per_email / 2)
+                              ~label:"evidence-quoted" ~llm_log:p_llm_log
                               quoted_raw
                           in
                           "\n\nQUOTED CONTEXT:\n" ^ quoted_capped
@@ -2462,7 +2601,7 @@ let handler ~client ~sw ~clock _socket request body =
 
                 (* Determine which entries go into the LLM prompt:
                    rehydrated always; unrehydrated only if config says so *)
-                let include_unrehydrated = rag_include_unrehydrated_metadata in
+                let include_unrehydrated = !rag_include_unrehydrated_metadata in
                 let prompt_entries =
                   if include_unrehydrated then all_entries
                   else all_entries |> List.filter (fun (_, _, _, _, _, _, _, _, _, _, _, rh) -> rh)
@@ -2481,7 +2620,7 @@ let handler ~client ~sw ~clock _socket request body =
                       | _ -> ()) ys
                 | _ -> ());
                 let sources_json =
-                  `List (all_entries |> List.map (fun (mid, _text, md, _, _, _, _, _, _, _, _, rh) ->
+                  `List (all_entries |> List.map (fun (mid, text, md, _, _, _, _, _, _, _, _, rh) ->
                     let base_kv =
                       match Hashtbl.find_opt orig_by_id mid with
                       | Some (`Assoc kv) -> kv
@@ -2489,7 +2628,8 @@ let handler ~client ~sw ~clock _socket request body =
                     in
                     let kv = base_kv |> List.filter (fun (k, _) -> k <> "text" && k <> "metadata" && k <> "rehydrated" && k <> "in_prompt") in
                     let in_prompt = rh || include_unrehydrated in
-                    let extra = [ ("text", `String ""); ("rehydrated", `Bool rh); ("in_prompt", `Bool in_prompt) ] in
+                    let body_text = if rh then String.trim text else "" in
+                    let extra = [ ("text", `String body_text); ("rehydrated", `Bool rh); ("in_prompt", `Bool in_prompt) ] in
                     let extra = if md <> `Assoc [] then ("metadata", md) :: extra else extra in
                     `Assoc (kv @ extra)))
                 in
@@ -2521,25 +2661,6 @@ let handler ~client ~sw ~clock _socket request body =
                   String.concat "\n\n" lines
                 in
 
-                let sources_index_msg =
-                  let lines =
-                    prompt_entries
-                    |> List.mapi (fun i (_, _, _, date_, from_, to_, cc_, _bcc_, subject, atts, triage, _rh) ->
-                           let parts =
-                             [ Printf.sprintf "[Email %d]" (i + 1)
-                             ; Printf.sprintf "date=%s" date_
-                             ; Printf.sprintf "from=%s" from_
-                             ]
-                             @ (if String.trim to_ <> "" then [ Printf.sprintf "to=%s" to_ ] else [])
-                             @ (if String.trim cc_ <> "" then [ Printf.sprintf "cc=%s" cc_ ] else [])
-                             @ [ Printf.sprintf "subject=%s" subject ]
-                             @ (if atts <> [] then [ Printf.sprintf "attachments=[%s]" (String.concat "; " atts) ] else [])
-                             @ (if String.trim triage <> "" then [ triage ] else [])
-                           in
-                           String.concat " " parts)
-                  in
-                  String.concat "\n" lines
-                in
 
                 let user_identity_str =
                   if String.trim session_user_name <> ""
@@ -2592,13 +2713,29 @@ let handler ~client ~sw ~clock _socket request body =
                         tail_snapshot
                   in
                   if String.trim evidence_msg = "" then
+                    (* NO-EVIDENCE PATH: no retrieved emails in this prompt.
+                       Use p.question (the user's verbatim words) because there
+                       are no inserted emails that could cause ambiguity with
+                       anaphoric references.  This also serves as a safe
+                       fallback when the rewrite LLM produces garbage for
+                       resolved_question (e.g. "..."). *)
                     with_tail
-                    @ [ `Assoc [ ("role", `String "user"); ("content", `String p.resolved_question) ] ]
+                    @ [ `Assoc [ ("role", `String "user"); ("content", `String p.question) ] ]
                   else
+                    (* WITH-EVIDENCE PATH: retrieved emails are inserted as a
+                       USER message immediately before the question.  We MUST
+                       use p.resolved_question here, not p.question, because
+                       the user's original question may contain anaphoric
+                       references like "the second email" or "that thread"
+                       that referred to emails from the *previous* assistant
+                       answer (in the tail).  Since retrieved emails now appear
+                       between the tail and the question, those references
+                       would be misread as pointing to the retrieved emails.
+                       resolved_question has these references resolved into
+                       self-contained form by the rewrite LLM, avoiding the
+                       ambiguity. *)
                     let evidence_content =
                       "EMAILS THAT MAY BE RELEVANT:\n\n"
-                      ^ sources_index_msg
-                      ^ "\n\n"
                       ^ evidence_msg
                     in
                     let question_suffix =
@@ -2606,8 +2743,23 @@ let handler ~client ~sw ~clock _socket request body =
                         ~default:"Answer based on the retrieved emails above. Cite as [Email N]."
                         ~vars:[]
                     in
+                    (* Defense: if the rewrite LLM produced garbage for
+                       resolved_question (e.g. "..." or a very short string
+                       that isn't a real question), fall back to the original
+                       question.  This sacrifices anaphoric-reference safety
+                       but is better than sending "..." to the chat LLM.
+                       See prompts.json "query_rewrite" for the root cause. *)
+                    let effective_question =
+                      let rq = String.trim p.resolved_question in
+                      if rq = "" || rq = "..." || rq = ".." || rq = "."
+                         || String.length rq < 5 then begin
+                        Printf.eprintf "[chat.warning] resolved_question is garbage (%S), falling back to original question\n%!" rq;
+                        p.question
+                      end else
+                        p.resolved_question
+                    in
                     let question_content =
-                      p.resolved_question ^ "\n\n" ^ question_suffix
+                      effective_question ^ "\n\n" ^ question_suffix
                     in
                     with_tail
                     @ [ `Assoc [ ("role", `String "user"); ("content", `String evidence_content) ]
@@ -2616,12 +2768,23 @@ let handler ~client ~sw ~clock _socket request body =
                 in
 
                 let answer =
+                  let effective_chat_model =
+                    if String.trim chat_model_override <> "" then chat_model_override
+                    else !ollama_llm_model
+                  in
                   match ollama_chat ~client ~sw ~model:chat_model_override ~messages () with
                   | Ok s ->
-                      if rag_debug_ollama_chat then
+                      if !rag_debug_ollama_chat then
                         Printf.printf "\n[chat.raw_answer]\n%s\n%!" s;
+                      p_llm_log := !p_llm_log @ [make_llm_call_entry
+                        ~label:"chat" ~model:effective_chat_model
+                        ~messages ~response:s];
                       strip_leading_boilerplate s |> String.trim
-                  | Error msg -> "ollama chat error: " ^ msg
+                  | Error msg ->
+                      p_llm_log := !p_llm_log @ [make_llm_call_entry
+                        ~label:"chat" ~model:effective_chat_model
+                        ~messages ~response:("ERROR: " ^ msg)];
+                      "ollama chat error: " ^ msg
                 in
 
                 let renumbered_answer, cited_recap =
@@ -2645,7 +2808,8 @@ let handler ~client ~sw ~clock _socket request body =
                 Eio.Mutex.use_rw ~protect:true pending_tbl_mu (fun () -> Hashtbl.remove pending_tbl request_id);
 
                 let body =
-                  `Assoc [ ("answer", `String answer); ("sources", sources_json) ]
+                  `Assoc [ ("answer", `String answer); ("sources", sources_json)
+                         ; ("llm_calls", `List !p_llm_log) ]
                   |> Yojson.Safe.to_string
                 in
                 Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ())))
@@ -2720,9 +2884,14 @@ let handler ~client ~sw ~clock _socket request body =
             (s.history_summary, s.tail))
         in
 
-        let queries, resolved_question, no_retrieval =
+        (* Accumulate EVERY LLM call made during this request so the quality
+           harness can inspect all prompts, not just the final chat prompt. *)
+        let llm_log : Yojson.Safe.t list ref = ref [] in
+
+        let queries, resolved_question, no_retrieval, rewrite_filter, rewrite_score =
           rewrite_queries_for_retrieval ~client ~sw ~question
             ~history_summary ~tail ~user_name:(s.user_name)
+            ~llm_log ()
         in
 
         if no_retrieval then (
@@ -2737,6 +2906,7 @@ let handler ~client ~sw ~clock _socket request body =
             ; message_ids = []
             ; sources_json = `List []
             ; evidence_by_id = Hashtbl.create 0
+            ; llm_calls = !llm_log
             }
           in
           Eio.Mutex.use_rw ~protect:true pending_tbl_mu (fun () -> Hashtbl.replace pending_tbl request_id p);
@@ -2752,6 +2922,7 @@ let handler ~client ~sw ~clock _socket request body =
           Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ())
         else (
         let retrieval_sqls = ref [] in
+        let retrieval_queries = ref [] in
         let embed_and_retrieve (query_text : string) : Yojson.Safe.t list =
           match ollama_embed ~client ~sw ~task:Search_query ~text:query_text () with
           | Error msg ->
@@ -2762,7 +2933,9 @@ let handler ~client ~sw ~clock _socket request body =
               if debug_retrieval_enabled () then
                 Printf.printf "[retrieval.embed] query=%s\n%!"
                   (if String.length query_text > 120 then String.sub query_text 0 120 ^ "..." else query_text);
-              (match Rag_lib.Pg.query_knn ~embedding:emb ~top_k () with
+              retrieval_queries := query_text :: !retrieval_queries;
+              (match Rag_lib.Pg.query_knn ~embedding:emb ~top_k
+                ?filter:rewrite_filter ?score_expr:rewrite_score () with
               | Error msg ->
                   Printf.eprintf "[retrieval.pg.error] %s\n%!" msg;
                   []
@@ -2778,7 +2951,10 @@ let handler ~client ~sw ~clock _socket request body =
           match List.rev !retrieval_sqls with
           | [] -> ""
           | [s] -> s
-          | ss -> String.concat "\n-- next query --\n" ss
+          | ss -> String.concat " | " ss
+        in
+        let retrieval_queries_json =
+          `List (List.rev_map (fun s -> `String s) !retrieval_queries)
         in
         let sources_json = merge_multi_query_sources all_sources top_k in
 
@@ -2818,7 +2994,7 @@ let handler ~client ~sw ~clock _socket request body =
           (* Selective rehydration: ask the LLM which emails need full content. *)
           let message_ids =
             select_relevant_sources ~client ~sw ~resolved_question
-              ~user_name:(s.user_name) sources_json
+              ~user_name:(s.user_name) ~llm_log sources_json
           in
 
           let request_id = fresh_request_id session_id question in
@@ -2830,6 +3006,7 @@ let handler ~client ~sw ~clock _socket request body =
             ; message_ids
             ; sources_json
             ; evidence_by_id = Hashtbl.create 32
+            ; llm_calls = !llm_log
             }
           in
           Eio.Mutex.use_rw ~protect:true pending_tbl_mu (fun () -> Hashtbl.replace pending_tbl request_id p);
@@ -2859,6 +3036,7 @@ let handler ~client ~sw ~clock _socket request body =
               ; ("message_ids", `List (List.map (fun s -> `String s) message_ids))
               ; ("sources", annotated_sources)
               ; ("retrieval_sql", `String retrieval_sql)
+              ; ("retrieval_queries", retrieval_queries_json)
               ]
             |> Yojson.Safe.to_string
           in
@@ -2942,8 +3120,8 @@ let handler ~client ~sw ~clock _socket request body =
         let quoted_capped_untrimmed =
           if String.trim quoted_raw = "" then ""
           else
-            truncate_lines quoted_raw ~max_lines:rag_quoted_context_max_lines
-            |> truncate_chars ~max_chars:rag_quoted_context_max_input_chars
+            truncate_lines quoted_raw ~max_lines:!rag_quoted_context_max_lines
+            |> truncate_chars ~max_chars:!rag_quoted_context_max_input_chars
         in
         let quoted_capped = String.trim quoted_capped_untrimmed in
         let overflow_start = String.length quoted_capped_untrimmed in
@@ -2985,7 +3163,7 @@ let handler ~client ~sw ~clock _socket request body =
           `Assoc
             [ ("body_text", `String body_text)
             ; ("metadata", metadata_json)
-            ; ("summarize_model", `String (if summarize then ollama_summarize_model else ""))
+            ; ("summarize_model", `String (if summarize then !ollama_summarize_model else ""))
             ]
         in
         Cohttp_eio.Server.respond_string ~status:`OK
@@ -3066,6 +3244,17 @@ let handler ~client ~sw ~clock _socket request body =
            Cohttp_eio.Server.respond_string ~status:`Internal_server_error
              ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
              ~headers:json_headers ())
+  | `POST, "/admin/reload" ->
+      (try
+         load_settings ();
+         Cohttp_eio.Server.respond_string ~status:`OK
+           ~body:{|{"ok":true}|} ~headers:json_headers ()
+       with ex ->
+         let msg = Printexc.to_string ex in
+         Printf.eprintf "[admin.reload.error] %s\n%!" msg;
+         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+           ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped msg))
+           ~headers:json_headers ())
   | `POST, "/admin/mark_processed" ->
       let raw = read_all body in
       (* Accept either JSON {"id":"..."} or raw RFC822 (from filter action) *)
@@ -3166,10 +3355,16 @@ let () =
 let () =
   let port = ref 8080 in
   Arg.parse
-    [ ("-p", Arg.Set_int port, " Listening port number (8080 by default)") ]
+    [ ("-p", Arg.Set_int port, " Listening port number (8080 by default)")
+    ; ("--config-dir", Arg.Set_string config_dir, " Config directory for settings.json and prompts.json (default: ~/.thunderRAG)")
+    ]
     ignore "RAG email ingest server";
 
-  (* Install default prompts.json to ~/.thunderRAG/ if not already present *)
+  (* Load settings from the (possibly overridden) config directory *)
+  ensure_dir (thunderrag_config_dir ());
+  load_settings ();
+
+  (* Install default prompts.json if not already present *)
   install_default_if_missing
     ~src:(default_prompts_path ())
     ~dst:(prompts_path ());

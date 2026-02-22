@@ -1,8 +1,9 @@
 (*
   Configuration and settings
 
-  Loads settings from environment variables and an optional JSON settings file.
-  Environment variables take precedence over settings.json values.
+  All config values are mutable refs.  Call [load_settings ()] after setting
+  [config_dir] to read settings.json + env-var overrides into the refs.
+  Call it again at any time (e.g. from /admin/reload) to pick up changes.
 *)
 
 (* User's home directory, used as the base for ~/.thunderRAG config dir. *)
@@ -11,8 +12,11 @@ let thunderrag_home_dir () : string =
   | Some h when String.trim h <> "" -> h
   | _ -> "."
 
-(* Default configuration directory: ~/.thunderRAG *)
-let thunderrag_config_dir () : string = Filename.concat (thunderrag_home_dir ()) ".thunderRAG"
+(* Mutable configuration directory.  Set via --config-dir before calling
+   load_settings().  Defaults to ~/.thunderRAG. *)
+let config_dir = ref (Filename.concat (thunderrag_home_dir ()) ".thunderRAG")
+
+let thunderrag_config_dir () : string = !config_dir
 
 (* Create a directory (mode 0700) if it does not already exist; silently ignores errors. *)
 let ensure_dir (path : string) : unit =
@@ -20,7 +24,7 @@ let ensure_dir (path : string) : unit =
     if Sys.file_exists path then () else Unix.mkdir path 0o700
   with _ -> ()
 
-(* Resolve the path to settings.json: THUNDERRAG_SETTINGS env var, or ~/.thunderRAG/settings.json.
+(* Resolve the path to settings.json: THUNDERRAG_SETTINGS env var, or <config_dir>/settings.json.
    Supports ~ expansion. *)
 let settings_path () : string =
   match Sys.getenv_opt "THUNDERRAG_SETTINGS" with
@@ -30,8 +34,8 @@ let settings_path () : string =
       else p
   | _ -> Filename.concat (thunderrag_config_dir ()) "settings.json"
 
-(* Eagerly load the settings JSON file at startup (None if missing or unparseable). *)
-let settings_json : Yojson.Safe.t option =
+(* Load and parse settings.json from the current config dir. *)
+let read_settings_json () : Yojson.Safe.t option =
   let p = settings_path () in
   if Sys.file_exists p then
     try Some (Yojson.Safe.from_file p) with _ -> None
@@ -51,18 +55,18 @@ let json_get_path (json : Yojson.Safe.t) (path : string list) : Yojson.Safe.t op
   in
   loop json path
 
-(* Read a string setting from settings.json at the given key path. *)
-let setting_string (path : string list) ~(default : string) : string =
-  match settings_json with
+(* Read a string setting from a parsed JSON object at the given key path. *)
+let setting_string (json : Yojson.Safe.t option) (path : string list) ~(default : string) : string =
+  match json with
   | None -> default
   | Some json -> (
       match json_get_path json path with
       | Some (`String s) when String.trim s <> "" -> String.trim s
       | _ -> default)
 
-(* Read an integer setting from settings.json (accepts int, intlit, or string). *)
-let setting_int (path : string list) ~(default : int) : int =
-  match settings_json with
+(* Read an integer setting from a parsed JSON object (accepts int, intlit, or string). *)
+let setting_int (json : Yojson.Safe.t option) (path : string list) ~(default : int) : int =
+  match json with
   | None -> default
   | Some json -> (
       match json_get_path json path with
@@ -71,14 +75,14 @@ let setting_int (path : string list) ~(default : int) : int =
       | Some (`String s) -> (try int_of_string (String.trim s) with _ -> default)
       | _ -> default)
 
-(* Read a boolean setting from settings.json (accepts bool, 0/1, or string like "true"/"false"). *)
-let setting_bool (path : string list) ~(default : bool) : bool =
+(* Read a boolean setting from a parsed JSON object (accepts bool, 0/1, or string like "true"/"false"). *)
+let setting_bool (json : Yojson.Safe.t option) (path : string list) ~(default : bool) : bool =
   let parse = function
     | "1" | "true" | "yes" | "on" -> Some true
     | "0" | "false" | "no" | "off" -> Some false
     | _ -> None
   in
-  match settings_json with
+  match json with
   | None -> default
   | Some json -> (
       match json_get_path json path with
@@ -112,124 +116,88 @@ let env_bool (name : string) (fallback : bool) : bool =
       | _ -> fallback)
   | None -> fallback
 
-(* --- Resolved configuration values used throughout the server --- *)
+(* --- Mutable configuration refs (populated by load_settings) --- *)
 
-(* Maximum seconds to wait for any single Ollama HTTP request. *)
-let ollama_timeout_seconds : float =
-  let default = 300.0 in
-  match Sys.getenv_opt "OLLAMA_TIMEOUT_SECONDS" with
-  | Some s -> (try float_of_string (String.trim s) with _ -> default)
-  | None -> default
+let ollama_timeout_seconds    = ref 300.0
+let ollama_base_url           = ref "http://127.0.0.1:11434"
+let ollama_embed_model        = ref "nomic-embed-text"
+let ollama_llm_model          = ref "llama3"
+let ollama_summarize_model    = ref "llama3"
+let ollama_triage_model       = ref "llama3"
+let ollama_rewrite_model      = ref "llama3"
+let rag_chunk_size            = ref 1500
+let rag_chunk_overlap         = ref 200
+let rag_max_evidence_chars_per_email = ref 8000
+let rag_new_content_max_chars = ref 8000
+let rag_summarize_max_input_chars = ref 20000
+let rag_quoted_context_summarize  = ref false
+let rag_quoted_context_max_lines  = ref 100
+let rag_quoted_context_max_chars  = ref 8000
+let rag_quoted_context_max_input_chars = ref 20000
+let rag_attachment_summarize      = ref false
+let rag_attachment_max_attachments = ref 4
+let rag_attachment_max_chars      = ref 1500
+let rag_attachment_max_input_chars = ref 20000
+let rag_attachment_max_bytes      = ref 5_000_000
+let rag_attachment_use_pdftotext  = ref false
+let rag_attachment_use_pandoc     = ref false
+let rag_include_unrehydrated_metadata = ref true
+let rag_query_rewrite             = ref true
+let pg_database                   = ref "thunderrag"
+let pg_connection_string          = ref "postgresql://localhost/thunderrag"
+let rag_debug_ollama_embed        = ref false
+let rag_debug_ollama_chat         = ref false
+let rag_debug_retrieval           = ref false
 
-(* Ollama server URL for embedding and chat completions. *)
-let ollama_base_url =
-  env_string "OLLAMA_BASE_URL" (setting_string [ "ollama"; "base_url" ] ~default:"http://127.0.0.1:11434")
-
-(* Model name used for embedding (e.g. nomic-embed-text). *)
-let ollama_embed_model =
-  env_string "OLLAMA_EMBED_MODEL" (setting_string [ "ollama"; "embed_model" ] ~default:"nomic-embed-text")
-
-(* Model name used for LLM chat completions (e.g. llama3). *)
-let ollama_llm_model =
-  env_string "OLLAMA_LLM_MODEL" (setting_string [ "ollama"; "llm_model" ] ~default:"llama3")
-
-(* Model name used for summarization at ingestion time (quote compression, attachment summaries).
-   Falls back to ollama_llm_model if not set, so existing configs keep working. *)
-let ollama_summarize_model =
-  let v = env_string "OLLAMA_SUMMARIZE_MODEL" (setting_string [ "ollama"; "summarize_model" ] ~default:"") in
-  if String.trim v = "" then ollama_llm_model else v
-
-(* Model name used for triage at ingestion time (action_score, importance_score, reply_by).
-   Falls back to ollama_llm_model if not set. *)
-let ollama_triage_model =
-  let v = env_string "OLLAMA_TRIAGE_MODEL" (setting_string [ "ollama"; "triage_model" ] ~default:"") in
-  if String.trim v = "" then ollama_llm_model else v
-
-(* Chunk size (characters) for splitting text before embedding. *)
-let rag_chunk_size : int =
-  env_int "RAG_CHUNK_SIZE" (setting_int [ "rag"; "chunk_size" ] ~default:1500)
-
-(* Overlap (characters) between consecutive chunks. *)
-let rag_chunk_overlap : int =
-  env_int "RAG_CHUNK_OVERLAP" (setting_int [ "rag"; "chunk_overlap" ] ~default:200)
-
-(* Maximum characters per email to include in evidence (truncated beyond this). *)
-let rag_max_evidence_chars_per_email : int =
-  env_int "RAG_MAX_EVIDENCE_CHARS_PER_EMAIL" (setting_int [ "rag"; "max_evidence_chars_per_email" ] ~default:8000)
-
-(* Maximum characters for the NEW CONTENT section of an email body.
-   If the new content exceeds this, it is recursively summarized. *)
-let rag_new_content_max_chars : int =
-  env_int "RAG_NEW_CONTENT_MAX_CHARS" (setting_int [ "rag"; "new_content"; "max_chars" ] ~default:8000)
-
-(* Maximum characters per LLM summarization call input.  Shared default for
-   summarize_to_fit when no context-specific override is provided. *)
-let rag_summarize_max_input_chars : int =
-  env_int "RAG_SUMMARIZE_MAX_INPUT_CHARS" (setting_int [ "rag"; "summarize"; "max_input_chars" ] ~default:20000)
-
-(* Whether to LLM-summarize quoted thread context during ingestion. *)
-let rag_quoted_context_summarize : bool =
-  env_bool "RAG_QUOTED_CONTEXT_SUMMARIZE" (setting_bool [ "rag"; "quoted_context"; "summarize" ] ~default:false)
-
-let rag_quoted_context_max_lines : int =
-  env_int "RAG_QUOTED_CONTEXT_MAX_LINES" (setting_int [ "rag"; "quoted_context"; "max_lines" ] ~default:100)
-
-let rag_quoted_context_max_chars : int =
-  env_int "RAG_QUOTED_CONTEXT_MAX_CHARS" (setting_int [ "rag"; "quoted_context"; "max_chars" ] ~default:8000)
-
-let rag_quoted_context_max_input_chars : int =
-  env_int "RAG_QUOTED_CONTEXT_MAX_INPUT_CHARS" (setting_int [ "rag"; "quoted_context"; "max_input_chars" ] ~default:20000)
-
-let rag_attachment_summarize : bool =
-  env_bool "RAG_ATTACHMENT_SUMMARIZE" (setting_bool [ "rag"; "attachments"; "summarize" ] ~default:false)
-
-let rag_attachment_max_attachments : int =
-  env_int "RAG_ATTACHMENT_MAX_ATTACHMENTS" (setting_int [ "rag"; "attachments"; "max_attachments" ] ~default:4)
-
-let rag_attachment_max_chars : int =
-  env_int "RAG_ATTACHMENT_MAX_CHARS" (setting_int [ "rag"; "attachments"; "max_chars" ] ~default:1500)
-
-let rag_attachment_max_input_chars : int =
-  env_int "RAG_ATTACHMENT_MAX_INPUT_CHARS" (setting_int [ "rag"; "attachments"; "max_input_chars" ] ~default:20000)
-
-let rag_attachment_max_bytes : int =
-  env_int "RAG_ATTACHMENT_MAX_BYTES" (setting_int [ "rag"; "attachments"; "max_bytes" ] ~default:5_000_000)
-
-let rag_attachment_use_pdftotext : bool =
-  env_bool "RAG_ATTACHMENT_USE_PDFTOTEXT" (setting_bool [ "rag"; "attachments"; "use_pdftotext" ] ~default:false)
-
-let rag_attachment_use_pandoc : bool =
-  env_bool "RAG_ATTACHMENT_USE_PANDOC" (setting_bool [ "rag"; "attachments"; "use_pandoc" ] ~default:false)
-
-(* Whether to include metadata-only entries for non-rehydrated emails in the
-   final LLM prompt.  When true, the LLM sees a one-line header for every
-   retrieved email even if its full body was not loaded.  When false, only
-   rehydrated emails appear in the prompt. *)
-let rag_include_unrehydrated_metadata : bool =
-  env_bool "RAG_INCLUDE_UNREHYDRATED_METADATA"
-    (setting_bool [ "rag"; "query"; "include_unrehydrated_metadata" ] ~default:true)
-
-(* Whether to rewrite the user's query before embedding for retrieval.
-   When enabled, generates a contextual rewrite + hypothetical email passage
-   (multi-query) and merges results for better recall. *)
-let rag_query_rewrite : bool =
-  env_bool "RAG_QUERY_REWRITE" (setting_bool [ "rag"; "query"; "rewrite" ] ~default:true)
-
-(* PostgreSQL connection string for pgvector store. *)
-let pg_connection_string =
-  env_string "THUNDERRAG_PG_URL"
-    (setting_string [ "pg"; "connection_string" ] ~default:"postgresql://localhost/thunderrag")
-
-(* --- Debug flags: enable verbose logging for specific subsystems --- *)
-
-let rag_debug_ollama_embed : bool =
-  env_bool "RAG_DEBUG_OLLAMA_EMBED" (setting_bool [ "debug"; "ollama_embed" ] ~default:false)
-
-let rag_debug_ollama_chat : bool =
-  env_bool "RAG_DEBUG_OLLAMA_CHAT" (setting_bool [ "debug"; "ollama_chat" ] ~default:false)
-
-let rag_debug_retrieval : bool =
-  env_bool "RAG_DEBUG_RETRIEVAL" (setting_bool [ "debug"; "retrieval" ] ~default:false)
+(* Read settings.json + env-var overrides into all config refs.
+   Call once at startup after setting [config_dir], and again on /admin/reload. *)
+let load_settings () : unit =
+  let j = read_settings_json () in
+  let ss env path ~default = env_string env (setting_string j path ~default) in
+  let si env path ~default = env_int    env (setting_int    j path ~default) in
+  let sb env path ~default = env_bool   env (setting_bool   j path ~default) in
+  ollama_timeout_seconds :=
+    (let default = 300.0 in
+     match Sys.getenv_opt "OLLAMA_TIMEOUT_SECONDS" with
+     | Some s -> (try float_of_string (String.trim s) with _ -> default)
+     | None -> default);
+  ollama_base_url       := ss "OLLAMA_BASE_URL"       [ "ollama"; "base_url" ]       ~default:"http://127.0.0.1:11434";
+  ollama_embed_model    := ss "OLLAMA_EMBED_MODEL"    [ "ollama"; "embed_model" ]    ~default:"nomic-embed-text";
+  ollama_llm_model      := ss "OLLAMA_LLM_MODEL"      [ "ollama"; "llm_model" ]      ~default:"llama3";
+  let llm = !ollama_llm_model in
+  let model_or_llm env path =
+    let v = ss env path ~default:"" in
+    if String.trim v = "" then llm else v
+  in
+  ollama_summarize_model := model_or_llm "OLLAMA_SUMMARIZE_MODEL" [ "ollama"; "summarize_model" ];
+  ollama_triage_model    := model_or_llm "OLLAMA_TRIAGE_MODEL"    [ "ollama"; "triage_model" ];
+  ollama_rewrite_model   := model_or_llm "OLLAMA_REWRITE_MODEL"   [ "ollama"; "rewrite_model" ];
+  rag_chunk_size         := si "RAG_CHUNK_SIZE"         [ "rag"; "chunk_size" ]         ~default:1500;
+  rag_chunk_overlap      := si "RAG_CHUNK_OVERLAP"      [ "rag"; "chunk_overlap" ]      ~default:200;
+  rag_max_evidence_chars_per_email := si "RAG_MAX_EVIDENCE_CHARS_PER_EMAIL" [ "rag"; "max_evidence_chars_per_email" ] ~default:8000;
+  rag_new_content_max_chars := si "RAG_NEW_CONTENT_MAX_CHARS" [ "rag"; "new_content"; "max_chars" ] ~default:8000;
+  rag_summarize_max_input_chars := si "RAG_SUMMARIZE_MAX_INPUT_CHARS" [ "rag"; "summarize"; "max_input_chars" ] ~default:20000;
+  rag_quoted_context_summarize  := sb "RAG_QUOTED_CONTEXT_SUMMARIZE"  [ "rag"; "quoted_context"; "summarize" ]  ~default:false;
+  rag_quoted_context_max_lines  := si "RAG_QUOTED_CONTEXT_MAX_LINES"  [ "rag"; "quoted_context"; "max_lines" ]  ~default:100;
+  rag_quoted_context_max_chars  := si "RAG_QUOTED_CONTEXT_MAX_CHARS"  [ "rag"; "quoted_context"; "max_chars" ]  ~default:8000;
+  rag_quoted_context_max_input_chars := si "RAG_QUOTED_CONTEXT_MAX_INPUT_CHARS" [ "rag"; "quoted_context"; "max_input_chars" ] ~default:20000;
+  rag_attachment_summarize      := sb "RAG_ATTACHMENT_SUMMARIZE"      [ "rag"; "attachments"; "summarize" ]      ~default:false;
+  rag_attachment_max_attachments := si "RAG_ATTACHMENT_MAX_ATTACHMENTS" [ "rag"; "attachments"; "max_attachments" ] ~default:4;
+  rag_attachment_max_chars      := si "RAG_ATTACHMENT_MAX_CHARS"      [ "rag"; "attachments"; "max_chars" ]      ~default:1500;
+  rag_attachment_max_input_chars := si "RAG_ATTACHMENT_MAX_INPUT_CHARS" [ "rag"; "attachments"; "max_input_chars" ] ~default:20000;
+  rag_attachment_max_bytes      := si "RAG_ATTACHMENT_MAX_BYTES"      [ "rag"; "attachments"; "max_bytes" ]      ~default:5_000_000;
+  rag_attachment_use_pdftotext  := sb "RAG_ATTACHMENT_USE_PDFTOTEXT"  [ "rag"; "attachments"; "use_pdftotext" ]  ~default:false;
+  rag_attachment_use_pandoc     := sb "RAG_ATTACHMENT_USE_PANDOC"     [ "rag"; "attachments"; "use_pandoc" ]     ~default:false;
+  rag_include_unrehydrated_metadata := sb "RAG_INCLUDE_UNREHYDRATED_METADATA" [ "rag"; "query"; "include_unrehydrated_metadata" ] ~default:true;
+  rag_query_rewrite     := sb "RAG_QUERY_REWRITE"     [ "rag"; "query"; "rewrite" ]     ~default:true;
+  pg_database           := ss "THUNDERRAG_PG_DATABASE" [ "pg"; "database" ]             ~default:"thunderrag";
+  (let explicit = ss "THUNDERRAG_PG_URL" [ "pg"; "connection_string" ] ~default:"" in
+   pg_connection_string := if explicit <> "" then explicit
+     else Printf.sprintf "postgresql://localhost/%s" !pg_database);
+  rag_debug_ollama_embed := sb "RAG_DEBUG_OLLAMA_EMBED" [ "debug"; "ollama_embed" ] ~default:false;
+  rag_debug_ollama_chat  := sb "RAG_DEBUG_OLLAMA_CHAT"  [ "debug"; "ollama_chat" ]  ~default:false;
+  rag_debug_retrieval    := sb "RAG_DEBUG_RETRIEVAL"    [ "debug"; "retrieval" ]    ~default:false;
+  Printf.printf "[config] loaded from %s (db=%s)\n%!" (settings_path ()) !pg_database
 
 (* --- Prompts (hot-reloadable) --- *)
 
@@ -308,10 +276,16 @@ let get_prompt_raw (key : string) ~(default : string) : string =
 (* Substitute meta-variables in a prompt string.
    [vars] is a list of (pattern, replacement) pairs, e.g.
    [("{{user_identity}}", "The user is: ..."); ("{{datetime_local}}", "2026-...")].
-   Also expands {{indexed_email_format}} by reading it from prompts.json. *)
+   Also expands {{indexed_email_format}} and {{email_body_sections}} by
+   reading them from prompts.json. *)
 let substitute_prompt_vars (prompt : string) (vars : (string * string) list) : string =
   let indexed_format = get_prompt_raw "indexed_email_format" ~default:"" in
-  let all_vars = ("{{indexed_email_format}}", indexed_format) :: vars in
+  let body_sections = get_prompt_raw "email_body_sections" ~default:"" in
+  let all_vars =
+    ("{{indexed_email_format}}", indexed_format)
+    :: ("{{email_body_sections}}", body_sections)
+    :: vars
+  in
   List.fold_left
     (fun acc (pat, rep) ->
       let rec replace s =

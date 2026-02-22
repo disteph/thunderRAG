@@ -1,6 +1,6 @@
 # ThunderRAG OCaml server — build, run, and test targets
 
-.PHONY: build run clean test test-quick quality
+.PHONY: build install run clean test test-quick quality
 
 # ---------------------------------------------------------------------------
 # Build / Run
@@ -8,6 +8,13 @@
 
 build:
 	dune build
+
+# Install prompts.json to ~/.thunderRAG/ (the server reads from there,
+# not from the codebase copy).  Creates the directory if needed.
+install: build
+	@mkdir -p ~/.thunderRAG
+	@cp prompts.json ~/.thunderRAG/prompts.json
+	@echo "[install] prompts.json -> ~/.thunderRAG/prompts.json"
 
 run: build
 	dune exec -- rag-email-server -p 8080

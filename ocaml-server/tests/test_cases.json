@@ -1581,6 +1581,187 @@
         "expected_email_subjects_any": [],
         "hallucination_keywords": []
       }
+    },
+
+    {
+      "id": "filter_sender_01",
+      "category": "filter",
+      "question": "Show me all emails from Alice Chen.",
+      "session_group": "session_filter_sender_01",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["Falcon", "launch", "API keys", "timeline", "1:1"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["Falcon", "API keys", "Updated Falcon", "1:1 agenda"],
+        "hallucination_keywords": [],
+        "expect_filter_patterns": ["alice", "sender"]
+      }
+    },
+    {
+      "id": "filter_sender_02",
+      "category": "filter",
+      "question": "What emails did Dave Wilson send me?",
+      "session_group": "session_filter_sender_02",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["server", "production", "staging", "migration", "lunch"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["Production server", "staging", "migration", "Lunch"],
+        "hallucination_keywords": [],
+        "expect_filter_patterns": ["dave", "sender"]
+      }
+    },
+    {
+      "id": "filter_sender_dept",
+      "category": "filter",
+      "question": "List all emails from the HR department.",
+      "session_group": "session_filter_sender_dept",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["holiday", "benefits", "enrollment", "2025"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["Holiday", "Open enrollment"],
+        "hallucination_keywords": [],
+        "expect_filter_patterns": ["hr", "sender"]
+      }
+    },
+    {
+      "id": "filter_date_01",
+      "category": "filter",
+      "question": "Show me emails I received after February 13, 2025.",
+      "session_group": "session_filter_date_01",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["Feb 14", "February 14", "Feb 17", "February 17"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [],
+        "hallucination_keywords": [],
+        "expect_filter_patterns": ["2025-02-13", "email_date"]
+      }
+    },
+    {
+      "id": "filter_date_02",
+      "category": "filter",
+      "question": "What emails did I get during the first week of February 2025 (Feb 1-7)?",
+      "session_group": "session_filter_date_02",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["Falcon", "vendor", "CloudStore", "Lisa", "offsite", "Irene"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [],
+        "hallucination_keywords": [],
+        "expect_filter_patterns": ["2025-02", "email_date"]
+      }
+    },
+    {
+      "id": "filter_subject_01",
+      "category": "filter",
+      "question": "Show me all emails with 'Falcon' in the subject line.",
+      "session_group": "session_filter_subject_01",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["Falcon"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["Falcon"],
+        "hallucination_keywords": [],
+        "expect_filter_patterns": ["falcon", "subject"]
+      }
+    },
+    {
+      "id": "filter_processed_01",
+      "category": "filter",
+      "question": "Show me emails I have already processed.",
+      "session_group": "session_filter_processed_01",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["password", "VPN", "IT"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["Password reset"],
+        "hallucination_keywords": [],
+        "expect_filter_patterns": ["processed", "true"]
+      }
+    },
+    {
+      "id": "filter_cc_01",
+      "category": "filter",
+      "question": "Which emails was I CC'd on rather than directly addressed?",
+      "session_group": "session_filter_cc_01",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["budget", "vendor", "server", "CVE", "disk", "NDA"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": [],
+        "hallucination_keywords": [],
+        "expect_filter_patterns": ["cc", "bob"]
+      }
+    },
+    {
+      "id": "filter_external_01",
+      "category": "filter",
+      "question": "Are there any emails from people outside acme.com?",
+      "session_group": "session_filter_external_01",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["Sam Chen", "BigCorp", "bigcorp.com"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["BigCorp", "ESCALATION"],
+        "hallucination_keywords": [],
+        "expect_filter_patterns": ["sender", "acme.com"]
+      }
+    },
+    {
+      "id": "filter_combo_01",
+      "category": "filter",
+      "question": "Show me emails from Alice Chen sent after February 10.",
+      "session_group": "session_filter_combo_01",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["Falcon", "timeline", "API keys", "1:1", "out of office"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["Updated Falcon", "API keys", "1:1 agenda", "Out of office"],
+        "hallucination_keywords": [],
+        "expect_filter_patterns": ["alice", "sender", "2025-02-10", "email_date"]
+      }
+    },
+    {
+      "id": "filter_combo_02",
+      "category": "filter",
+      "question": "List unprocessed emails with URGENT or CRITICAL in the subject.",
+      "session_group": "session_filter_combo_02",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["server", "CVE", "production"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["URGENT", "CRITICAL"],
+        "hallucination_keywords": [],
+        "expect_filter_patterns": ["subject", "processed"]
+      }
+    },
+    {
+      "id": "filter_automated_01",
+      "category": "filter",
+      "question": "Show me all automated notifications (from JIRA, CI, or monitoring systems).",
+      "session_group": "session_filter_automated_01",
+      "depends_on": null,
+      "criteria": {
+        "must_contain_any": ["FALCON-342", "build", "disk", "alert"],
+        "must_not_contain": [],
+        "must_cite_emails": true,
+        "expected_email_subjects_any": ["FALCON-342", "FAILED", "ALERT"],
+        "hallucination_keywords": [],
+        "expect_filter_patterns": ["sender"]
+      }
     }
   ]
 }

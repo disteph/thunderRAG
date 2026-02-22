@@ -12,6 +12,7 @@
 
 let base_url = ref "http://localhost:8080"
 let skip_ingest = ref false
+let only_category = ref ""
 let the_client : Cohttp_eio.Client.t option ref = ref None
 let the_sw : Eio.Switch.t option ref = ref None
 let client () = Option.get !the_client
@@ -25,6 +26,12 @@ let call_post ?(hdrs=json_hdrs) path data =
   let uri = Uri.of_string (!base_url ^ path) in
   let body = Cohttp_eio.Body.of_string data in
   let resp, rb = Cohttp_eio.Client.call (client ()) ~sw:(sw ()) ~headers:hdrs ~body `POST uri in
+  (Http.Response.status resp |> Cohttp.Code.code_of_status,
+   Eio.Buf_read.(parse_exn take_all) rb ~max_size:max_int)
+
+let call_get path =
+  let uri = Uri.of_string (!base_url ^ path) in
+  let resp, rb = Cohttp_eio.Client.call (client ()) ~sw:(sw ()) `GET uri in
   (Http.Response.status resp |> Cohttp.Code.code_of_status,
    Eio.Buf_read.(parse_exn take_all) rb ~max_size:max_int)
 
@@ -129,12 +136,110 @@ let run_query sid question user_name corpus_tbl =
 
 (* ---- analysis ---- *)
 
+let analyze_prompt_messages result =
+  let a = ref [] in let add s = a := s :: !a in
+  let complete = match result with `Assoc kv -> (match List.assoc_opt "complete_response" kv with Some j -> j | _ -> `Null) | _ -> `Null in
+  let llm_calls = jlist "llm_calls" complete in
+  (* Find the chat call's messages — look for label="chat" entry *)
+  let chat_msgs = ref [] in
+  List.iter (function
+    | `Assoc kv ->
+        let label = match List.assoc_opt "label" kv with Some (`String s) -> s | _ -> "" in
+        if label = "chat" then
+          chat_msgs := (match List.assoc_opt "messages" kv with Some (`List ms) -> ms | _ -> [])
+    | _ -> ()) llm_calls;
+  let prompt_msgs = !chat_msgs in
+  (* Find the evidence message: the user message containing "EMAILS THAT MAY BE RELEVANT" *)
+  let evidence_content = ref "" in
+  let all_content = Buffer.create 4096 in
+  List.iter (function
+    | `Assoc kv ->
+        let content = match List.assoc_opt "content" kv with Some (`String s) -> s | _ -> "" in
+        Buffer.add_string all_content content;
+        Buffer.add_char all_content '\n';
+        let role = match List.assoc_opt "role" kv with Some (`String s) -> s | _ -> "" in
+        if role = "user" && contains_ci content "EMAILS THAT MAY BE RELEVANT" then
+          evidence_content := content
+    | _ -> ()) prompt_msgs;
+  (* Check rewrite call: resolved_question should not be "..." *)
+  List.iter (function
+    | `Assoc kv ->
+        let label = match List.assoc_opt "label" kv with Some (`String s) -> s | _ -> "" in
+        if label = "rewrite" then begin
+          let resp = match List.assoc_opt "response" kv with Some (`String s) -> s | _ -> "" in
+          (try
+            let json = Yojson.Safe.from_string resp in
+            let rq = match json with
+              | `Assoc rkv -> (match List.assoc_opt "resolved_question" rkv with Some (`String s) -> s | _ -> "")
+              | _ -> ""
+            in
+            if rq = "..." || rq = ".." || rq = "." || (String.length rq > 0 && String.length rq < 5) then
+              add (Printf.sprintf "REWRITE: resolved_question is garbage: %S" rq)
+          with _ -> ())
+        end
+    | _ -> ()) llm_calls;
+  let evidence = !evidence_content in
+  (* Check for duplicate [Email N] headers within the evidence section only *)
+  if evidence <> "" then begin
+    let email_headers = Hashtbl.create 16 in
+    String.split_on_char '\n' evidence |> List.iter (fun line ->
+      let l = String.trim line in
+      let prefix = "[Email " in
+      let plen = String.length prefix in
+      if String.length l > plen && String.sub l 0 plen = prefix then begin
+        let j = ref plen in
+        while !j < String.length l && l.[!j] >= '0' && l.[!j] <= '9' do incr j done;
+        if !j > plen && !j < String.length l && l.[!j] = ']' then begin
+          let tag = String.sub l 0 (!j + 1) in
+          let count = match Hashtbl.find_opt email_headers tag with Some n -> n | None -> 0 in
+          Hashtbl.replace email_headers tag (count + 1)
+        end
+      end);
+    Hashtbl.iter (fun tag count ->
+      if count > 1 then add (Printf.sprintf "PROMPT: duplicate email header %s appears %d times in evidence" tag count)
+    ) email_headers;
+    (* Check for duplicate doc_id= lines within evidence *)
+    let doc_ids = Hashtbl.create 16 in
+    String.split_on_char '\n' evidence |> List.iter (fun line ->
+      let l = String.trim line in
+      let scan_for_docid s =
+        let pat = "doc_id=" in
+        let patlen = String.length pat in
+        let slen = String.length s in
+        let rec find i =
+          if i > slen - patlen then None
+          else if String.sub s i patlen = pat then
+            let j = ref (i + patlen) in
+            while !j < slen && s.[!j] <> ' ' && s.[!j] <> '\n' do incr j done;
+            Some (String.sub s (i + patlen) (!j - i - patlen))
+          else find (i + 1)
+        in find 0
+      in
+      match scan_for_docid l with
+      | Some did when String.trim did <> "" ->
+          let count = match Hashtbl.find_opt doc_ids did with Some n -> n | None -> 0 in
+          Hashtbl.replace doc_ids did (count + 1)
+      | _ -> ());
+    Hashtbl.iter (fun did count ->
+      if count > 1 then add (Printf.sprintf "PROMPT: duplicate doc_id=%s appears %d times in evidence" did count)
+    ) doc_ids;
+    (* Check for empty evidence *)
+    if not (contains_ci evidence "[Email 1]") then
+      add "PROMPT: evidence section header present but no [Email 1] found"
+  end;
+  (* Check total prompt size *)
+  let total_chars = Buffer.length all_content in
+  if total_chars > 100000 then add (Printf.sprintf "PROMPT: very large total content: %d chars" total_chars);
+  List.rev !a
+
 let analyze result corpus =
   let a = ref [] in let add s = a := s :: !a in
   let query_resp = match result with `Assoc kv -> (match List.assoc_opt "query_response" kv with Some j -> j | _ -> `Null) | _ -> `Null in
   let complete = match result with `Assoc kv -> (match List.assoc_opt "complete_response" kv with Some j -> j | _ -> `Null) | _ -> `Null in
   (match jstr "error" complete with "" -> () | e -> add ("ERROR: "^e));
   if jstr "status" query_resp = "no_retrieval" then add "NO_RETRIEVAL: query was answered without email retrieval";
+  (* Prompt-level structural checks *)
+  List.iter add (analyze_prompt_messages result);
   let answer = jstr "answer" complete and sources = jlist "sources" complete in
   let ns = List.length sources in
   let cited = extract_citations answer in
@@ -187,6 +292,33 @@ let score result criteria =
     (match strs "hallucination_keywords" with [] -> add 1.0 | hk ->
       let neg = contains_ci answer "no " || contains_ci answer "not " || contains_ci answer "none" in
       add (if neg then 1.0 else if List.for_all (fun k -> not (contains_ci al k)) hk then 1.0 else 0.0));
+    (* Check expect_filter_patterns: extract "filter" field from the rewrite LLM call,
+       verify each expected pattern appears (case-insensitive) in the SQL fragment. *)
+    (match strs "expect_filter_patterns" with [] -> () | patterns ->
+      let llm_calls = jlist "llm_calls" complete in
+      let filter_sql = ref "" in
+      List.iter (function
+        | `Assoc kv ->
+            let label = match List.assoc_opt "label" kv with Some (`String s) -> s | _ -> "" in
+            if label = "rewrite" then begin
+              let resp = match List.assoc_opt "response" kv with Some (`String s) -> s | _ -> "" in
+              (try
+                let json = Yojson.Safe.from_string resp in
+                (match json with
+                 | `Assoc rkv ->
+                     (match List.assoc_opt "filter" rkv with
+                      | Some (`String f) when String.trim f <> "" -> filter_sql := f
+                      | _ -> ())
+                 | _ -> ())
+              with _ -> ())
+            end
+        | _ -> ()) llm_calls;
+      let f = String.lowercase_ascii !filter_sql in
+      if f = "" then
+        add 0.0  (* no filter produced at all *)
+      else
+        let matched = List.filter (fun pat -> contains_ci f pat) patterns in
+        add (float_of_int (List.length matched) /. float_of_int (List.length patterns)));
     let v = !ss in List.fold_left (+.) 0.0 v /. float_of_int (max 1 (List.length v))
 
 (* ---- main ---- *)
@@ -196,6 +328,7 @@ let () =
   let rec parse_args = function
     | "--base-url" :: u :: rest -> base_url := u; parse_args rest
     | "--skip-ingest" :: rest -> skip_ingest := true; parse_args rest
+    | "--category" :: c :: rest -> only_category := c; parse_args rest
     | _ :: rest -> parse_args rest
     | [] -> ()
   in parse_args (List.tl args);
@@ -223,6 +356,23 @@ let () =
   Unix.mkdir run_dir 0o755;
   Printf.printf "[init] Run: %s\n%!" run_dir;
 
+  (* Archive server's settings.json and prompts.json into the run dir *)
+  (try
+     let _code, body = call_get "/admin/config" in
+     let cfg = parse body in
+     let write_pretty name json =
+       let path = Filename.concat run_dir name in
+       let oc = open_out path in
+       output_string oc (Yojson.Safe.pretty_to_string json ^ "\n");
+       close_out oc
+     in
+     (match cfg with
+      | `Assoc kv ->
+          (match List.assoc_opt "settings" kv with Some j -> write_pretty "settings.json" j | None -> ());
+          (match List.assoc_opt "prompts" kv with Some j -> write_pretty "prompts.json" j | None -> ())
+      | _ -> ())
+   with _ -> Printf.eprintf "[init] warning: could not archive server config\n%!");
+
   let t0 = Unix.gettimeofday () in
 
   let corpus_tbl =
@@ -243,7 +393,11 @@ let () =
   in
 
   let user_name = jstr "user_name" test_cases in
-  let cases = jlist "cases" test_cases in
+  let cases =
+    let all = jlist "cases" test_cases in
+    if !only_category = "" then all
+    else List.filter (fun tc -> jstr "category" tc = !only_category) all
+  in
   let completed = Hashtbl.create 16 in
   Printf.printf "\n[test] Running %d cases...\n%!" (List.length cases);
 
@@ -276,6 +430,35 @@ let () =
   let oc = open_out (Filename.concat run_dir "results.json") in
   output_string oc (Yojson.Safe.pretty_to_string results_json);
   close_out oc;
+
+  (* Save per-case LLM call transcripts — ALL prompts sent to ALL LLMs *)
+  let prompts_dir = Filename.concat run_dir "prompts" in
+  (try Unix.mkdir prompts_dir 0o755 with Unix.Unix_error (Unix.EEXIST,_,_) -> ());
+  List.iter (fun (tid, _cat, r, _criteria) ->
+    match r with `Null -> () | _ ->
+    let cr = match r with `Assoc kv -> (match List.assoc_opt "complete_response" kv with Some c -> c | _ -> `Null) | _ -> `Null in
+    let llm_calls = jlist "llm_calls" cr in
+    if llm_calls <> [] then begin
+      let buf = Buffer.create 8192 in
+      List.iteri (fun i call ->
+        let label = jstr "label" call in
+        let model = jstr "model" call in
+        let msgs = jlist "messages" call in
+        let response = jstr "response" call in
+        Buffer.add_string buf (Printf.sprintf "######## LLM CALL %d: %s (model=%s) ########\n\n" (i+1) label model);
+        List.iter (fun m ->
+          let role = jstr "role" m and content = jstr "content" m in
+          Buffer.add_string buf (Printf.sprintf "--- %s ---\n%s\n\n" (String.uppercase_ascii role) content)
+        ) msgs;
+        Buffer.add_string buf (Printf.sprintf "--- RESPONSE ---\n%s\n\n" response);
+        Buffer.add_string buf "========================================\n\n"
+      ) llm_calls;
+      let path = Filename.concat prompts_dir (tid ^ ".txt") in
+      let oc = open_out path in
+      output_string oc (Buffer.contents buf);
+      close_out oc
+    end
+  ) results;
 
   (* Summary *)
   let buf = Buffer.create 4096 in

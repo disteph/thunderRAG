@@ -305,7 +305,7 @@ let l2_normalize (vec : float list) : float list =
 
 (* Split text into overlapping chunks for embedding.  Each chunk is at most
    chunk_size characters with overlap characters shared between consecutive chunks. *)
-let chunk_text ?(chunk_size = Config.rag_chunk_size) ?(overlap = Config.rag_chunk_overlap) (text : string) : string list =
+let chunk_text ?(chunk_size = !(Config.rag_chunk_size)) ?(overlap = !(Config.rag_chunk_overlap)) (text : string) : string list =
   let cleaned = String.trim text in
   let n = String.length cleaned in
   let rec loop start acc =
@@ -317,3 +317,43 @@ let chunk_text ?(chunk_size = Config.rag_chunk_size) ?(overlap = Config.rag_chun
       if end_ >= n then List.rev acc else loop (max 0 (end_ - overlap)) acc
   in
   if cleaned = "" then [] else loop 0 []
+
+(* Parse RFC2822 date string to ISO 8601 for PostgreSQL TIMESTAMPTZ.
+   Input: "Wed, 05 Feb 2025 09:00:00 +0000" or "05 Feb 2025 09:00:00 +0000"
+   Output: "2025-02-05T09:00:00+00:00" or the original string if unparseable. *)
+let parse_rfc822_to_iso8601 (s : string) : string =
+  let s = String.trim s in
+  (* Strip optional leading day-of-week *)
+  let s =
+    match String.index_opt s ',' with
+    | Some i -> String.trim (String.sub s (i + 1) (String.length s - i - 1))
+    | None -> s
+  in
+  let month_num m =
+    match String.lowercase_ascii m with
+    | "jan" -> Some 1  | "feb" -> Some 2  | "mar" -> Some 3
+    | "apr" -> Some 4  | "may" -> Some 5  | "jun" -> Some 6
+    | "jul" -> Some 7  | "aug" -> Some 8  | "sep" -> Some 9
+    | "oct" -> Some 10 | "nov" -> Some 11 | "dec" -> Some 12
+    | _ -> None
+  in
+  try
+    let parts = String.split_on_char ' ' s |> List.filter (fun p -> p <> "") in
+    match parts with
+    | day :: mon :: year :: time :: tz_rest ->
+        let dd = int_of_string day in
+        let mm = match month_num mon with Some m -> m | None -> raise Exit in
+        let yyyy = int_of_string year in
+        let tz = match tz_rest with z :: _ -> String.trim z | [] -> "+0000" in
+        (* Format timezone from +0000 to +00:00 *)
+        let tz_fmt =
+          let t = String.trim tz in
+          if String.length t = 5 && (t.[0] = '+' || t.[0] = '-') then
+            String.sub t 0 3 ^ ":" ^ String.sub t 3 2
+          else if String.uppercase_ascii t = "UTC" || String.uppercase_ascii t = "GMT" then
+            "+00:00"
+          else t
+        in
+        Printf.sprintf "%04d-%02d-%02dT%s%s" yyyy mm dd time tz_fmt
+    | _ -> s
+  with _ -> s
