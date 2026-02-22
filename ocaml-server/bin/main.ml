@@ -2359,10 +2359,68 @@ let handler ~client ~sw ~clock _socket request body =
                       Hashtbl.replace evidence_by_doc mid (body, md))
                     p.message_ids);
 
-                (* Build evidence entries and sort by date (oldest first)
-                   so the LLM sees them in chronological order.
-                   Also rebuild sources_json in the same order for the UI. *)
-                let evidence_entries =
+                (* Helper: extract a flat tuple from metadata JSON for prompt building *)
+                let entry_of_md mid text md rehydrated =
+                  let md_str key =
+                    match md with
+                    | `Assoc kv -> (
+                        match List.assoc_opt key kv with
+                        | Some (`String s) -> String.trim s
+                        | _ -> "")
+                    | _ -> ""
+                  in
+                  let md_int key =
+                    match md with
+                    | `Assoc kv -> (
+                        match List.assoc_opt key kv with
+                        | Some (`Int n) -> Some n
+                        | _ -> None)
+                    | _ -> None
+                  in
+                  let md_attachments =
+                    match md with
+                    | `Assoc kv -> (
+                        match List.assoc_opt "attachments" kv with
+                        | Some (`List ys) ->
+                            ys |> List.filter_map (function
+                              | `String s when String.trim s <> "" -> Some (String.trim s)
+                              | _ -> None)
+                        | _ -> [])
+                    | _ -> []
+                  in
+                  let md_bool key =
+                    match md with
+                    | `Assoc kv -> (
+                        match List.assoc_opt key kv with
+                        | Some (`Bool b) -> Some b
+                        | _ -> None)
+                    | _ -> None
+                  in
+                  let triage_str =
+                    let action = md_int "action_score" in
+                    let importance = md_int "importance_score" in
+                    let reply_by = md_str "reply_by" in
+                    let processed = md_bool "processed" in
+                    let parts = ref [] in
+                    (match action, importance with
+                     | Some a, Some imp ->
+                         parts := !parts @ [ Printf.sprintf "action=%d/100 importance=%d/100" a imp ];
+                         if reply_by <> "" && reply_by <> "none" then
+                           parts := !parts @ [ Printf.sprintf "reply_by=%s" reply_by ]
+                     | _ -> ());
+                    (match processed with
+                     | Some true -> parts := !parts @ [ "processed=true" ]
+                     | _ -> ());
+                    String.concat " " !parts
+                  in
+                  (mid, text, md,
+                   md_str "date", md_str "from", md_str "to",
+                   md_str "cc", md_str "bcc", md_str "subject",
+                   md_attachments, triage_str, rehydrated)
+                in
+
+                (* Build rehydrated entries from uploaded evidence *)
+                let rehydrated_entries =
                   p.message_ids
                   |> List.map (fun mid ->
                          let text, md =
@@ -2370,97 +2428,76 @@ let handler ~client ~sw ~clock _socket request body =
                            | Some (t, m) -> (t, m)
                            | None -> ("", `Assoc [])
                          in
-                         let md_str key =
-                           match md with
-                           | `Assoc kv -> (
-                               match List.assoc_opt key kv with
-                               | Some (`String s) -> String.trim s
-                               | _ -> "")
-                           | _ -> ""
-                         in
-                         let md_int key =
-                           match md with
-                           | `Assoc kv -> (
-                               match List.assoc_opt key kv with
-                               | Some (`Int n) -> Some n
-                               | _ -> None)
-                           | _ -> None
-                         in
-                         let md_attachments =
-                           match md with
-                           | `Assoc kv -> (
-                               match List.assoc_opt "attachments" kv with
-                               | Some (`List ys) ->
-                                   ys |> List.filter_map (function
-                                     | `String s when String.trim s <> "" -> Some (String.trim s)
-                                     | _ -> None)
-                               | _ -> [])
-                           | _ -> []
-                         in
-                         let md_bool key =
-                           match md with
-                           | `Assoc kv -> (
-                               match List.assoc_opt key kv with
-                               | Some (`Bool b) -> Some b
-                               | _ -> None)
-                           | _ -> None
-                         in
-                         let triage_str =
-                           let action = md_int "action_score" in
-                           let importance = md_int "importance_score" in
-                           let reply_by = md_str "reply_by" in
-                           let processed = md_bool "processed" in
-                           let parts = ref [] in
-                           (match action, importance with
-                            | Some a, Some imp ->
-                                parts := !parts @ [ Printf.sprintf "action=%d/100 importance=%d/100" a imp ];
-                                if reply_by <> "" && reply_by <> "none" then
-                                  parts := !parts @ [ Printf.sprintf "reply_by=%s" reply_by ]
-                            | _ -> ());
-                           (match processed with
-                            | Some true -> parts := !parts @ [ "processed=true" ]
-                            | _ -> ());
-                           String.concat " " !parts
-                         in
-                         (mid, text, md,
-                          md_str "date", md_str "from", md_str "to",
-                          md_str "cc", md_str "bcc", md_str "subject",
-                          md_attachments, triage_str))
-                  |> List.sort (fun (_, _, _, d1, _, _, _, _, _, _, _) (_, _, _, d2, _, _, _, _, _, _, _) ->
+                         entry_of_md mid text md true)
+                in
+
+                (* Build unrehydrated entries from all retrieved sources not in message_ids *)
+                let rehydrated_set = Hashtbl.create 32 in
+                List.iter (fun mid -> Hashtbl.replace rehydrated_set mid true) p.message_ids;
+                let unrehydrated_entries =
+                  match p.sources_json with
+                  | `List ys ->
+                      ys |> List.filter_map (fun v ->
+                        match v with
+                        | `Assoc kv ->
+                            let doc_id = match List.assoc_opt "doc_id" kv with
+                              | Some (`String s) -> s | _ -> ""
+                            in
+                            if Hashtbl.mem rehydrated_set doc_id then None
+                            else
+                              let md = match List.assoc_opt "metadata" kv with
+                                | Some m -> m | None -> `Assoc []
+                              in
+                              Some (entry_of_md doc_id "" md false)
+                        | _ -> None)
+                  | _ -> []
+                in
+
+                (* Merge and sort all entries by date (oldest first) *)
+                let all_entries =
+                  (rehydrated_entries @ unrehydrated_entries)
+                  |> List.sort (fun (_, _, _, d1, _, _, _, _, _, _, _, _) (_, _, _, d2, _, _, _, _, _, _, _, _) ->
                        String.compare d1 d2)
                 in
 
+                (* Determine which entries go into the LLM prompt:
+                   rehydrated always; unrehydrated only if config says so *)
+                let include_unrehydrated = rag_include_unrehydrated_metadata in
+                let prompt_entries =
+                  if include_unrehydrated then all_entries
+                  else all_entries |> List.filter (fun (_, _, _, _, _, _, _, _, _, _, _, rh) -> rh)
+                in
+
+                (* Build sources_json for the UI response: all entries with flags *)
+                let orig_by_id = Hashtbl.create 32 in
+                (match p.sources_json with
+                | `List ys ->
+                    List.iter (fun v ->
+                      match v with
+                      | `Assoc kv -> (
+                          match List.assoc_opt "doc_id" kv with
+                          | Some (`String s) -> Hashtbl.replace orig_by_id s v
+                          | _ -> ())
+                      | _ -> ()) ys
+                | _ -> ());
                 let sources_json =
-                  (* Build a lookup from doc_id → original sources_json entry. *)
-                  let orig_by_id = Hashtbl.create 32 in
-                  (match p.sources_json with
-                  | `List ys ->
-                      List.iter (fun v ->
-                        match v with
-                        | `Assoc kv -> (
-                            match List.assoc_opt "doc_id" kv with
-                            | Some (`String s) -> Hashtbl.replace orig_by_id s v
-                            | _ -> ())
-                        | _ -> ()) ys
-                  | _ -> ());
-                  (* Emit entries in date-sorted order, with updated metadata. *)
-                  `List (evidence_entries |> List.map (fun (mid, _text, md, _, _, _, _, _, _, _, _) ->
+                  `List (all_entries |> List.map (fun (mid, _text, md, _, _, _, _, _, _, _, _, rh) ->
                     let base_kv =
                       match Hashtbl.find_opt orig_by_id mid with
                       | Some (`Assoc kv) -> kv
                       | _ -> [ ("doc_id", `String mid) ]
                     in
-                    let kv = base_kv |> List.filter (fun (k, _) -> k <> "text" && k <> "metadata") in
-                    if md <> `Assoc [] then
-                      `Assoc (kv @ [ ("text", `String ""); ("metadata", md) ])
-                    else
-                      `Assoc (kv @ [ ("text", `String "") ])))
+                    let kv = base_kv |> List.filter (fun (k, _) -> k <> "text" && k <> "metadata" && k <> "rehydrated" && k <> "in_prompt") in
+                    let in_prompt = rh || include_unrehydrated in
+                    let extra = [ ("text", `String ""); ("rehydrated", `Bool rh); ("in_prompt", `Bool in_prompt) ] in
+                    let extra = if md <> `Assoc [] then ("metadata", md) :: extra else extra in
+                    `Assoc (kv @ extra)))
                 in
 
                 let evidence_msg =
                   let lines =
-                    evidence_entries
-                    |> List.mapi (fun i (mid, text, _md, date_, from_, to_, cc_, bcc_, subject, atts, triage) ->
+                    prompt_entries
+                    |> List.mapi (fun i (mid, text, _md, date_, from_, to_, cc_, bcc_, subject, atts, triage, rh) ->
                            let hdr_parts =
                              [ Printf.sprintf "[Email %d]" (i + 1)
                              ; Printf.sprintf "doc_id=%s" mid
@@ -2475,17 +2512,19 @@ let handler ~client ~sw ~clock _socket request body =
                              @ (if String.trim triage <> "" then [ triage ] else [])
                            in
                            let header = String.concat " " hdr_parts in
-                           header
-                           ^ "\n"
-                           ^ (if String.trim text = "" then "(empty body)" else String.trim text))
+                           if rh then
+                             header ^ "\n"
+                             ^ (if String.trim text = "" then "(empty body)" else String.trim text)
+                           else
+                             header ^ "\n(metadata only — full content not loaded)")
                   in
                   String.concat "\n\n" lines
                 in
 
                 let sources_index_msg =
                   let lines =
-                    evidence_entries
-                    |> List.mapi (fun i (_, _, _, date_, from_, to_, cc_, _bcc_, subject, atts, triage) ->
+                    prompt_entries
+                    |> List.mapi (fun i (_, _, _, date_, from_, to_, cc_, _bcc_, subject, atts, triage, _rh) ->
                            let parts =
                              [ Printf.sprintf "[Email %d]" (i + 1)
                              ; Printf.sprintf "date=%s" date_
@@ -2712,6 +2751,7 @@ let handler ~client ~sw ~clock _socket request body =
           in
           Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ())
         else (
+        let retrieval_sqls = ref [] in
         let embed_and_retrieve (query_text : string) : Yojson.Safe.t list =
           match ollama_embed ~client ~sw ~task:Search_query ~text:query_text () with
           | Error msg ->
@@ -2722,15 +2762,23 @@ let handler ~client ~sw ~clock _socket request body =
               if debug_retrieval_enabled () then
                 Printf.printf "[retrieval.embed] query=%s\n%!"
                   (if String.length query_text > 120 then String.sub query_text 0 120 ^ "..." else query_text);
-              match Rag_lib.Pg.query_knn ~embedding:emb ~top_k () with
+              (match Rag_lib.Pg.query_knn ~embedding:emb ~top_k () with
               | Error msg ->
                   Printf.eprintf "[retrieval.pg.error] %s\n%!" msg;
                   []
-              | Ok sources -> sources
+              | Ok (sources, sql) ->
+                  retrieval_sqls := sql :: !retrieval_sqls;
+                  sources)
         in
 
         let all_sources =
           List.concat (List.map embed_and_retrieve queries)
+        in
+        let retrieval_sql =
+          match List.rev !retrieval_sqls with
+          | [] -> ""
+          | [s] -> s
+          | ss -> String.concat "\n-- next query --\n" ss
         in
         let sources_json = merge_multi_query_sources all_sources top_k in
 
@@ -2786,12 +2834,31 @@ let handler ~client ~sw ~clock _socket request body =
           in
           Eio.Mutex.use_rw ~protect:true pending_tbl_mu (fun () -> Hashtbl.replace pending_tbl request_id p);
 
+          (* Annotate each source with rehydrated flag for the UI *)
+          let rehydrated_set = Hashtbl.create 32 in
+          List.iter (fun mid -> Hashtbl.replace rehydrated_set mid true) message_ids;
+          let annotated_sources =
+            match sources_json with
+            | `List ys ->
+                `List (ys |> List.map (fun v ->
+                  match v with
+                  | `Assoc kv ->
+                      let doc_id = match List.assoc_opt "doc_id" kv with
+                        | Some (`String s) -> s | _ -> ""
+                      in
+                      let rehydrated = Hashtbl.mem rehydrated_set doc_id in
+                      `Assoc (kv @ [ ("rehydrated", `Bool rehydrated) ])
+                  | _ -> v))
+            | _ -> sources_json
+          in
+
           let body =
             `Assoc
               [ ("status", `String "need_messages")
               ; ("request_id", `String request_id)
               ; ("message_ids", `List (List.map (fun s -> `String s) message_ids))
-              ; ("sources", sources_json)
+              ; ("sources", annotated_sources)
+              ; ("retrieval_sql", `String retrieval_sql)
               ]
             |> Yojson.Safe.to_string
           in

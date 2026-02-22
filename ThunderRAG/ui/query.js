@@ -138,7 +138,7 @@ function renderSourcesInto(container, sources) {
     const date = formatEmailDate(md?.date);
 
     const card = document.createElement("div");
-    card.className = "source";
+    card.className = s?.in_prompt === false ? "source not-in-prompt" : "source";
     card.tabIndex = 0;
 
     const open = async () => {
@@ -196,10 +196,11 @@ function renderSourcesInto(container, sources) {
   }
 }
 
-function setAssistantMessage(bubble, answer, sources) {
+function setAssistantMessage(bubble, answer, sources, retrievalSql) {
   /*
     Renders a single assistant "bubble" with three pieces:
     - A debug-only collapsible triangle (no label) that expands the full sources list.
+      If retrievalSql is provided, it is shown inline on the same line as the triangle.
     - The final answer text, with citations post-processed into clickable links.
     - Below the answer: tiles for only the sources actually cited as [Email N].
 
@@ -229,6 +230,14 @@ function setAssistantMessage(bubble, answer, sources) {
   summaryProgress.appendChild(progressLabel);
   summaryProgress.appendChild(progress);
   summaryRow.appendChild(summaryProgress);
+
+  if (retrievalSql) {
+    const sqlLabel = document.createElement("span");
+    sqlLabel.className = "retrieval-sql";
+    sqlLabel.textContent = retrievalSql.replace(/\s+/g, " ").trim();
+    sqlLabel.title = retrievalSql;
+    summaryRow.appendChild(sqlLabel);
+  }
 
   summary.appendChild(summaryRow);
   details.appendChild(summary);
@@ -439,7 +448,8 @@ async function onAsk() {
       const requestId = String(res?.request_id || "");
       const messageIds = Array.isArray(res?.message_ids) ? res.message_ids : [];
 
-      setAssistantMessage(assistant.bubble, "", srcs);
+      const retrievalSql = String(res?.retrieval_sql || "");
+      setAssistantMessage(assistant.bubble, "", srcs, retrievalSql);
 
       if (!requestId) {
         throw new Error("Server did not return request_id");
@@ -496,7 +506,7 @@ async function onAsk() {
 
       const answer = String(final?.answer || "");
       const sources = Array.isArray(final?.sources) ? final.sources : srcs;
-      setAssistantMessage(assistant.bubble, answer, sources);
+      setAssistantMessage(assistant.bubble, answer, sources, retrievalSql);
       $("status").textContent = "";
       return;
     } else {

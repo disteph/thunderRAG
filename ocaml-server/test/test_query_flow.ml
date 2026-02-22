@@ -257,8 +257,7 @@ let test_no_retrieval_roundtrip () =
       Alcotest.(check int) "complete 200" 200 code3;
       let json3 = json_of_string body3 in
       let answer = json_string_field "answer" json3 in
-      Alcotest.(check bool) "answer non-empty" true (String.length answer > 0);
-      ignore question
+      Alcotest.(check bool) "answer non-empty" true (String.length answer > 0)
 
 (* ---------- Full roundtrip ---------- *)
 

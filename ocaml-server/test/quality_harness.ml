@@ -132,9 +132,9 @@ let run_query sid question user_name corpus_tbl =
 let analyze result corpus =
   let a = ref [] in let add s = a := s :: !a in
   let query_resp = match result with `Assoc kv -> (match List.assoc_opt "query_response" kv with Some j -> j | _ -> `Null) | _ -> `Null in
-  ignore query_resp;
   let complete = match result with `Assoc kv -> (match List.assoc_opt "complete_response" kv with Some j -> j | _ -> `Null) | _ -> `Null in
   (match jstr "error" complete with "" -> () | e -> add ("ERROR: "^e));
+  if jstr "status" query_resp = "no_retrieval" then add "NO_RETRIEVAL: query was answered without email retrieval";
   let answer = jstr "answer" complete and sources = jlist "sources" complete in
   let ns = List.length sources in
   let cited = extract_citations answer in

@@ -145,6 +145,10 @@
         outline: 2px solid AccentColor;
         outline-offset: 2px;
       }
+      .source.not-in-prompt {
+        opacity: 0.45;
+        border-style: dashed;
+      }
       .source-header {
         display: flex;
         justify-content: space-between;
@@ -242,6 +246,16 @@
       }
       details summary:hover {
         opacity: 0.7;
+      }
+
+      .retrieval-sql {
+        font-family: monospace;
+        font-size: 10px;
+        opacity: 0.7;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 80%;
       }
 
       .cited-sources {

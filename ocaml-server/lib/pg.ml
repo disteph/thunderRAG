@@ -357,7 +357,7 @@ let knn_row_type =
 
 let query_knn ~(embedding : float list) ~(top_k : int)
     ?(filter : string option) ?(score_expr : string option)
-    () : (Yojson.Safe.t list, string) result =
+    () : (Yojson.Safe.t list * string, string) result =
   let vec = float_list_to_pgvector embedding in
   let order_clause =
     match score_expr with
@@ -383,7 +383,27 @@ let query_knn ~(embedding : float list) ~(top_k : int)
   |} where_clause order_clause in
   let open Caqti_type in
   let req = Caqti_request.Infix.(t2 string int ->* knn_row_type) ~oneshot:true sql in
+  let replace_all ~(pat : string) ~(rep : string) (s : string) : string =
+    let pl = String.length pat in
+    let sl = String.length s in
+    if pl = 0 then s
+    else
+      let buf = Buffer.create sl in
+      let rec scan i =
+        if i > sl - pl then (Buffer.add_substring buf s i (sl - i); Buffer.contents buf)
+        else if String.sub s i pl = pat then
+          (Buffer.add_string buf rep; scan (i + pl))
+        else (Buffer.add_char buf s.[i]; scan (i + 1))
+      in
+      scan 0
+  in
+  let display_sql =
+    let s = String.trim sql in
+    let s = replace_all ~pat:"$1::vector" ~rep:(Printf.sprintf "'[…%d dims…]'::vector" (List.length embedding)) s in
+    let s = replace_all ~pat:"$2" ~rep:(string_of_int top_k) s in
+    s
+  in
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
     match C.collect_list req (vec, top_k) with
     | Error _ as e -> e
-    | Ok rows -> Ok (List.map row_to_source_json rows))
+    | Ok rows -> Ok (List.map row_to_source_json rows, display_sql))

@@ -201,6 +201,14 @@ let rag_attachment_use_pdftotext : bool =
 let rag_attachment_use_pandoc : bool =
   env_bool "RAG_ATTACHMENT_USE_PANDOC" (setting_bool [ "rag"; "attachments"; "use_pandoc" ] ~default:false)
 
+(* Whether to include metadata-only entries for non-rehydrated emails in the
+   final LLM prompt.  When true, the LLM sees a one-line header for every
+   retrieved email even if its full body was not loaded.  When false, only
+   rehydrated emails appear in the prompt. *)
+let rag_include_unrehydrated_metadata : bool =
+  env_bool "RAG_INCLUDE_UNREHYDRATED_METADATA"
+    (setting_bool [ "rag"; "query"; "include_unrehydrated_metadata" ] ~default:true)
+
 (* Whether to rewrite the user's query before embedding for retrieval.
    When enabled, generates a contextual rewrite + hypothetical email passage
    (multi-query) and merges results for better recall. *)
