@@ -3360,14 +3360,15 @@ let () =
     ]
     ignore "RAG email ingest server";
 
-  (* Load settings from the (possibly overridden) config directory *)
+  (* Install defaults to config dir if not already present, then load *)
   ensure_dir (thunderrag_config_dir ());
-  load_settings ();
-
-  (* Install default prompts.json if not already present *)
+  install_default_if_missing
+    ~src:(default_settings_path ())
+    ~dst:(settings_path ());
   install_default_if_missing
     ~src:(default_prompts_path ())
     ~dst:(prompts_path ());
+  load_settings ();
 
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->

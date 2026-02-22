@@ -9,12 +9,23 @@
 build:
 	dune build
 
-# Install prompts.json to ~/.thunderRAG/ (the server reads from there,
-# not from the codebase copy).  Creates the directory if needed.
+# Install settings.json and prompts.json to ~/.thunderRAG/ (the server
+# reads from there, not from the codebase copy).  Creates the directory
+# if needed.  Does not overwrite existing files.
 install: build
 	@mkdir -p ~/.thunderRAG
-	@cp prompts.json ~/.thunderRAG/prompts.json
-	@echo "[install] prompts.json -> ~/.thunderRAG/prompts.json"
+	@if [ ! -f ~/.thunderRAG/settings.json ]; then \
+		cp settings.json ~/.thunderRAG/settings.json; \
+		echo "[install] settings.json -> ~/.thunderRAG/settings.json"; \
+	else \
+		echo "[install] settings.json already exists, skipping"; \
+	fi
+	@if [ ! -f ~/.thunderRAG/prompts.json ]; then \
+		cp prompts.json ~/.thunderRAG/prompts.json; \
+		echo "[install] prompts.json -> ~/.thunderRAG/prompts.json"; \
+	else \
+		echo "[install] prompts.json already exists, skipping"; \
+	fi
 
 run: build
 	dune exec -- rag-email-server -p 8080

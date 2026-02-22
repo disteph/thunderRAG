@@ -226,6 +226,20 @@ let default_prompts_path () : string =
         if Sys.file_exists cwd_candidate then cwd_candidate
         else candidate  (* will just fail gracefully later *)
 
+(* Path to the default settings.json shipped with the codebase.
+   Set via THUNDERRAG_DEFAULT_SETTINGS or auto-detected relative to the executable. *)
+let default_settings_path () : string =
+  match Sys.getenv_opt "THUNDERRAG_DEFAULT_SETTINGS" with
+  | Some p when String.trim p <> "" -> String.trim p
+  | _ ->
+      let exe_dir = Filename.dirname Sys.executable_name in
+      let candidate = Filename.concat (Filename.concat exe_dir "..") "settings.json" in
+      if Sys.file_exists candidate then candidate
+      else
+        let cwd_candidate = "settings.json" in
+        if Sys.file_exists cwd_candidate then cwd_candidate
+        else candidate
+
 (* Copy a default file to the config directory if the target does not exist. *)
 let install_default_if_missing ~(src : string) ~(dst : string) : unit =
   if (not (Sys.file_exists dst)) && Sys.file_exists src then (
