@@ -1,0 +1,133 @@
+=== SYSTEM ===
+You are a helpful email assistant in an ongoing multi-turn chat. The user is: Bob Martinez <bob@acme.com>. Current date/time: 2026-02-21 22:57:06 (local); 2026-02-22T06:57:06Z (UTC).
+The conversation below includes previous user/assistant turns as context.
+The final user message is the question you must answer.
+Immediately before it, you may see a message containing emails retrieved from the user's archive under the heading EMAILS THAT MAY BE RELEVANT. Use these emails as evidence to answer the question.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+Do not invent email facts that are not in the provided emails.
+Do not greet, do not restate the question, and do not narrate your process.
+
+Each email's body may contain labelled sections:
+- NEW CONTENT: the message the sender actually wrote
+- QUOTED CONTEXT: previous thread history (older messages being replied to)
+- QUOTED CONTEXT (older, summarized): summarized older thread history
+- ATTACHMENTS (summaries): summaries of attached files
+Not all sections will be present in every email.
+
+Each email header may include triage metadata:
+- action=N/100: how much the email requires action or a response from the user (0 = purely informational, 100 = urgent action required)
+- importance=N/100: overall importance of the email to the user
+- reply_by=<date>: estimated deadline for a response, if any
+- processed=true: the user has already dealt with this email; no further action is needed regardless of the action score
+
+=== USER ===
+Tell me everything about Project Falcon.
+
+=== ASSISTANT ===
+Project Falcon is nearing its March 17 launch date. Key activities and updates include:
+
+- **UI Mockups**: Revised mockups incorporating all feedback have been completed by Patricia Owens, with features like estimated delivery time, CSV export for payment history, chart colors meeting WCAG AA standards, and a confirmation dialog for key regeneration [Email 1].
+  
+- **Marketing Metrics**: Early teaser results indicate strong performance: blog views doubled the average at 4,200; email open rates are above industry average at 34%; there were 180 webinar registrations (though the target is 300); and social impressions reached 28K [Email 2].
+
+- **Team Updates**: Lisa Wong has started her first week and asked questions regarding IDE preferences, staging DB access requirements, payment processing flow documentation, and on-call rotation schedules [Email 3]. She's using VS Code but observed others using IntelliJ; she needs VPN configuration for staging database access.
+
+- **1:1 Agenda**: Topics for the upcoming one-on-one meeting with Alice Chen include discussing the Falcon timeline, checking in on Lisa Wong’s progress, following up from a production incident postmortem, API keys status from a vendor, and travel arrangements for the DevOps Summit. There's also discussion about sprint 13 capacity [Email 4].
+
+EMAILS REFERENCED ABOVE:
+[Email 1] date=Fri, 14 Feb 2025 14:00:00 +0000 from=Patricia Owens <patricia@acme.com> to=Bob Martinez <bob@acme.com> cc=Alice Chen <alice@acme.com> subject=Re: Falcon UI mockups - Revised
+[Email 2] date=Fri, 14 Feb 2025 16:00:00 +0000 from=Grace Kim <grace@acme.com> to=Bob Martinez <bob@acme.com> subject=Falcon pre-launch campaign metrics
+[Email 3] date=Tue, 11 Feb 2025 09:00:00 +0000 from=Lisa Wong <lisa@acme.com> to=Bob Martinez <bob@acme.com> subject=First week questions
+[Email 4] date=Thu, 13 Feb 2025 08:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=1:1 agenda - Feb 14
+
+=== USER ===
+EMAILS THAT MAY BE RELEVANT:
+
+[Email 1] doc_id=one-on-one-046@test.example.com date=Thu, 13 Feb 2025 08:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=1:1 agenda - Feb 14
+NEW CONTENT:
+Bob,
+
+Topics for tomorrow's 1:1:
+1. Falcon timeline (March 17 launch)
+2. Lisa Wong onboarding — how's her first week?
+3. Production incident postmortem follow-up
+4. API keys status from vendor?
+5. DevOps Summit travel
+6. Sprint 13 capacity
+
+Anything to add?
+
+Alice
+
+[Email 2] doc_id=alice-recent-016@test.example.com date=Thu, 13 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Updated Falcon timeline
+NEW CONTENT:
+Bob,
+
+Quick update: the marketing team requested a 2-day delay for the Falcon launch.
+New date is March 17, 2025 instead of March 15.
+
+All other deadlines shift accordingly:
+- QA ready: March 12 (was March 10)
+- Dry run: March 14 (was March 12)
+
+Sorry for the late change. Let me know if this causes issues.
+
+Alice
+
+[Email 3] doc_id=falcon-launch-001@test.example.com date=Wed, 05 Feb 2025 09:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Project Falcon launch date
+NEW CONTENT:
+Hi Bob,
+
+The launch date for Project Falcon is confirmed for March 15, 2025.
+Please make sure the QA team is ready by March 10.
+
+We also need the staging environment validated before the 12th.
+Let me know if you foresee any blockers.
+
+Thanks,
+Alice
+
+[Email 4] doc_id=falcon-reply-002@test.example.com date=Wed, 05 Feb 2025 14:30:00 +0000 from=Bob Martinez <bob@acme.com> to=Alice Chen <alice@acme.com> subject=Re: Project Falcon launch date
+NEW CONTENT:
+Hi Alice,
+
+Got it. QA will be ready by March 10. I've also scheduled a dry run for March 12.
+The staging environment is already set up and passing basic smoke tests.
+
+One concern: we still need the API keys for the payment gateway integration.
+Can you check with Dave's team?
+
+Best,
+Bob
+
+QUOTED CONTEXT:
+> On Wed, 05 Feb 2025 at 09:00, Alice Chen wrote:
+> The launch date for Project Falcon is confirmed for March 15, 2025.
+> Please make sure the QA team is ready by March 10.
+
+[Email 5] doc_id=marketing-plan-033@test.example.com date=Wed, 12 Feb 2025 11:00:00 +0000 from=Grace Kim <grace@acme.com> to=Alice Chen <alice@acme.com>, Bob Martinez <bob@acme.com> subject=Falcon marketing campaign - launch plan
+NEW CONTENT:
+Hi Alice, Bob,
+
+Falcon launch marketing plan:
+
+Phase 1 (Mar 3-10): Teaser — social media, blog, email blast
+Phase 2 (Mar 10-17): Pre-launch — webinar, press releases, partners
+Phase 3 (Mar 17): Launch day — Product Hunt, demo video, email blast
+Phase 4 (Mar 17-31): Post-launch — case studies, testimonials, paid ads
+
+Budget: $25,000 ($8K ads, $7K content, $5K events, $5K tools)
+
+This is why we requested the 2-day delay — March 17 aligns with webinar.
+
+Grace
+
+=== USER ===
+When is the Project Falcon launch date and what prompted the change?
+
+Answer based on the retrieved emails above.
+Do not greet, do not offer to help, and do not ask for a follow-up question.
+Start immediately with the answer (no preamble).
+If the request involves ordering or selecting items by time/recency, use the dates in the EMAILS THAT MAY BE RELEVANT list to decide which emails are newest.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+

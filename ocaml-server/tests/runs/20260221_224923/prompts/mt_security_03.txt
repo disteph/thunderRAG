@@ -1,0 +1,128 @@
+=== SYSTEM ===
+You are a helpful email assistant in an ongoing multi-turn chat. The user is: Bob Martinez <bob@acme.com>. Current date/time: 2026-02-21 23:14:25 (local); 2026-02-22T07:14:25Z (UTC).
+The conversation below includes previous user/assistant turns as context.
+The final user message is the question you must answer.
+Immediately before it, you may see a message containing emails retrieved from the user's archive under the heading EMAILS THAT MAY BE RELEVANT. Use these emails as evidence to answer the question.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+Do not invent email facts that are not in the provided emails.
+Do not greet, do not restate the question, and do not narrate your process.
+
+Each email's body may contain labelled sections:
+- NEW CONTENT: the message the sender actually wrote
+- QUOTED CONTEXT: previous thread history (older messages being replied to)
+- QUOTED CONTEXT (older, summarized): summarized older thread history
+- ATTACHMENTS (summaries): summaries of attached files
+Not all sections will be present in every email.
+
+Each email header may include triage metadata:
+- action=N/100: how much the email requires action or a response from the user (0 = purely informational, 100 = urgent action required)
+- importance=N/100: overall importance of the email to the user
+- reply_by=<date>: estimated deadline for a response, if any
+- processed=true: the user has already dealt with this email; no further action is needed regardless of the action score
+
+=== USER ===
+Give me a full overview of security-related emails.
+
+=== ASSISTANT ===
+[Email 1] contains a security-related alert about disk space warning on prod-db-01. The alert indicates that the /data/postgres partition is at 85% capacity and growing ~2%/day, with an estimated time to full of ~7 days. Action required includes archiving old transaction logs or expanding the volume.
+
+No other emails in the provided list are security-related.
+
+EMAILS REFERENCED ABOVE:
+[Email 1] date=Tue, 11 Feb 2025 08:30:00 +0000 from=Dave Wilson <dave@acme.com> to=Bob Martinez <bob@acme.com> cc=Ops Team <ops@acme.com> subject=Re: URGENT: Production server down - immediate action needed
+
+=== USER ===
+What were all the findings in the security scan?
+
+=== ASSISTANT ===
+The Q1 security scan results found:
+
+- 1 critical issue (CVE-2025-1234 in log4j)
+- 3 high issues (outdated TLS configuration, weak password policy, exposed debug endpoint)
+- 7 medium issues
+- 12 low issues
+
+[Email 1]
+
+EMAILS REFERENCED ABOVE:
+[Email 1] date=Mon, 10 Feb 2025 14:00:00 +0000 from=Henry Liu <henry@acme.com> to=Bob Martinez <bob@acme.com> subject=Q1 Security scan results
+
+=== USER ===
+EMAILS THAT MAY BE RELEVANT:
+
+[Email 1] doc_id=escalation-resolved-028@test.example.com date=Fri, 14 Feb 2025 09:00:00 +0000 from=Bob Martinez <bob@acme.com> to=Raj Gupta <raj@acme.com> cc=Alice Chen <alice@acme.com> subject=Re: ESCALATION: BigCorp - RESOLVED
+NEW CONTENT:
+Raj,
+
+BigCorp timeouts fully resolved. Success rate back to 99.97% over last 48h.
+
+Root cause: same connection leak as Tuesday's outage. Added dedicated connection pool and rate limit for BigCorp.
+
+Alice, FYI in case Sam raises this at quarterly review.
+
+Bob
+
+[Email 2] doc_id=falcon-qa-020@test.example.com date=Fri, 14 Feb 2025 10:00:00 +0000 from=Tony Russo <tony@acme.com> to=Alice Chen <alice@acme.com>, Bob Martinez <bob@acme.com> subject=Falcon QA status report - Week of Feb 10
+NEW CONTENT:
+Hi Alice, Bob,
+
+QA status for Project Falcon:
+
+Completed:
+- User auth flow (32/32 passing)
+- Payment processing (28/30 — 2 blocked on API keys)
+- Dashboard analytics (all green)
+
+Blocked:
+- Payment gateway integration tests (waiting for API keys)
+- Load testing (staging had issues earlier this week)
+
+Risk: If API keys not received by March 5, we won't hit March 12 QA deadline.
+
+Tony
+
+[Email 3] doc_id=bigcorp-thanks-029@test.example.com date=Fri, 14 Feb 2025 11:00:00 +0000 from=Sam Chen <sam@bigcorp.com> to=Bob Martinez <bob@acme.com> cc=Raj Gupta <raj@acme.com> subject=Re: ESCALATION: BigCorp - RESOLVED
+NEW CONTENT:
+Bob,
+
+Thank you for the quick turnaround. Issues confirmed resolved on our end.
+
+The dedicated connection pool gives us more confidence. Looking forward to discussing API v3 migration next month.
+
+Best,
+Sam Chen
+CTO, BigCorp
+
+[Email 4] doc_id=one-on-one-046@test.example.com date=Thu, 13 Feb 2025 08:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=1:1 agenda - Feb 14
+NEW CONTENT:
+Bob,
+
+Topics for tomorrow's 1:1:
+1. Falcon timeline (March 17 launch)
+2. Lisa Wong onboarding — how's her first week?
+3. Production incident postmortem follow-up
+4. API keys status from vendor?
+5. DevOps Summit travel
+6. Sprint 13 capacity
+
+Anything to add?
+
+Alice
+
+[Email 5] doc_id=falcon-staging-fix-022@test.example.com date=Thu, 13 Feb 2025 09:00:00 +0000 from=Dave Wilson <dave@acme.com> to=Bob Martinez <bob@acme.com>, Alice Chen <alice@acme.com> subject=Re: Falcon staging - database migration issue
+NEW CONTENT:
+Fixed. Migration script was adding a foreign key before the referenced column existed. Reordered the steps.
+
+Staging back up, all migrations applied. Good to resume integration testing.
+
+Dave
+
+=== USER ===
+Has everything been addressed?
+
+Answer based on the retrieved emails above.
+Do not greet, do not offer to help, and do not ask for a follow-up question.
+Start immediately with the answer (no preamble).
+If the request involves ordering or selecting items by time/recency, use the dates in the EMAILS THAT MAY BE RELEVANT list to decide which emails are newest.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+

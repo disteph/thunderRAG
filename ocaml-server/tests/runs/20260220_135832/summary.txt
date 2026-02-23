@@ -1,0 +1,814 @@
+================================================================================
+ThunderRAG Quality Test Report
+Run: 20260220_135832
+Time: 2026-02-20T14:06:41.004642
+Duration: 488.3s
+Test cases: 15
+================================================================================
+
+--------------------------------------------------------------------------------
+TEST: factual_01 [factual]
+Q: When is the Project Falcon launch date?
+--------------------------------------------------------------------------------
+
+  RETRIEVED SOURCES:
+    message_ids returned: 5
+    sources returned: 5
+    [1] score=0.8319991230964661 doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> subject=Project Falcon launch date
+    [2] score=0.8036766052246094 doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> subject=Updated Falcon timeline
+    [3] score=0.7777395248413086 doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> subject=Re: Project Falcon launch date
+    [4] score=0.6998761296272278 doc_id=<cross-ref-014@test.example.com> from=Alice Chen <alice@acme.com> subject=API keys for Falcon - following up
+    [5] score=0.6272794008255005 doc_id=<mark-topic3-012@test.example.com> from=Mark Johnson <mark@acme.com> subject=Company offsite - April 5-6
+
+  EVIDENCE UPLOADS:
+    <falcon-launch-001@test.example.com>: 200
+    <alice-recent-016@test.example.com>: 200
+    <falcon-reply-002@test.example.com>: 200
+    <cross-ref-014@test.example.com>: 200
+    <mark-topic3-012@test.example.com>: 200
+
+  ANSWER:
+    The Project Falcon launch date is March 17, 2025. This was updated due to a delay requested by the marketing team [Email 3]. Originally, the launch was scheduled for March 15, 2025 [Email 4].
+
+  COMPLETE RESPONSE SOURCES:
+    [1] doc_id=<cross-ref-014@test.example.com> from=Alice Chen <alice@acme.com> date=Fri, 07 Feb 2025 16:00:00 +0000 subject=API keys for Falcon - following up
+    [2] doc_id=<mark-topic3-012@test.example.com> from=Mark Johnson <mark@acme.com> date=Mon, 10 Feb 2025 11:00:00 +0000 subject=Company offsite - April 5-6
+    [3] doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> date=Thu, 13 Feb 2025 17:00:00 +0000 subject=Updated Falcon timeline
+    [4] doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> date=Wed, 05 Feb 2025 09:00:00 +0000 subject=Project Falcon launch date
+    [5] doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> date=Wed, 05 Feb 2025 14:30:00 +0000 subject=Re: Project Falcon launch date
+
+  SESSION TAIL (last assistant message):
+    The Project Falcon launch date is March 17, 2025. This was updated due to a delay requested by the marketing team [Email 1]. Originally, the launch was scheduled for March 15, 2025 [Email 2].
+    
+    EMAILS REFERENCED ABOVE:
+    [Email 1] date=Thu, 13 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Updated Falcon timeline
+    [Email 2] date=Wed, 05 Feb 2025 09:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Project Falcon launch date
+  Tail size: 2 messages
+
+  No anomalies detected.
+
+  SCORES: overall=0.83
+    must_contain: 1.0
+    must_not_contain: 1.0
+    has_citations: 0.0
+    citations_valid: 1.0
+    expected_sources: 1.0
+    no_hallucination: 1.0
+
+--------------------------------------------------------------------------------
+TEST: factual_02 [factual]
+Q: Who scheduled the Q1 budget review meeting and when is it?
+--------------------------------------------------------------------------------
+
+  RETRIEVED SOURCES:
+    message_ids returned: 5
+    sources returned: 5
+    [1] score=0.8306078910827637 doc_id=<budget-meeting-003@test.example.com> from=Carol Davis <carol@acme.com> subject=Q1 budget review meeting - Feb 20
+    [2] score=0.7425134778022766 doc_id=<q1-report-006@test.example.com> from=Eve Park <eve@acme.com> subject=Q1 financial report attached
+    [3] score=0.6897563934326172 doc_id=<mark-topic2-011@test.example.com> from=Mark Johnson <mark@acme.com> subject=Office renovation schedule - Building 3
+    [4] score=0.6624371409416199 doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> subject=Project Falcon launch date
+    [5] score=0.6608151197433472 doc_id=<mark-topic3-012@test.example.com> from=Mark Johnson <mark@acme.com> subject=Company offsite - April 5-6
+
+  EVIDENCE UPLOADS:
+    <budget-meeting-003@test.example.com>: 200
+    <q1-report-006@test.example.com>: 200
+    <mark-topic2-011@test.example.com>: 200
+    <falcon-launch-001@test.example.com>: 200
+    <mark-topic3-012@test.example.com>: 200
+
+  ANSWER:
+    Carol Davis scheduled the Q1 budget review meeting, which is happening on February 20, 2025 at 2pm in Conference Room B. [Email 2]
+
+  COMPLETE RESPONSE SOURCES:
+    [1] doc_id=<mark-topic2-011@test.example.com> from=Mark Johnson <mark@acme.com> date=Fri, 07 Feb 2025 15:00:00 +0000 subject=Office renovation schedule - Building 3
+    [2] doc_id=<budget-meeting-003@test.example.com> from=Carol Davis <carol@acme.com> date=Mon, 10 Feb 2025 08:00:00 +0000 subject=Q1 budget review meeting - Feb 20
+    [3] doc_id=<mark-topic3-012@test.example.com> from=Mark Johnson <mark@acme.com> date=Mon, 10 Feb 2025 11:00:00 +0000 subject=Company offsite - April 5-6
+    [4] doc_id=<q1-report-006@test.example.com> from=Eve Park <eve@acme.com> date=Thu, 13 Feb 2025 11:30:00 +0000 subject=Q1 financial report attached
+    [5] doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> date=Wed, 05 Feb 2025 09:00:00 +0000 subject=Project Falcon launch date
+
+  SESSION TAIL (last assistant message):
+    Carol Davis scheduled the Q1 budget review meeting, which is happening on February 20, 2025 at 2pm in Conference Room B. [Email 1]
+    
+    EMAILS REFERENCED ABOVE:
+    [Email 1] date=Mon, 10 Feb 2025 08:00:00 +0000 from=Carol Davis <carol@acme.com> to=Engineering Team <engineering@acme.com> cc=Bob Martinez <bob@acme.com>, Finance <finance@acme.com> subject=Q1 budget review meeting - Feb 20
+  Tail size: 2 messages
+
+  No anomalies detected.
+
+  SCORES: overall=0.83
+    must_contain: 1.0
+    must_not_contain: 1.0
+    has_citations: 0.0
+    citations_valid: 1.0
+    expected_sources: 1.0
+    no_hallucination: 1.0
+
+--------------------------------------------------------------------------------
+TEST: factual_03 [factual]
+Q: What are the key highlights from the Q1 financial report?
+--------------------------------------------------------------------------------
+
+  RETRIEVED SOURCES:
+    message_ids returned: 5
+    sources returned: 5
+    [1] score=0.8390164375305176 doc_id=<q1-report-006@test.example.com> from=Eve Park <eve@acme.com> subject=Q1 financial report attached
+    [2] score=0.7728953957557678 doc_id=<budget-meeting-003@test.example.com> from=Carol Davis <carol@acme.com> subject=Q1 budget review meeting - Feb 20
+    [3] score=0.700610876083374 doc_id=<mark-topic3-012@test.example.com> from=Mark Johnson <mark@acme.com> subject=Company offsite - April 5-6
+    [4] score=0.6971301436424255 doc_id=<mark-topic2-011@test.example.com> from=Mark Johnson <mark@acme.com> subject=Office renovation schedule - Building 3
+    [5] score=0.6903625726699829 doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> subject=Project Falcon launch date
+
+  EVIDENCE UPLOADS:
+    <q1-report-006@test.example.com>: 200
+    <budget-meeting-003@test.example.com>: 200
+    <mark-topic3-012@test.example.com>: 200
+    <mark-topic2-011@test.example.com>: 200
+    <falcon-launch-001@test.example.com>: 200
+
+  ANSWER:
+    The key highlights from Bob Martinez's Q1 financial report are:
+    - Revenue: $2.4M (up 15% YoY)
+    - Operating expenses: $1.8M (within budget)
+    - Net margin: 25%
+    
+    [Eve Park <eve@acme.com>; Thu, 13 Feb 2025 11:30:00 +0000]
+
+  COMPLETE RESPONSE SOURCES:
+    [1] doc_id=<mark-topic2-011@test.example.com> from=Mark Johnson <mark@acme.com> date=Fri, 07 Feb 2025 15:00:00 +0000 subject=Office renovation schedule - Building 3
+    [2] doc_id=<budget-meeting-003@test.example.com> from=Carol Davis <carol@acme.com> date=Mon, 10 Feb 2025 08:00:00 +0000 subject=Q1 budget review meeting - Feb 20
+    [3] doc_id=<mark-topic3-012@test.example.com> from=Mark Johnson <mark@acme.com> date=Mon, 10 Feb 2025 11:00:00 +0000 subject=Company offsite - April 5-6
+    [4] doc_id=<q1-report-006@test.example.com> from=Eve Park <eve@acme.com> date=Thu, 13 Feb 2025 11:30:00 +0000 subject=Q1 financial report attached
+    [5] doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> date=Wed, 05 Feb 2025 09:00:00 +0000 subject=Project Falcon launch date
+
+  SESSION TAIL (last assistant message):
+    The key highlights from Bob Martinez's Q1 financial report are:
+    - Revenue: $2.4M (up 15% YoY)
+    - Operating expenses: $1.8M (within budget)
+    - Net margin: 25%
+    
+    [Eve Park <eve@acme.com>; Thu, 13 Feb 2025 11:30:00 +0000]
+  Tail size: 2 messages
+
+  No anomalies detected.
+
+  SCORES: overall=0.83
+    must_contain: 1.0
+    must_not_contain: 1.0
+    has_citations: 0.0
+    citations_valid: 1.0
+    expected_sources: 1.0
+    no_hallucination: 1.0
+
+--------------------------------------------------------------------------------
+TEST: urgent_01 [triage]
+Q: Are there any urgent emails that need immediate attention?
+--------------------------------------------------------------------------------
+
+  RETRIEVED SOURCES:
+    message_ids returned: 5
+    sources returned: 5
+    [1] score=0.6473438739776611 doc_id=<server-down-004@test.example.com> from=Dave Wilson <dave@acme.com> subject=URGENT: Production server down - immediate action needed
+    [2] score=0.5940890908241272 doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> subject=Updated Falcon timeline
+    [3] score=0.58075350522995 doc_id=<processed-015@test.example.com> from=IT Support <it@acme.com> subject=Password reset completed
+    [4] score=0.5802311301231384 doc_id=<mark-topic2-011@test.example.com> from=Mark Johnson <mark@acme.com> subject=Office renovation schedule - Building 3
+    [5] score=0.578144907951355 doc_id=<cross-ref-014@test.example.com> from=Alice Chen <alice@acme.com> subject=API keys for Falcon - following up
+
+  EVIDENCE UPLOADS:
+    <server-down-004@test.example.com>: 200
+    <alice-recent-016@test.example.com>: 200
+    <processed-015@test.example.com>: 200
+    <mark-topic2-011@test.example.com>: 200
+    <cross-ref-014@test.example.com>: 200
+
+  ANSWER:
+    [Email 5] is urgent and requires immediate attention. It reports a critical issue with the production server being down since 3:05 AM UTC, affecting customer-facing APIs. You should escalate this to ensure it gets resolved quickly.
+
+  COMPLETE RESPONSE SOURCES:
+    [1] doc_id=<mark-topic2-011@test.example.com> from=Mark Johnson <mark@acme.com> date=Fri, 07 Feb 2025 15:00:00 +0000 subject=Office renovation schedule - Building 3
+    [2] doc_id=<cross-ref-014@test.example.com> from=Alice Chen <alice@acme.com> date=Fri, 07 Feb 2025 16:00:00 +0000 subject=API keys for Falcon - following up
+    [3] doc_id=<processed-015@test.example.com> from=IT Support <it@acme.com> date=Mon, 03 Feb 2025 12:00:00 +0000 subject=Password reset completed
+    [4] doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> date=Thu, 13 Feb 2025 17:00:00 +0000 subject=Updated Falcon timeline
+    [5] doc_id=<server-down-004@test.example.com> from=Dave Wilson <dave@acme.com> date=Tue, 11 Feb 2025 03:15:00 +0000 subject=URGENT: Production server down - immediate action needed
+
+  SESSION TAIL (last assistant message):
+    [Email 1] is urgent and requires immediate attention. It reports a critical issue with the production server being down since 3:05 AM UTC, affecting customer-facing APIs. You should escalate this to ensure it gets resolved quickly.
+    
+    EMAILS REFERENCED ABOVE:
+    [Email 1] date=Tue, 11 Feb 2025 03:15:00 +0000 from=Dave Wilson <dave@acme.com> to=Bob Martinez <bob@acme.com> cc=Ops Team <ops@acme.com> subject=URGENT: Production server down - immediate action needed
+  Tail size: 2 messages
+
+  *** ANOMALIES (1) ***
+    ⚠ POSSIBLE HALLUCINATED NAMES: ['tom']
+
+  SCORES: overall=0.83
+    must_contain: 1.0
+    must_not_contain: 1.0
+    has_citations: 0.0
+    citations_valid: 1.0
+    expected_sources: 1.0
+    no_hallucination: 1.0
+
+--------------------------------------------------------------------------------
+TEST: thread_01 [thread]
+Q: What is the current status of the CloudStore vendor contract negotiation?
+--------------------------------------------------------------------------------
+
+  RETRIEVED SOURCES:
+    message_ids returned: 5
+    sources returned: 5
+    [1] score=0.8136414885520935 doc_id=<vendor-original-007@test.example.com> from=Frank Lee <frank@acme.com> subject=Vendor contract renewal - CloudStore Inc.
+    [2] score=0.7764849662780762 doc_id=<vendor-reply2-009@test.example.com> from=Heidi Tanaka <heidi@acme.com> subject=Re: Re: Vendor contract renewal - CloudStore Inc.
+    [3] score=0.7729795575141907 doc_id=<vendor-reply1-008@test.example.com> from=Grace Kim <grace@acme.com> subject=Re: Vendor contract renewal - CloudStore Inc.
+    [4] score=0.6798527240753174 doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> subject=Re: Project Falcon launch date
+    [5] score=0.6756302118301392 doc_id=<cross-ref-014@test.example.com> from=Alice Chen <alice@acme.com> subject=API keys for Falcon - following up
+
+  EVIDENCE UPLOADS:
+    <vendor-original-007@test.example.com>: 200
+    <vendor-reply2-009@test.example.com>: 200
+    <vendor-reply1-008@test.example.com>: 200
+    <falcon-reply-002@test.example.com>: 200
+    <cross-ref-014@test.example.com>: 200
+
+  ANSWER:
+    The latest update on the cloud storage vendor contract negotiations is that Heidi Tanaka plans to negotiate with CloudStore's account manager for a rate of $40,000/year and to include an automatic scaling clause if you exceed 5TB. This discussion follows Grace Kim's analysis comparing CloudStore Inc. to DataVault Inc., which is summarized in [Email 3] and [Email 4].
+
+  COMPLETE RESPONSE SOURCES:
+    [1] doc_id=<cross-ref-014@test.example.com> from=Alice Chen <alice@acme.com> date=Fri, 07 Feb 2025 16:00:00 +0000 subject=API keys for Falcon - following up
+    [2] doc_id=<vendor-original-007@test.example.com> from=Frank Lee <frank@acme.com> date=Mon, 03 Feb 2025 09:00:00 +0000 subject=Vendor contract renewal - CloudStore Inc.
+    [3] doc_id=<vendor-reply1-008@test.example.com> from=Grace Kim <grace@acme.com> date=Tue, 04 Feb 2025 14:00:00 +0000 subject=Re: Vendor contract renewal - CloudStore Inc.
+    [4] doc_id=<vendor-reply2-009@test.example.com> from=Heidi Tanaka <heidi@acme.com> date=Wed, 05 Feb 2025 10:00:00 +0000 subject=Re: Re: Vendor contract renewal - CloudStore Inc.
+    [5] doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> date=Wed, 05 Feb 2025 14:30:00 +0000 subject=Re: Project Falcon launch date
+
+  SESSION TAIL (last assistant message):
+    The latest update on the cloud storage vendor contract negotiations is that Heidi Tanaka plans to negotiate with CloudStore's account manager for a rate of $40,000/year and to include an automatic scaling clause if you exceed 5TB. This discussion follows Grace Kim's analysis comparing CloudStore Inc. to DataVault Inc., which is summarized in [Email 1] and [Email 2].
+    
+    EMAILS REFERENCED ABOVE:
+    [Email 1] date=Tue, 04 Feb 2025 14:00:00 +0000 from=Grace Kim <grace@acme.com> to=Frank Lee <frank@acme.com> cc=Heidi Tanaka <heidi@acme.com> subject=Re: Vendor contract renewal - CloudStore Inc.
+    [Email 2] date=Wed, 05 Feb 2025 10:00:00 +0000 from=Heidi Tanaka <heidi@acme.com> to=Frank Lee <frank@acme.com>, Grace Kim <grace@acme.com> subject=Re: Re: Vendor contract renewal - CloudStore Inc.
+  Tail size: 2 messages
+
+  *** ANOMALIES (1) ***
+    ⚠ POSSIBLE HALLUCINATED NAMES: ['tom']
+
+  SCORES: overall=0.83
+    must_contain: 1.0
+    must_not_contain: 1.0
+    has_citations: 0.0
+    citations_valid: 1.0
+    expected_sources: 1.0
+    no_hallucination: 1.0
+
+--------------------------------------------------------------------------------
+TEST: thread_02 [thread]
+Q: What did Grace recommend about the CloudStore contract?
+--------------------------------------------------------------------------------
+
+  RETRIEVED SOURCES:
+    message_ids returned: 5
+    sources returned: 5
+    [1] score=0.7644814848899841 doc_id=<vendor-reply2-009@test.example.com> from=Heidi Tanaka <heidi@acme.com> subject=Re: Re: Vendor contract renewal - CloudStore Inc.
+    [2] score=0.7503977417945862 doc_id=<vendor-original-007@test.example.com> from=Frank Lee <frank@acme.com> subject=Vendor contract renewal - CloudStore Inc.
+    [3] score=0.7424695491790771 doc_id=<vendor-reply1-008@test.example.com> from=Grace Kim <grace@acme.com> subject=Re: Vendor contract renewal - CloudStore Inc.
+    [4] score=0.6404609680175781 doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> subject=Re: Project Falcon launch date
+    [5] score=0.6260276436805725 doc_id=<cross-ref-014@test.example.com> from=Alice Chen <alice@acme.com> subject=API keys for Falcon - following up
+
+  EVIDENCE UPLOADS:
+    <vendor-reply2-009@test.example.com>: 200
+    <vendor-original-007@test.example.com>: 200
+    <vendor-reply1-008@test.example.com>: 200
+    <falcon-reply-002@test.example.com>: 200
+    <cross-ref-014@test.example.com>: 200
+
+  ANSWER:
+    Grace recommended negotiating CloudStore down to $40,000/year using DataVault's quote as leverage. She noted that although DataVault offers a lower price at $35,000/year, there are significant risks and downtime costs associated with migrating from the existing integrated system [Email 3].
+
+  COMPLETE RESPONSE SOURCES:
+    [1] doc_id=<cross-ref-014@test.example.com> from=Alice Chen <alice@acme.com> date=Fri, 07 Feb 2025 16:00:00 +0000 subject=API keys for Falcon - following up
+    [2] doc_id=<vendor-original-007@test.example.com> from=Frank Lee <frank@acme.com> date=Mon, 03 Feb 2025 09:00:00 +0000 subject=Vendor contract renewal - CloudStore Inc.
+    [3] doc_id=<vendor-reply1-008@test.example.com> from=Grace Kim <grace@acme.com> date=Tue, 04 Feb 2025 14:00:00 +0000 subject=Re: Vendor contract renewal - CloudStore Inc.
+    [4] doc_id=<vendor-reply2-009@test.example.com> from=Heidi Tanaka <heidi@acme.com> date=Wed, 05 Feb 2025 10:00:00 +0000 subject=Re: Re: Vendor contract renewal - CloudStore Inc.
+    [5] doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> date=Wed, 05 Feb 2025 14:30:00 +0000 subject=Re: Project Falcon launch date
+
+  SESSION TAIL (last assistant message):
+    Grace recommended negotiating CloudStore down to $40,000/year using DataVault's quote as leverage. She noted that although DataVault offers a lower price at $35,000/year, there are significant risks and downtime costs associated with migrating from the existing integrated system [Email 1].
+    
+    EMAILS REFERENCED ABOVE:
+    [Email 1] date=Tue, 04 Feb 2025 14:00:00 +0000 from=Grace Kim <grace@acme.com> to=Frank Lee <frank@acme.com> cc=Heidi Tanaka <heidi@acme.com> subject=Re: Vendor contract renewal - CloudStore Inc.
+  Tail size: 2 messages
+
+  No anomalies detected.
+
+  SCORES: overall=0.83
+    must_contain: 1.0
+    must_not_contain: 1.0
+    has_citations: 0.0
+    citations_valid: 1.0
+    expected_sources: 1.0
+    no_hallucination: 1.0
+
+--------------------------------------------------------------------------------
+TEST: broad_01 [broad]
+Q: What topics has Mark Johnson emailed me about?
+--------------------------------------------------------------------------------
+
+  RETRIEVED SOURCES:
+    message_ids returned: 5
+    sources returned: 5
+    [1] score=0.6988153457641602 doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> subject=Updated Falcon timeline
+    [2] score=0.6979693174362183 doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> subject=Project Falcon launch date
+    [3] score=0.695851743221283 doc_id=<mark-topic2-011@test.example.com> from=Mark Johnson <mark@acme.com> subject=Office renovation schedule - Building 3
+    [4] score=0.687605619430542 doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> subject=Re: Project Falcon launch date
+    [5] score=0.6873354911804199 doc_id=<mark-topic3-012@test.example.com> from=Mark Johnson <mark@acme.com> subject=Company offsite - April 5-6
+
+  EVIDENCE UPLOADS:
+    <alice-recent-016@test.example.com>: 200
+    <falcon-launch-001@test.example.com>: 200
+    <mark-topic2-011@test.example.com>: 200
+    <falcon-reply-002@test.example.com>: 200
+    <mark-topic3-012@test.example.com>: 200
+
+  ANSWER:
+    Mark Johnson has emailed you about:
+    1. Office renovation schedule for Building 3 [Email 1]
+    2. Company offsite happening April 5-6 at Lakeside Resort [Email 2]
+
+  COMPLETE RESPONSE SOURCES:
+    [1] doc_id=<mark-topic2-011@test.example.com> from=Mark Johnson <mark@acme.com> date=Fri, 07 Feb 2025 15:00:00 +0000 subject=Office renovation schedule - Building 3
+    [2] doc_id=<mark-topic3-012@test.example.com> from=Mark Johnson <mark@acme.com> date=Mon, 10 Feb 2025 11:00:00 +0000 subject=Company offsite - April 5-6
+    [3] doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> date=Thu, 13 Feb 2025 17:00:00 +0000 subject=Updated Falcon timeline
+    [4] doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> date=Wed, 05 Feb 2025 09:00:00 +0000 subject=Project Falcon launch date
+    [5] doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> date=Wed, 05 Feb 2025 14:30:00 +0000 subject=Re: Project Falcon launch date
+
+  SESSION TAIL (last assistant message):
+    Mark Johnson has emailed you about:
+    1. Office renovation schedule for Building 3 [Email 1]
+    2. Company offsite happening April 5-6 at Lakeside Resort [Email 2]
+    
+    EMAILS REFERENCED ABOVE:
+    [Email 1] date=Fri, 07 Feb 2025 15:00:00 +0000 from=Mark Johnson <mark@acme.com> to=Bob Martinez <bob@acme.com> subject=Office renovation schedule - Building 3
+    [Email 2] date=Mon, 10 Feb 2025 11:00:00 +0000 from=Mark Johnson <mark@acme.com> to=Bob Martinez <bob@acme.com> subject=Company offsite - April 5-6
+  Tail size: 2 messages
+
+  No anomalies detected.
+
+  SCORES: overall=0.83
+    must_contain: 1.0
+    must_not_contain: 1.0
+    has_citations: 0.0
+    citations_valid: 1.0
+    expected_sources: 1.0
+    no_hallucination: 1.0
+
+--------------------------------------------------------------------------------
+TEST: temporal_01 [temporal]
+Q: What is the most recent email I got from Alice?
+--------------------------------------------------------------------------------
+
+  RETRIEVED SOURCES:
+    message_ids returned: 5
+    sources returned: 5
+    [1] score=0.7175086140632629 doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> subject=Project Falcon launch date
+    [2] score=0.7125517129898071 doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> subject=Re: Project Falcon launch date
+    [3] score=0.6885209083557129 doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> subject=Updated Falcon timeline
+    [4] score=0.6806851625442505 doc_id=<cross-ref-014@test.example.com> from=Alice Chen <alice@acme.com> subject=API keys for Falcon - following up
+    [5] score=0.6710262298583984 doc_id=<mark-topic1-010@test.example.com> from=Mark Johnson <mark@acme.com> subject=New hire starting Monday - Lisa Wong
+
+  EVIDENCE UPLOADS:
+    <falcon-launch-001@test.example.com>: 200
+    <falcon-reply-002@test.example.com>: 200
+    <alice-recent-016@test.example.com>: 200
+    <cross-ref-014@test.example.com>: 200
+    <mark-topic1-010@test.example.com>: 200
+
+  ANSWER:
+    The most recent email you got from Alice is on February 13, 2025, updating the Falcon timeline. [Email 3]
+
+  COMPLETE RESPONSE SOURCES:
+    [1] doc_id=<cross-ref-014@test.example.com> from=Alice Chen <alice@acme.com> date=Fri, 07 Feb 2025 16:00:00 +0000 subject=API keys for Falcon - following up
+    [2] doc_id=<mark-topic1-010@test.example.com> from=Mark Johnson <mark@acme.com> date=Thu, 06 Feb 2025 09:00:00 +0000 subject=New hire starting Monday - Lisa Wong
+    [3] doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> date=Thu, 13 Feb 2025 17:00:00 +0000 subject=Updated Falcon timeline
+    [4] doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> date=Wed, 05 Feb 2025 09:00:00 +0000 subject=Project Falcon launch date
+    [5] doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> date=Wed, 05 Feb 2025 14:30:00 +0000 subject=Re: Project Falcon launch date
+
+  SESSION TAIL (last assistant message):
+    The most recent email you got from Alice is on February 13, 2025, updating the Falcon timeline. [Email 1]
+    
+    EMAILS REFERENCED ABOVE:
+    [Email 1] date=Thu, 13 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Updated Falcon timeline
+  Tail size: 2 messages
+
+  No anomalies detected.
+
+  SCORES: overall=0.67
+    must_contain: 0.0
+    must_not_contain: 1.0
+    has_citations: 0.0
+    citations_valid: 1.0
+    expected_sources: 1.0
+    no_hallucination: 1.0
+
+--------------------------------------------------------------------------------
+TEST: temporal_02 [temporal]
+Q: What deadlines do I have coming up?
+--------------------------------------------------------------------------------
+
+  RETRIEVED SOURCES:
+    message_ids returned: 5
+    sources returned: 5
+    [1] score=0.7632768154144287 doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> subject=Updated Falcon timeline
+    [2] score=0.7323663234710693 doc_id=<mark-topic2-011@test.example.com> from=Mark Johnson <mark@acme.com> subject=Office renovation schedule - Building 3
+    [3] score=0.7279806137084961 doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> subject=Project Falcon launch date
+    [4] score=0.7251429557800293 doc_id=<holiday-schedule-005@test.example.com> from=HR Department <hr@acme.com> subject=2025 Company Holiday Schedule
+    [5] score=0.7192970514297485 doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> subject=Re: Project Falcon launch date
+
+  EVIDENCE UPLOADS:
+    <alice-recent-016@test.example.com>: 200
+    <mark-topic2-011@test.example.com>: 200
+    <falcon-launch-001@test.example.com>: 200
+    <holiday-schedule-005@test.example.com>: 200
+    <falcon-reply-002@test.example.com>: 200
+
+  ANSWER:
+    The upcoming deadlines based on the retrieved emails are:
+    
+    - March 3-14: Office renovation for Building 3 requires your team's relocation to Building 1. ([Email 2])
+    - March 10: QA team readiness for Project Falcon launch, which is now set for March 17 (originally March 15). ([Email 3], [Email 4])
+    - March 12: Staging environment validation and a dry run for Project Falcon. ([Email 4], [Email 5])
+
+  COMPLETE RESPONSE SOURCES:
+    [1] doc_id=<holiday-schedule-005@test.example.com> from=HR Department <hr@acme.com> date=Fri, 03 Jan 2025 10:00:00 +0000 subject=2025 Company Holiday Schedule
+    [2] doc_id=<mark-topic2-011@test.example.com> from=Mark Johnson <mark@acme.com> date=Fri, 07 Feb 2025 15:00:00 +0000 subject=Office renovation schedule - Building 3
+    [3] doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> date=Thu, 13 Feb 2025 17:00:00 +0000 subject=Updated Falcon timeline
+    [4] doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> date=Wed, 05 Feb 2025 09:00:00 +0000 subject=Project Falcon launch date
+    [5] doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> date=Wed, 05 Feb 2025 14:30:00 +0000 subject=Re: Project Falcon launch date
+
+  SESSION TAIL (last assistant message):
+    The upcoming deadlines based on the retrieved emails are:
+    
+    - March 3-14: Office renovation for Building 3 requires your team's relocation to Building 1. ([Email 1])
+    - March 10: QA team readiness for Project Falcon launch, which is now set for March 17 (originally March 15). ([Email 2], [Email 3])
+    - March 12: Staging environment validation and a dry run for Project Falcon. ([Email 3], [Email 4])
+    
+    EMAILS REFERENCED ABOVE:
+    [Email 1] date=Fri, 07 Feb 2025 15:00:00 +0000 from=Mark Johnson <mark@acme.com> to=Bob Martinez <bob@acme.com> subject=Office renovation schedule - Building 3
+    [Email 2] date=Thu, 13 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Updated Falcon timeline
+    [Email 3] date=Wed, 05 Feb 2025 09:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Project Falcon launch date
+    [Email 4] date=Wed, 05 Feb 2025 14:30:00 +0000 from=Bob Martinez <bob@acme.com> to=Alice Chen <alice@acme.com> subject=Re: Project Falcon launch date
+  Tail size: 2 messages
+
+  No anomalies detected.
+
+  SCORES: overall=0.67
+    must_contain: 1.0
+    must_not_contain: 1.0
+    has_citations: 0.0
+    citations_valid: 1.0
+    expected_sources: 0.0
+    no_hallucination: 1.0
+
+--------------------------------------------------------------------------------
+TEST: attachment_01 [attachment]
+Q: Did anyone send me a spreadsheet or financial report?
+--------------------------------------------------------------------------------
+
+  RETRIEVED SOURCES:
+    message_ids returned: 5
+    sources returned: 5
+    [1] score=0.6239418387413025 doc_id=<q1-report-006@test.example.com> from=Eve Park <eve@acme.com> subject=Q1 financial report attached
+    [2] score=0.6204672455787659 doc_id=<deadline-013@test.example.com> from=Nora Patel <nora@acme.com> subject=Compliance audit documents needed by Feb 28
+    [3] score=0.6124780178070068 doc_id=<mark-topic2-011@test.example.com> from=Mark Johnson <mark@acme.com> subject=Office renovation schedule - Building 3
+    [4] score=0.5755165815353394 doc_id=<mark-topic3-012@test.example.com> from=Mark Johnson <mark@acme.com> subject=Company offsite - April 5-6
+    [5] score=0.5660933256149292 doc_id=<vendor-reply2-009@test.example.com> from=Heidi Tanaka <heidi@acme.com> subject=Re: Re: Vendor contract renewal - CloudStore Inc.
+
+  EVIDENCE UPLOADS:
+    <q1-report-006@test.example.com>: 200
+    <deadline-013@test.example.com>: 200
+    <mark-topic2-011@test.example.com>: 200
+    <mark-topic3-012@test.example.com>: 200
+    <vendor-reply2-009@test.example.com>: 200
+
+  ANSWER:
+    Eve Park sent you a Q1 financial report on February 13, 2025 [Email 3].
+
+  COMPLETE RESPONSE SOURCES:
+    [1] doc_id=<mark-topic2-011@test.example.com> from=Mark Johnson <mark@acme.com> date=Fri, 07 Feb 2025 15:00:00 +0000 subject=Office renovation schedule - Building 3
+    [2] doc_id=<mark-topic3-012@test.example.com> from=Mark Johnson <mark@acme.com> date=Mon, 10 Feb 2025 11:00:00 +0000 subject=Company offsite - April 5-6
+    [3] doc_id=<q1-report-006@test.example.com> from=Eve Park <eve@acme.com> date=Thu, 13 Feb 2025 11:30:00 +0000 subject=Q1 financial report attached
+    [4] doc_id=<vendor-reply2-009@test.example.com> from=Heidi Tanaka <heidi@acme.com> date=Wed, 05 Feb 2025 10:00:00 +0000 subject=Re: Re: Vendor contract renewal - CloudStore Inc.
+    [5] doc_id=<deadline-013@test.example.com> from=Nora Patel <nora@acme.com> date=Wed, 12 Feb 2025 09:00:00 +0000 subject=Compliance audit documents needed by Feb 28
+
+  SESSION TAIL (last assistant message):
+    Eve Park sent you a Q1 financial report on February 13, 2025 [Email 1].
+    
+    EMAILS REFERENCED ABOVE:
+    [Email 1] date=Thu, 13 Feb 2025 11:30:00 +0000 from=Eve Park <eve@acme.com> to=Bob Martinez <bob@acme.com> subject=Q1 financial report attached
+  Tail size: 2 messages
+
+  No anomalies detected.
+
+  SCORES: overall=0.83
+    must_contain: 1.0
+    must_not_contain: 1.0
+    has_citations: 0.0
+    citations_valid: 1.0
+    expected_sources: 1.0
+    no_hallucination: 1.0
+
+--------------------------------------------------------------------------------
+TEST: crossref_01 [cross_reference]
+Q: What's the situation with the payment gateway API keys for Falcon?
+--------------------------------------------------------------------------------
+
+  RETRIEVED SOURCES:
+    message_ids returned: 5
+    sources returned: 5
+    [1] score=0.8488687872886658 doc_id=<cross-ref-014@test.example.com> from=Alice Chen <alice@acme.com> subject=API keys for Falcon - following up
+    [2] score=0.7440571784973145 doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> subject=Re: Project Falcon launch date
+    [3] score=0.6693130135536194 doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> subject=Project Falcon launch date
+    [4] score=0.643369734287262 doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> subject=Updated Falcon timeline
+    [5] score=0.5797030925750732 doc_id=<processed-015@test.example.com> from=IT Support <it@acme.com> subject=Password reset completed
+
+  EVIDENCE UPLOADS:
+    <cross-ref-014@test.example.com>: 200
+    <falcon-reply-002@test.example.com>: 200
+    <falcon-launch-001@test.example.com>: 200
+    <alice-recent-016@test.example.com>: 200
+    <processed-015@test.example.com>: 200
+
+  ANSWER:
+    Alice requested API keys for Falcon's payment gateway integration and mentioned they are pending approval from the vendor. The latest update states that these keys must be available before March 10 to proceed with testing [Email 1]. Alice also inquired about an estimated timeline from Dave's team regarding when these API keys will be ready.
+
+  COMPLETE RESPONSE SOURCES:
+    [1] doc_id=<cross-ref-014@test.example.com> from=Alice Chen <alice@acme.com> date=Fri, 07 Feb 2025 16:00:00 +0000 subject=API keys for Falcon - following up
+    [2] doc_id=<processed-015@test.example.com> from=IT Support <it@acme.com> date=Mon, 03 Feb 2025 12:00:00 +0000 subject=Password reset completed
+    [3] doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> date=Thu, 13 Feb 2025 17:00:00 +0000 subject=Updated Falcon timeline
+    [4] doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> date=Wed, 05 Feb 2025 09:00:00 +0000 subject=Project Falcon launch date
+    [5] doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> date=Wed, 05 Feb 2025 14:30:00 +0000 subject=Re: Project Falcon launch date
+
+  SESSION TAIL (last assistant message):
+    Alice requested API keys for Falcon's payment gateway integration and mentioned they are pending approval from the vendor. The latest update states that these keys must be available before March 10 to proceed with testing [Email 1]. Alice also inquired about an estimated timeline from Dave's team regarding when these API keys will be ready.
+    
+    EMAILS REFERENCED ABOVE:
+    [Email 1] date=Fri, 07 Feb 2025 16:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> cc=Dave Wilson <dave@acme.com> subject=API keys for Falcon - following up
+  Tail size: 2 messages
+
+  No anomalies detected.
+
+  SCORES: overall=0.83
+    must_contain: 1.0
+    must_not_contain: 1.0
+    has_citations: 0.0
+    citations_valid: 1.0
+    expected_sources: 1.0
+    no_hallucination: 1.0
+
+--------------------------------------------------------------------------------
+TEST: negative_01 [negative]
+Q: Has anyone emailed me about the Mars colonization project?
+--------------------------------------------------------------------------------
+
+  RETRIEVED SOURCES:
+    message_ids returned: 5
+    sources returned: 5
+    [1] score=0.6273536682128906 doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> subject=Project Falcon launch date
+    [2] score=0.5988321900367737 doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> subject=Re: Project Falcon launch date
+    [3] score=0.5853978991508484 doc_id=<cross-ref-014@test.example.com> from=Alice Chen <alice@acme.com> subject=API keys for Falcon - following up
+    [4] score=0.5687946677207947 doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> subject=Updated Falcon timeline
+    [5] score=0.5399643182754517 doc_id=<mark-topic3-012@test.example.com> from=Mark Johnson <mark@acme.com> subject=Company offsite - April 5-6
+
+  EVIDENCE UPLOADS:
+    <falcon-launch-001@test.example.com>: 200
+    <falcon-reply-002@test.example.com>: 200
+    <cross-ref-014@test.example.com>: 200
+    <alice-recent-016@test.example.com>: 200
+    <mark-topic3-012@test.example.com>: 200
+
+  ANSWER:
+    None of the retrieved emails mention a Mars colonization project. The most recent emails discuss Project Falcon and company offsite plans.
+
+  COMPLETE RESPONSE SOURCES:
+    [1] doc_id=<cross-ref-014@test.example.com> from=Alice Chen <alice@acme.com> date=Fri, 07 Feb 2025 16:00:00 +0000 subject=API keys for Falcon - following up
+    [2] doc_id=<mark-topic3-012@test.example.com> from=Mark Johnson <mark@acme.com> date=Mon, 10 Feb 2025 11:00:00 +0000 subject=Company offsite - April 5-6
+    [3] doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> date=Thu, 13 Feb 2025 17:00:00 +0000 subject=Updated Falcon timeline
+    [4] doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> date=Wed, 05 Feb 2025 09:00:00 +0000 subject=Project Falcon launch date
+    [5] doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> date=Wed, 05 Feb 2025 14:30:00 +0000 subject=Re: Project Falcon launch date
+
+  SESSION TAIL (last assistant message):
+    None of the retrieved emails mention a Mars colonization project. The most recent emails discuss Project Falcon and company offsite plans.
+  Tail size: 2 messages
+
+  No anomalies detected.
+
+  SCORES: overall=0.67
+    must_contain: 0.0
+    must_not_contain: 1.0
+    has_citations: 1.0
+    citations_valid: 1.0
+    expected_sources: 1.0
+    no_hallucination: 0.0
+
+--------------------------------------------------------------------------------
+TEST: multiturn_01 [multi_turn]
+Q: Tell me about Alice's emails regarding Project Falcon.
+--------------------------------------------------------------------------------
+
+  RETRIEVED SOURCES:
+    message_ids returned: 5
+    sources returned: 5
+    [1] score=0.7539608478546143 doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> subject=Project Falcon launch date
+    [2] score=0.7354891300201416 doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> subject=Updated Falcon timeline
+    [3] score=0.7284530401229858 doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> subject=Re: Project Falcon launch date
+    [4] score=0.7178410291671753 doc_id=<cross-ref-014@test.example.com> from=Alice Chen <alice@acme.com> subject=API keys for Falcon - following up
+    [5] score=0.6231245994567871 doc_id=<mark-topic2-011@test.example.com> from=Mark Johnson <mark@acme.com> subject=Office renovation schedule - Building 3
+
+  EVIDENCE UPLOADS:
+    <falcon-launch-001@test.example.com>: 200
+    <alice-recent-016@test.example.com>: 200
+    <falcon-reply-002@test.example.com>: 200
+    <cross-ref-014@test.example.com>: 200
+    <mark-topic2-011@test.example.com>: 200
+
+  ANSWER:
+    Alice sent four emails related to Project Falcon. The earliest one on February 5th confirmed the launch date for March 15 and requested that QA be ready by March 10. [Email 4]
+    
+    In her email on February 7th, Alice followed up about API keys needed for payment gateway integration before March 10. She asked Dave's team to provide an estimated time of arrival (ETA) since they are pending approval from a vendor. [Email 2]
+    
+    Then, on the same day, Alice responded to your request for information about the payment gateway API keys by summarizing that the keys were still awaiting approval and needed before March 10th. [Email 5]
+    
+    Lastly, her most recent email on February 13th updated the Falcon launch timeline due to a delay requested by the marketing team; the new launch date is set for March 17 instead of March 15. Additionally, she provided revised deadlines for QA readiness (March 12) and dry runs (March 14). [Email 3]
+
+  COMPLETE RESPONSE SOURCES:
+    [1] doc_id=<mark-topic2-011@test.example.com> from=Mark Johnson <mark@acme.com> date=Fri, 07 Feb 2025 15:00:00 +0000 subject=Office renovation schedule - Building 3
+    [2] doc_id=<cross-ref-014@test.example.com> from=Alice Chen <alice@acme.com> date=Fri, 07 Feb 2025 16:00:00 +0000 subject=API keys for Falcon - following up
+    [3] doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> date=Thu, 13 Feb 2025 17:00:00 +0000 subject=Updated Falcon timeline
+    [4] doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> date=Wed, 05 Feb 2025 09:00:00 +0000 subject=Project Falcon launch date
+    [5] doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> date=Wed, 05 Feb 2025 14:30:00 +0000 subject=Re: Project Falcon launch date
+
+  SESSION TAIL (last assistant message):
+    Alice sent four emails related to Project Falcon. The earliest one on February 5th confirmed the launch date for March 15 and requested that QA be ready by March 10. [Email 1]
+    
+    In her email on February 7th, Alice followed up about API keys needed for payment gateway integration before March 10. She asked Dave's team to provide an estimated time of arrival (ETA) since they are pending approval from a vendor. [Email 2]
+    
+    Then, on the same day, Alice responded to your request for information about the payment gateway API keys by summarizing that the keys were still awaiting approval and needed before March 10th. [Email 3]
+    
+    Lastly, her most recent email on February 13th updated the Falcon launch timeline due to a delay requested by the marketing team; the new launch date is set for March 17 instead of March 15. Additionally, she provided revised deadlines for QA readiness (March 12) and dry runs (March 14). [Email 4]
+    
+    EMAILS REFERENCED ABOVE:
+    [Email 1] date=Wed, 05 Feb 2025 09:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Project Falcon launch date
+    [Email 2] date=Fri, 07 Feb 2025 16:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> cc=Dave Wilson <dave@acme.com> subject=API keys for Falcon - following up
+    [Email 3] date=Wed, 05 Feb 2025 14:30:00 +0000 from=Bob Martinez <bob@acme.com> to=Alice Chen <alice@acme.com> subject=Re: Project Falcon launch date
+    [Email 4] date=Thu, 13 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Updated Falcon timeline
+  Tail size: 2 messages
+
+  No anomalies detected.
+
+  SCORES: overall=0.83
+    must_contain: 1.0
+    must_not_contain: 1.0
+    has_citations: 0.0
+    citations_valid: 1.0
+    expected_sources: 1.0
+    no_hallucination: 1.0
+
+--------------------------------------------------------------------------------
+TEST: multiturn_02 [multi_turn]
+Q: What did she say about the deadline change?
+--------------------------------------------------------------------------------
+
+  RETRIEVED SOURCES:
+    message_ids returned: 5
+    sources returned: 5
+    [1] score=0.815687894821167 doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> subject=Updated Falcon timeline
+    [2] score=0.7916978597640991 doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> subject=Project Falcon launch date
+    [3] score=0.7676004767417908 doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> subject=Re: Project Falcon launch date
+    [4] score=0.7268166542053223 doc_id=<cross-ref-014@test.example.com> from=Alice Chen <alice@acme.com> subject=API keys for Falcon - following up
+    [5] score=0.601180374622345 doc_id=<mark-topic1-010@test.example.com> from=Mark Johnson <mark@acme.com> subject=New hire starting Monday - Lisa Wong
+
+  EVIDENCE UPLOADS:
+    <alice-recent-016@test.example.com>: 200
+    <falcon-launch-001@test.example.com>: 200
+    <falcon-reply-002@test.example.com>: 200
+    <cross-ref-014@test.example.com>: 200
+    <mark-topic1-010@test.example.com>: 200
+
+  ANSWER:
+    Alice updated the Falcon launch timeline due to a marketing team request for a 2-day delay. The new launch date is March 17 instead of March 15. All other deadlines were adjusted accordingly: QA ready by March 12 (originally March 10) and dry run on March 14 (previously March 12). [Email 3]
+
+  COMPLETE RESPONSE SOURCES:
+    [1] doc_id=<cross-ref-014@test.example.com> from=Alice Chen <alice@acme.com> date=Fri, 07 Feb 2025 16:00:00 +0000 subject=API keys for Falcon - following up
+    [2] doc_id=<mark-topic1-010@test.example.com> from=Mark Johnson <mark@acme.com> date=Thu, 06 Feb 2025 09:00:00 +0000 subject=New hire starting Monday - Lisa Wong
+    [3] doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> date=Thu, 13 Feb 2025 17:00:00 +0000 subject=Updated Falcon timeline
+    [4] doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> date=Wed, 05 Feb 2025 09:00:00 +0000 subject=Project Falcon launch date
+    [5] doc_id=<falcon-reply-002@test.example.com> from=Bob Martinez <bob@acme.com> date=Wed, 05 Feb 2025 14:30:00 +0000 subject=Re: Project Falcon launch date
+
+  SESSION TAIL (last assistant message):
+    Alice updated the Falcon launch timeline due to a marketing team request for a 2-day delay. The new launch date is March 17 instead of March 15. All other deadlines were adjusted accordingly: QA ready by March 12 (originally March 10) and dry run on March 14 (previously March 12). [Email 1]
+    
+    EMAILS REFERENCED ABOVE:
+    [Email 1] date=Thu, 13 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Updated Falcon timeline
+  Tail size: 4 messages
+
+  No anomalies detected.
+
+  SCORES: overall=0.83
+    must_contain: 1.0
+    must_not_contain: 1.0
+    has_citations: 0.0
+    citations_valid: 1.0
+    expected_sources: 1.0
+    no_hallucination: 1.0
+
+--------------------------------------------------------------------------------
+TEST: multiturn_03 [multi_turn]
+Q: And who needs to be informed about this change?
+--------------------------------------------------------------------------------
+
+  RETRIEVED SOURCES:
+    message_ids returned: 5
+    sources returned: 5
+    [1] score=0.5513801574707031 doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> subject=Updated Falcon timeline
+    [2] score=0.5345170497894287 doc_id=<processed-015@test.example.com> from=IT Support <it@acme.com> subject=Password reset completed
+    [3] score=0.5302637219429016 doc_id=<mark-topic2-011@test.example.com> from=Mark Johnson <mark@acme.com> subject=Office renovation schedule - Building 3
+    [4] score=0.5056954026222229 doc_id=<server-down-004@test.example.com> from=Dave Wilson <dave@acme.com> subject=URGENT: Production server down - immediate action needed
+    [5] score=0.5054537653923035 doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> subject=Project Falcon launch date
+
+  EVIDENCE UPLOADS:
+    <alice-recent-016@test.example.com>: 200
+    <processed-015@test.example.com>: 200
+    <mark-topic2-011@test.example.com>: 200
+    <server-down-004@test.example.com>: 200
+    <falcon-launch-001@test.example.com>: 200
+
+  ANSWER:
+    Alice updated the Falcon launch timeline due to a marketing team request for a 2-day delay. The new launch date is March 17 instead of March 15. All other deadlines were adjusted accordingly: QA ready by March 12 (originally March 10) and dry run on March 14 (previously March 12). [Email 3]
+    
+    You should inform relevant stakeholders, such as the QA team and project managers, about this change to ensure they adjust their schedules accordingly.
+
+  COMPLETE RESPONSE SOURCES:
+    [1] doc_id=<mark-topic2-011@test.example.com> from=Mark Johnson <mark@acme.com> date=Fri, 07 Feb 2025 15:00:00 +0000 subject=Office renovation schedule - Building 3
+    [2] doc_id=<processed-015@test.example.com> from=IT Support <it@acme.com> date=Mon, 03 Feb 2025 12:00:00 +0000 subject=Password reset completed
+    [3] doc_id=<alice-recent-016@test.example.com> from=Alice Chen <alice@acme.com> date=Thu, 13 Feb 2025 17:00:00 +0000 subject=Updated Falcon timeline
+    [4] doc_id=<server-down-004@test.example.com> from=Dave Wilson <dave@acme.com> date=Tue, 11 Feb 2025 03:15:00 +0000 subject=URGENT: Production server down - immediate action needed
+    [5] doc_id=<falcon-launch-001@test.example.com> from=Alice Chen <alice@acme.com> date=Wed, 05 Feb 2025 09:00:00 +0000 subject=Project Falcon launch date
+
+  SESSION TAIL (last assistant message):
+    Alice updated the Falcon launch timeline due to a marketing team request for a 2-day delay. The new launch date is March 17 instead of March 15. All other deadlines were adjusted accordingly: QA ready by March 12 (originally March 10) and dry run on March 14 (previously March 12). [Email 1]
+    
+    You should inform relevant stakeholders, such as the QA team and project managers, about this change to ensure they adjust their schedules accordingly.
+    
+    EMAILS REFERENCED ABOVE:
+    [Email 1] date=Thu, 13 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Updated Falcon timeline
+  Tail size: 6 messages
+
+  No anomalies detected.
+
+  SCORES: overall=1.00
+    must_contain: 1.0
+    must_not_contain: 1.0
+    has_citations: 1.0
+    citations_valid: 1.0
+    expected_sources: 1.0
+    no_hallucination: 1.0
+
+================================================================================
+SUMMARY
+================================================================================
+
+Total anomalies: 2
+
+ALL ANOMALIES:
+  [urgent_01] POSSIBLE HALLUCINATED NAMES: ['tom']
+  [thread_01] POSSIBLE HALLUCINATED NAMES: ['tom']
+
+Mean overall score: 0.81
+
+Per-category scores:
+  attachment: 0.83 (1 cases)
+  broad: 0.83 (1 cases)
+  cross_reference: 0.83 (1 cases)
+  factual: 0.83 (3 cases)
+  multi_turn: 0.89 (3 cases)
+  negative: 0.67 (1 cases)
+  temporal: 0.67 (2 cases)
+  thread: 0.83 (2 cases)
+  triage: 0.83 (1 cases)
+
+Per-case scores:
+  factual_01 [factual]: 0.83
+  factual_02 [factual]: 0.83
+  factual_03 [factual]: 0.83
+  urgent_01 [triage]: 0.83
+  thread_01 [thread]: 0.83
+  thread_02 [thread]: 0.83
+  broad_01 [broad]: 0.83
+  temporal_01 [temporal]: 0.67 *** LOW ***
+  temporal_02 [temporal]: 0.67 *** LOW ***
+  attachment_01 [attachment]: 0.83
+  crossref_01 [cross_reference]: 0.83
+  negative_01 [negative]: 0.67 *** LOW ***
+  multiturn_01 [multi_turn]: 0.83
+  multiturn_02 [multi_turn]: 0.83
+  multiturn_03 [multi_turn]: 1.00
+
+================================================================================
+END OF REPORT
+================================================================================

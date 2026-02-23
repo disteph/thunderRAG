@@ -1,0 +1,93 @@
+=== SYSTEM ===
+You are a helpful email assistant in an ongoing multi-turn chat. The user is: Bob Martinez <bob@acme.com>. Current date/time: 2026-02-21 22:50:57 (local); 2026-02-22T06:50:57Z (UTC).
+The conversation below includes previous user/assistant turns as context.
+The final user message is the question you must answer.
+Immediately before it, you may see a message containing emails retrieved from the user's archive under the heading EMAILS THAT MAY BE RELEVANT. Use these emails as evidence to answer the question.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+Do not invent email facts that are not in the provided emails.
+Do not greet, do not restate the question, and do not narrate your process.
+
+Each email's body may contain labelled sections:
+- NEW CONTENT: the message the sender actually wrote
+- QUOTED CONTEXT: previous thread history (older messages being replied to)
+- QUOTED CONTEXT (older, summarized): summarized older thread history
+- ATTACHMENTS (summaries): summaries of attached files
+Not all sections will be present in every email.
+
+Each email header may include triage metadata:
+- action=N/100: how much the email requires action or a response from the user (0 = purely informational, 100 = urgent action required)
+- importance=N/100: overall importance of the email to the user
+- reply_by=<date>: estimated deadline for a response, if any
+- processed=true: the user has already dealt with this email; no further action is needed regardless of the action score
+
+=== USER ===
+EMAILS THAT MAY BE RELEVANT:
+
+[Email 1] doc_id=bigcorp-thanks-029@test.example.com date=Fri, 14 Feb 2025 11:00:00 +0000 from=Sam Chen <sam@bigcorp.com> to=Bob Martinez <bob@acme.com> cc=Raj Gupta <raj@acme.com> subject=Re: ESCALATION: BigCorp - RESOLVED
+NEW CONTENT:
+Bob,
+
+Thank you for the quick turnaround. Issues confirmed resolved on our end.
+
+The dedicated connection pool gives us more confidence. Looking forward to discussing API v3 migration next month.
+
+Best,
+Sam Chen
+CTO, BigCorp
+
+[Email 2] doc_id=vendor-original-007@test.example.com date=Mon, 03 Feb 2025 09:00:00 +0000 from=Frank Lee <frank@acme.com> to=Grace Kim <grace@acme.com> cc=Heidi Tanaka <heidi@acme.com> subject=Vendor contract renewal - CloudStore Inc.
+NEW CONTENT:
+Hi Grace,
+
+The CloudStore Inc. contract expires on March 31, 2025.
+Their renewal proposal is $45,000/year (up from $38,000).
+
+I think we should negotiate. Their competitor DataVault is offering similar storage at $35,000/year.
+Can you prepare a comparison analysis?
+
+Thanks,
+Frank
+
+[Email 3] doc_id=nda-review-050@test.example.com date=Thu, 13 Feb 2025 10:00:00 +0000 from=Legal Department <legal@acme.com> to=Bob Martinez <bob@acme.com> cc=Heidi Tanaka <heidi@acme.com> subject=NDA review required - CloudStore contract amendment
+NEW CONTENT:
+Bob,
+
+CloudStore contract renegotiation requires NDA amendment:
+- Extended confidentiality: 2 years to 5 years
+- Added AI/ML training data exclusion clause
+- Changed to mutual NDA (was one-way)
+
+Please confirm the AI/ML exclusion is acceptable from engineering. Sign-off by Feb 18.
+
+Legal Department
+
+[Email 4] doc_id=vendor-reply1-008@test.example.com date=Tue, 04 Feb 2025 14:00:00 +0000 from=Grace Kim <grace@acme.com> to=Frank Lee <frank@acme.com> cc=Heidi Tanaka <heidi@acme.com> subject=Re: Vendor contract renewal - CloudStore Inc.
+NEW CONTENT:
+Hi Frank,
+
+I've done the comparison:
+
+CloudStore: 5TB, 99.9% uptime SLA, 24/7 phone support, no migration risk. $45,000/yr
+DataVault: 5TB, 99.5% uptime SLA, email-only support, 2-3 weeks migration. $35,000/yr
+
+Recommendation: negotiate CloudStore to $40,000 using DataVault quote. Migration risk isn't worth $5K savings.
+
+Grace
+
+[Email 5] doc_id=vendor-reply2-009@test.example.com date=Wed, 05 Feb 2025 10:00:00 +0000 from=Heidi Tanaka <heidi@acme.com> to=Frank Lee <frank@acme.com>, Grace Kim <grace@acme.com> subject=Re: Vendor contract renewal - CloudStore Inc.
+NEW CONTENT:
+Agreed with Grace. I'll reach out to CloudStore's account manager today and push for $40K.
+
+Also want to add a clause for automatic scaling if we exceed 5TB. Our data growth suggests we'll hit that by Q3.
+
+-- Heidi
+
+=== USER ===
+Summarize the CloudStore vendor contract negotiation thread.
+
+Answer based on the retrieved emails above.
+Do not greet, do not offer to help, and do not ask for a follow-up question.
+Start immediately with the answer (no preamble).
+If the request involves ordering or selecting items by time/recency, use the dates in the EMAILS THAT MAY BE RELEVANT list to decide which emails are newest.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+

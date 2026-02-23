@@ -1039,6 +1039,18 @@ let ingest_text_of_raw ~(doc_id : string) ~(raw : string) : (string * Yojson.Saf
 *)
 let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
     ~(headers : (string, string) Hashtbl.t) ~(raw : string) : (Http.Response.t * string) =
+  (* Skip re-ingestion if already ingested with the same embed + triage models *)
+  (match Rag_lib.Pg.ingested_models doc_id with
+   | Ok (Some (em, tm, sm))
+     when em = !ollama_embed_model && tm = !ollama_triage_model && sm = !ollama_summarize_model ->
+       if log then
+         Printf.eprintf "[ingest.skip] %s already ingested with same models (embed=%s triage=%s summarize=%s)\n%!" doc_id em tm sm;
+       let body = Yojson.Safe.to_string
+         (`Assoc [ ("ok", `Bool true); ("doc_id", `String doc_id); ("skipped", `Bool true)
+                 ; ("reason", `String "already ingested with current models") ]) in
+       let resp = Http.Response.make ~status:`OK () in
+       (resp, body)
+   | _ ->
   let from_ = header_or_empty headers "from" |> decode_rfc2047 |> sanitize_utf8 in
   let to_ = header_or_empty headers "to" |> decode_rfc2047 |> sanitize_utf8 in
   let cc_ = header_or_empty headers "cc" |> decode_rfc2047 |> sanitize_utf8 in
@@ -1181,6 +1193,7 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
   else
     match Rag_lib.Pg.upsert_email
       ~doc_id ~embed_model:!ollama_embed_model ~triage_model:!ollama_triage_model
+      ~summarize_model:!ollama_summarize_model
       ~sender:from_ ~recipient:to_ ~cc:cc_ ~bcc:bcc_ ~subject
       ~email_date:(parse_rfc822_to_iso8601 date_)
       ~attachments_json:att_pg_array
@@ -1201,7 +1214,7 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
         | Ok () ->
             Printf.printf "[ingest.ok] doc_id=%s chunks=%d\n%!" ndoc (List.length embedded_chunks);
             let resp = Http.Response.make ~status:`OK () in
-            (resp, {|{"ok":true}|}))
+            (resp, {|{"ok":true}|})))
 
 (*
   Mbox file discovery and streaming
@@ -2003,8 +2016,40 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
                Printf.printf "[retrieval.rewrite.%d] %s\n%!" i
                  (if String.length q > 200 then String.sub q 0 200 ^ "..." else q))
                !queries;
-           if no_retrieval then
-             Printf.printf "[retrieval.rewrite] no_retrieval=true, skipping embedding\n%!";
+           (* Safety net: if the LLM says no_retrieval but the question
+              contains capitalized words (likely names) or email-related
+              terms, override to force retrieval. *)
+           let no_retrieval =
+             if no_retrieval then
+               let q = String.lowercase_ascii question in
+               let has sub = contains_substring ~sub q in
+               (* If the question mentions email-related actions, always retrieve *)
+               let email_terms = has "email" || has "mail" || has "wrote" || has "write"
+                 || has "send" || has "sent" || has "forward" || has "reply"
+                 || has "message" || has "thread" || has "inbox"
+                 || has "meeting" || has "calendar" || has "invite"
+                 || has "attach" || has "deadline" || has "urgent" in
+               (* If the question contains a capitalized multi-word name pattern,
+                  it likely refers to a person/contact *)
+               let has_proper_name =
+                 let words = String.split_on_char ' ' question in
+                 let rec check = function
+                   | a :: b :: rest ->
+                       let a_cap = String.length a > 1 && a.[0] >= 'A' && a.[0] <= 'Z' in
+                       let b_cap = String.length b > 1 && b.[0] >= 'A' && b.[0] <= 'Z' in
+                       if a_cap && b_cap then true else check (b :: rest)
+                   | _ -> false
+                 in
+                 check words
+               in
+               if email_terms || has_proper_name then (
+                 Printf.printf "[retrieval.rewrite] overriding no_retrieval=true (question contains email terms or proper names)\n%!";
+                 false)
+               else (
+                 Printf.printf "[retrieval.rewrite] no_retrieval=true, skipping embedding\n%!";
+                 true)
+             else no_retrieval
+           in
            (* Parse optional SQL filter and score_expr for query_knn.
               The LLM sees a flat "emails" table with a virtual cosine_distance column.
               We substitute cosine_distance -> the real expression before use. *)
@@ -2284,34 +2329,47 @@ let handler ~client ~sw ~clock _socket request body =
              | `Assoc kv -> (
                  match List.assoc_opt "models" kv with
                  | Some (`List xs) ->
-                     xs
-                     |> List.filter_map (function
-                          | `Assoc mkv -> (
-                              match List.assoc_opt "name" mkv with
-                              | Some (`String n) -> Some n
-                              | _ -> None)
-                          | _ -> None)
+                     xs |> List.filter_map (function
+                       | `Assoc mkv -> (
+                           match List.assoc_opt "name" mkv with
+                           | Some (`String n) -> Some n | _ -> None)
+                       | _ -> None)
                  | _ -> [])
              | _ -> []
            with _ -> []
          in
-         (* Filter out the embedding model — it is not useful for chat. *)
-         let embed = String.lowercase_ascii !ollama_embed_model in
-         let strip_latest s =
-           let low = String.lowercase_ascii s in
-           if String.length low > 7 && String.sub low (String.length low - 7) 7 = ":latest"
-           then String.sub low 0 (String.length low - 7)
-           else low
+         (* Classify each model by probing /api/show and checking model_info
+            for a pooling_type key.  Embedding models have pooling (they reduce
+            token embeddings to a single vector); chat/generation models do not. *)
+         let is_embedding_model model_name =
+           try
+             let show_uri = Uri.of_string (!ollama_base_url ^ "/api/show") in
+             let show_body = Yojson.Safe.to_string (`Assoc [("name", `String model_name)]) in
+             let call () = post_json_uri ~client ~sw ~uri:show_uri ~body_json:show_body in
+             let _resp, show_resp = !global_with_timeout 5.0 call in
+             match Yojson.Safe.from_string show_resp with
+             | `Assoc kv ->
+                 (match List.assoc_opt "model_info" kv with
+                  | Some (`Assoc mi) ->
+                      List.exists (fun (k, _) ->
+                        contains_substring ~sub:"pooling_type" k) mi
+                  | _ -> false)
+             | _ -> false
+           with _ -> false
          in
-         let models =
-           all_models
-           |> List.filter (fun name ->
-                let low = String.lowercase_ascii name in
-                low <> embed && strip_latest name <> strip_latest !ollama_embed_model)
+         let embed_models, chat_models =
+           List.fold_left (fun (emb, chat) name ->
+             if is_embedding_model name then (name :: emb, chat)
+             else (emb, name :: chat)
+           ) ([], []) all_models
          in
+         let embed_models = List.rev embed_models in
+         let chat_models = List.rev chat_models in
          let body =
            `Assoc
-             [ ("models", `List (List.map (fun s -> `String s) models))
+             [ ("models", `List (List.map (fun s -> `String s) chat_models))
+             ; ("embed_models", `List (List.map (fun s -> `String s) embed_models))
+             ; ("all_models", `List (List.map (fun s -> `String s) all_models))
              ; ("default_chat_model", `String !ollama_llm_model)
              ]
            |> Yojson.Safe.to_string
@@ -2406,7 +2464,8 @@ let handler ~client ~sw ~clock _socket request body =
       let headers = parse_headers raw in
       let doc_id = doc_id_of_ingest request headers raw in
 
-      let whoami = request_header_or_empty request "x-thunderrag-whoami" in
+      let hdr_whoami = request_header_or_empty request "x-thunderrag-whoami" in
+      let whoami = if String.trim hdr_whoami <> "" then hdr_whoami else !whoami in
       let resp, resp_body =
         forward_ingest_raw ~client ~sw ~log:true ~whoami ~doc_id ~headers ~raw
       in
@@ -3161,12 +3220,12 @@ let handler ~client ~sw ~clock _socket request body =
           | _ -> []
         with _ -> []
       in
-      let ingested, processed =
+      let ingested, processed, reply_by_pairs =
         match Rag_lib.Pg.batch_ingested_status ids with
-        | Ok (i, p) -> (i, p)
+        | Ok (i, p, rb) -> (i, p, rb)
         | Error e ->
             Printf.eprintf "[admin.ingested_status.error] %s\n%!" e;
-            ([], [])
+            ([], [], [])
       in
       (* Map normalized doc_ids back to original request IDs for TB compatibility *)
       let norm_to_orig = Hashtbl.create 64 in
@@ -3178,10 +3237,16 @@ let handler ~client ~sw ~clock _socket request body =
           | Some orig -> Some orig
           | None -> Some nid) lst
       in
+      let reply_by_obj =
+        reply_by_pairs |> List.filter_map (fun (nid, rb) ->
+          let orig = match Hashtbl.find_opt norm_to_orig nid with Some o -> o | None -> nid in
+          Some (orig, `String rb))
+      in
       let body =
         `Assoc
           [ ("ingested", `List (List.map (fun s -> `String s) (map_back ingested)))
           ; ("processed", `List (List.map (fun s -> `String s) (map_back processed)))
+          ; ("reply_by", `Assoc reply_by_obj)
           ]
         |> Yojson.Safe.to_string
       in
@@ -3349,6 +3414,131 @@ let handler ~client ~sw ~clock _socket request body =
            Cohttp_eio.Server.respond_string ~status:`Internal_server_error
              ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
              ~headers:json_headers ())
+  | `GET, "/admin/settings" ->
+      let body = Yojson.Safe.to_string
+        (`Assoc
+          [ ("settings", current_settings_json ())
+          ; ("path", `String (settings_path ()))
+          ; ("default_path", `String (default_settings_path ()))
+          ]) in
+      Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
+
+  | `GET, "/admin/settings/defaults" ->
+      let dp = default_settings_path () in
+      (if Sys.file_exists dp then
+        try
+          let json = Yojson.Safe.from_file dp in
+          Cohttp_eio.Server.respond_string ~status:`OK
+            ~body:(Yojson.Safe.pretty_to_string ~std:true json)
+            ~headers:json_headers ()
+        with e ->
+          Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+            ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String (Printexc.to_string e)) ]))
+            ~headers:json_headers ()
+      else
+        Cohttp_eio.Server.respond_string ~status:`Not_found
+          ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String ("default settings not found: " ^ dp)) ]))
+          ~headers:json_headers ())
+
+  | `POST, "/admin/settings" ->
+      let raw = read_all body in
+      (try
+         let incoming = Yojson.Safe.from_string raw in
+         (* Merge incoming keys into current settings *)
+         let current = current_settings_json () in
+         let merged =
+           match current, incoming with
+           | `Assoc base, `Assoc patch ->
+               let rec merge_assoc base patch =
+                 let updated =
+                   List.map (fun (k, v) ->
+                     match List.assoc_opt k patch with
+                     | None -> (k, v)
+                     | Some (`Assoc pv) ->
+                         (match v with
+                          | `Assoc bv -> (k, `Assoc (merge_assoc bv pv))
+                          | _ -> (k, `Assoc pv))
+                     | Some pv -> (k, pv))
+                     base
+                 in
+                 (* Add keys from patch that aren't in base *)
+                 let extra = List.filter (fun (k, _) -> not (List.mem_assoc k base)) patch in
+                 updated @ extra
+               in
+               `Assoc (merge_assoc base patch)
+           | _, _ -> incoming
+         in
+         match write_settings_json merged with
+         | Error e ->
+             Printf.eprintf "[admin.settings.write_error] %s\n%!" e;
+             Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+               ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String e) ]))
+               ~headers:json_headers ()
+         | Ok () ->
+             load_settings ();
+             Cohttp_eio.Server.respond_string ~status:`OK
+               ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool true); ("settings", current_settings_json ()) ]))
+               ~headers:json_headers ()
+       with e ->
+         let msg = Printexc.to_string e in
+         Printf.eprintf "[admin.settings.error] %s\n%!" msg;
+         Cohttp_eio.Server.respond_string ~status:`Bad_request
+           ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String msg) ]))
+           ~headers:json_headers ())
+
+  | `GET, "/admin/prompts" ->
+      (match load_prompts_json () with
+       | Some json ->
+           let body = Yojson.Safe.to_string
+             (`Assoc
+               [ ("prompts", json)
+               ; ("path", `String (prompts_path ()))
+               ; ("default_path", `String (default_prompts_path ()))
+               ]) in
+           Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
+       | None ->
+           Cohttp_eio.Server.respond_string ~status:`Not_found
+             ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String "prompts.json not found") ]))
+             ~headers:json_headers ())
+
+  | `GET, "/admin/prompts/defaults" ->
+      let dp = default_prompts_path () in
+      (if Sys.file_exists dp then
+        try
+          let json = Yojson.Safe.from_file dp in
+          Cohttp_eio.Server.respond_string ~status:`OK
+            ~body:(Yojson.Safe.pretty_to_string ~std:true json)
+            ~headers:json_headers ()
+        with e ->
+          Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+            ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String (Printexc.to_string e)) ]))
+            ~headers:json_headers ()
+      else
+        Cohttp_eio.Server.respond_string ~status:`Not_found
+          ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String ("default prompts not found: " ^ dp)) ]))
+          ~headers:json_headers ())
+
+  | `POST, "/admin/prompts" ->
+      let raw = read_all body in
+      (try
+         let incoming = Yojson.Safe.from_string raw in
+         match write_prompts_json incoming with
+         | Error e ->
+             Printf.eprintf "[admin.prompts.write_error] %s\n%!" e;
+             Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+               ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String e) ]))
+               ~headers:json_headers ()
+         | Ok () ->
+             Cohttp_eio.Server.respond_string ~status:`OK
+               ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool true) ]))
+               ~headers:json_headers ()
+       with e ->
+         let msg = Printexc.to_string e in
+         Printf.eprintf "[admin.prompts.error] %s\n%!" msg;
+         Cohttp_eio.Server.respond_string ~status:`Bad_request
+           ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String msg) ]))
+           ~headers:json_headers ())
+
   | `POST, "/admin/reload" ->
       (try
          load_settings ();
@@ -3369,16 +3559,17 @@ let handler ~client ~sw ~clock _socket request body =
   | `POST, "/admin/mark_processed" ->
       let raw = read_all body in
       (* Accept either JSON {"id":"..."} or raw RFC822 (from filter action) *)
+      let from_json =
+        try
+          let json = Yojson.Safe.from_string raw in
+          match json with
+          | `Assoc kv -> (match List.assoc_opt "id" kv with Some (`String s) -> String.trim s | _ -> "")
+          | _ -> ""
+        with _ -> ""
+      in
+      let is_json = from_json <> "" in
       let id =
-        let from_json =
-          try
-            let json = Yojson.Safe.from_string raw in
-            match json with
-            | `Assoc kv -> (match List.assoc_opt "id" kv with Some (`String s) -> String.trim s | _ -> "")
-            | _ -> ""
-          with _ -> ""
-        in
-        if from_json <> "" then from_json
+        if is_json then from_json
         else
           let from_header = request_header_or_empty request "x-thunderbird-message-id" |> String.trim in
           if from_header <> "" then from_header
@@ -3386,14 +3577,37 @@ let handler ~client ~sw ~clock _socket request body =
             let rfc_headers = parse_headers raw in
             header_or_empty rfc_headers "message-id" |> String.trim
       in
-      if id = "" then
-        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing id\n" ()
+      if id = "" then (
+        Printf.printf "[admin.mark_processed] empty id, rejecting\n%!";
+        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing id\n" ())
       else (
+        Printf.printf "[admin.mark_processed] id=%s is_json=%b\n%!" id is_json;
         match Rag_lib.Pg.set_processed id true with
         | Ok true ->
+            Printf.printf "[admin.mark_processed] %s -> processed=true\n%!" id;
             Cohttp_eio.Server.respond_string ~status:`OK
               ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool true); ("id", `String id); ("processed", `Bool true) ]))
               ~headers:json_headers ()
+        | Ok false | Error _ when not is_json ->
+            (* Not yet ingested but we have raw RFC822 — ingest first, then mark processed *)
+            Printf.eprintf "[admin.mark_processed] %s not ingested, auto-ingesting from RFC822\n%!" id;
+            let rfc_headers = parse_headers raw in
+            let doc_id = doc_id_of_ingest request rfc_headers raw in
+            let hdr_whoami = request_header_or_empty request "x-thunderrag-whoami" in
+            let whoami = if String.trim hdr_whoami <> "" then hdr_whoami else !whoami in
+            let resp, _resp_body =
+              forward_ingest_raw ~client ~sw ~log:true ~whoami ~doc_id ~headers:rfc_headers ~raw
+            in
+            let code = Cohttp.Code.code_of_status (Http.Response.status resp) in
+            if code >= 200 && code < 300 then (
+              ignore (Rag_lib.Pg.set_processed doc_id true);
+              Cohttp_eio.Server.respond_string ~status:`OK
+                ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool true); ("id", `String doc_id); ("processed", `Bool true); ("auto_ingested", `Bool true) ]))
+                ~headers:json_headers ())
+            else
+              Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+                ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String "auto-ingest failed") ]))
+                ~headers:json_headers ()
         | Ok false | Error _ ->
             Cohttp_eio.Server.respond_string ~status:`Not_found
               ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String "not ingested") ]))

@@ -1,0 +1,124 @@
+=== SYSTEM ===
+You are a helpful email assistant in an ongoing multi-turn chat. The user is: Bob Martinez <bob@acme.com>. Current date/time: 2026-02-21 23:15:50 (local); 2026-02-22T07:15:50Z (UTC).
+The conversation below includes previous user/assistant turns as context.
+The final user message is the question you must answer.
+Immediately before it, you may see a message containing emails retrieved from the user's archive under the heading EMAILS THAT MAY BE RELEVANT. Use these emails as evidence to answer the question.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+Do not invent email facts that are not in the provided emails.
+Do not greet, do not restate the question, and do not narrate your process.
+
+Each email's body may contain labelled sections:
+- NEW CONTENT: the message the sender actually wrote
+- QUOTED CONTEXT: previous thread history (older messages being replied to)
+- QUOTED CONTEXT (older, summarized): summarized older thread history
+- ATTACHMENTS (summaries): summaries of attached files
+Not all sections will be present in every email.
+
+Each email header may include triage metadata:
+- action=N/100: how much the email requires action or a response from the user (0 = purely informational, 100 = urgent action required)
+- importance=N/100: overall importance of the email to the user
+- reply_by=<date>: estimated deadline for a response, if any
+- processed=true: the user has already dealt with this email; no further action is needed regardless of the action score
+
+=== USER ===
+Who are the key people I've been emailing with and what are their roles?
+
+=== ASSISTANT ===
+You've been emailing with Irene Novak (performance review), Alice Chen (out-of-office notification), Mark Johnson (new hire details), and Dave Wilson (server issue resolution). Their roles are in HR/management, engineering management, hiring coordinator, and operations respectively.
+
+=== USER ===
+EMAILS THAT MAY BE RELEVANT:
+
+[Email 1] doc_id=perf-review-045@test.example.com date=Fri, 07 Feb 2025 17:00:00 +0000 from=Irene Novak <irene@acme.com> to=Bob Martinez <bob@acme.com> subject=Annual performance review summary - FY2024
+NEW CONTENT:
+Bob,
+
+FY2024 review summary:
+
+Rating: Exceeds Expectations (4/5)
+
+Strengths: Technical leadership on Falcon, incident response (Q3 DB migration crisis), mentoring junior engineers.
+
+Growth areas: Delegate more, improve team runbook documentation.
+
+Compensation: 8% salary increase (March 1). Stock refresh: 500 RSUs over 4 years.
+
+Let's discuss in our next 1:1.
+
+Irene
+
+[Email 2] doc_id=design-revised-032@test.example.com date=Fri, 14 Feb 2025 14:00:00 +0000 from=Patricia Owens <patricia@acme.com> to=Bob Martinez <bob@acme.com> cc=Alice Chen <alice@acme.com> subject=Re: Falcon UI mockups - Revised
+NEW CONTENT:
+Bob,
+
+Revised mockups attached:
+1. Added estimated delivery time
+2. Added CSV export to payment history
+3. Chart colors meet WCAG AA
+4. Confirmation dialog for key regeneration
+
+All feedback incorporated. Ready for sign-off.
+
+Patricia
+
+[Email 3] doc_id=conference-035@test.example.com date=Thu, 06 Feb 2025 11:00:00 +0000 from=Irene Novak <irene@acme.com> to=Bob Martinez <bob@acme.com> subject=DevOps Summit 2025 - nomination to attend
+NEW CONTENT:
+Bob,
+
+Nominating you for DevOps Summit 2025 in San Francisco, March 20-22.
+
+- Keynote by CTO of Kubernetes
+- Workshops on GitOps and observability
+- Networking with engineering leads
+
+Registration: $1,500 | Travel+hotel: ~$2,000
+
+Confirm by Feb 14 so I can get budget approval.
+
+Irene
+VP Engineering
+
+[Email 4] doc_id=fwd-article-054@test.example.com date=Tue, 11 Feb 2025 14:00:00 +0000 from=Mark Johnson <mark@acme.com> to=Bob Martinez <bob@acme.com> subject=Fwd: Interesting article on AI in DevOps
+NEW CONTENT:
+Bob,
+
+Thought you'd find this interesting given your DevOps Summit trip:
+
+QUOTED CONTEXT:
+---------- Forwarded message ----------
+From: TechDigest <newsletter@techdigest.com>
+Subject: How AI is Transforming DevOps in 2025
+
+Key trends:
+1. AIOps for automated incident detection
+2. AI code review reducing review time 60%
+3. Predictive scaling via ML
+4. NL infrastructure-as-code generation
+
+https://techdigest.com/ai-devops-2025
+
+-- Mark
+
+[Email 5] doc_id=design-feedback-031@test.example.com date=Wed, 12 Feb 2025 16:00:00 +0000 from=Bob Martinez <bob@acme.com> to=Patricia Owens <patricia@acme.com> cc=Alice Chen <alice@acme.com> subject=Re: Falcon UI mockups for review
+NEW CONTENT:
+Patricia,
+
+Great work. Feedback:
+1. Order tracking: Add estimated delivery time
+2. Payment history: Need CSV export
+3. Analytics: Chart colors need better contrast (WCAG AA)
+4. Settings: Add regenerate-key confirmation dialog
+
+Overall direction is solid.
+
+Bob
+
+=== USER ===
+What does my recent performance review say?
+
+Answer based on the retrieved emails above.
+Do not greet, do not offer to help, and do not ask for a follow-up question.
+Start immediately with the answer (no preamble).
+If the request involves ordering or selecting items by time/recency, use the dates in the EMAILS THAT MAY BE RELEVANT list to decide which emails are newest.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+

@@ -1,0 +1,778 @@
+================================================================================
+ThunderRAG Quality Test Report
+Run: 20260221_224923  Duration: 1713.2s  Cases: 73
+================================================================================
+
+--------------------------------------------------------------------------------
+TEST: factual_01 [factual]
+  A: The Project Falcon launch date is March 17, 2025. [Email 3] mentions a 2-day delay requested by the marketing team, changing the original date from March 15, 2025.
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: factual_02 [factual]
+  A: Carol Davis scheduled the Q1 budget review meeting for February 24. The original date was February 20, but it was rescheduled. [Email 5] contains the rescheduling information.
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: factual_03 [factual]
+  A: The Q1 financial report highlights include:  1. **Revenue Growth**: The company saw a significant increase in revenue, surpassing projections by 15%. 2. **Operating Expenses**: Operating expenses were...
+  ANOMALIES (4):
+    - NO_RETRIEVAL: query was answered without email retrieval
+    - PROMPT: evidence section header present but no [Email 1] found
+    - CITATION OUT OF RANGE: [Email 4] vs 0 sources
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 0.67
+
+--------------------------------------------------------------------------------
+TEST: factual_04 [factual]
+  A: It seems like your last message was incomplete. Could you please provide more details or rephrase your question?
+  ANOMALIES (2):
+    - NO_RETRIEVAL: query was answered without email retrieval
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.33
+
+--------------------------------------------------------------------------------
+TEST: factual_05 [factual]
+  A: It seems you've sent me an incomplete message or there was an interruption. Could you please provide your question or continue from where you left off? I'm here to assist once you're ready to proceed.
+  ANOMALIES (2):
+    - NO_RETRIEVAL: query was answered without email retrieval
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.33
+
+--------------------------------------------------------------------------------
+TEST: triage_01 [triage]
+  A: [Email 1] indicates that Alice Chen is out of office from February 17-21 and has directed urgent matters to be texted to her cell phone. There are no other emails marked with high urgency or requiring...
+  No anomalies.
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: triage_02 [triage]
+  A: - Compliance audit documents needed by February 28, 2025 ([Email 3]). - Q1 budget review meeting rescheduled for February 24 at 2pm ([Email 5]).
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: thread_incident_01 [thread]
+  A: On February 18, there was an issue with the production server affecting service availability. According to the relevant emails, the initial report came from the monitoring system at around 05:30 AM UT...
+  ANOMALIES (3):
+    - NO_RETRIEVAL: query was answered without email retrieval
+    - PROMPT: evidence section header present but no [Email 1] found
+    - CITATION OUT OF RANGE: [Email 2] vs 0 sources
+  SCORE: 0.50
+
+--------------------------------------------------------------------------------
+TEST: thread_incident_02 [thread]
+  A: The production server incident was resolved through several steps: 1. Bob identified a connection leak in the nightly analytics batch job deployed on Friday, causing database connections to exhaust an...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: thread_incident_03 [thread]
+  A: The production server incident caused intermittent API timeouts affecting BigCorp's POST /api/v2/orders endpoint. This resulted in approximately 15% of requests timing out and impacted $20K/day in fai...
+  ANOMALIES (1):
+    - PROMPT: duplicate email header [Email 1] appears 2 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: thread_vendor_01 [thread]
+  A: The CloudStore vendor contract renewal discussion began with Frank Lee noting the contract expires on March 31, 2025, and proposing a negotiation due to a competitor's lower price. Grace Kim provided ...
+  ANOMALIES (1):
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: thread_vendor_02 [thread]
+  A: Grace's analysis compared CloudStore and DataVault based on storage capacity, uptime SLA, support options, migration risk, and cost. Here is a summary:  - **CloudStore**: 5TB storage, 99.9% uptime SLA...
+  ANOMALIES (4):
+    - PROMPT: duplicate email header [Email 2] appears 2 times
+    - PROMPT: duplicate email header [Email 1] appears 2 times
+    - PROMPT: duplicate email header [Email 3] appears 2 times
+    - POSSIBLE HALLUCINATED NAMES: mary
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: thread_vendor_03 [thread]
+  A: Grace's analysis compared CloudStore and DataVault based on storage capacity, uptime SLA, support options, migration risk, and cost. The findings were:  - **CloudStore**: 5TB storage, 99.9% uptime SLA...
+  ANOMALIES (3):
+    - PROMPT: duplicate email header [Email 2] appears 2 times
+    - PROMPT: duplicate email header [Email 1] appears 3 times
+    - PROMPT: duplicate email header [Email 3] appears 2 times
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: broad_mark_01 [broad]
+  A: Mark Johnson has emailed you about a forwarded article on AI in DevOps related to your upcoming trip to the DevOps Summit [Email 4].
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: broad_mark_02 [broad]
+  A: Mark Johnson mentioned Lisa Wong joining your backend team starting Monday, February 10. He asked you to set up her accounts and assign a buddy [Email 1].
+  ANOMALIES (1):
+    - PROMPT: duplicate email header [Email 1] appears 2 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: temporal_01 [temporal]
+  A: The most recent email you got from Alice is [Email 4] dated Fri, 14 Feb 2025 17:00:00 +0000, informing about her being out of office.
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: temporal_02 [temporal]
+  A: You have a compliance audit document deadline on February 28 for code review logs, security incident reports, access control audit trail, and data retention policy acknowledgments. Additionally, there...
+  No anomalies.
+  SCORE: 0.67
+
+--------------------------------------------------------------------------------
+TEST: attachment_01 [attachment]
+  A: None of the retrieved emails contain attachments with reports and documents. The emails only mention deadlines for submitting expense reports, reminders about compliance audit document requirements, a...
+  No anomalies.
+  SCORE: 0.50
+
+--------------------------------------------------------------------------------
+TEST: attachment_02 [attachment]
+  A: The Q1 security scan report found one critical vulnerability (CVE-2025-1234 in log4j), three high vulnerabilities (outdated TLS, weak password policy, exposed debug endpoint), seven medium, and twelve...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: negative_01 [negative]
+  A: No one has emailed you about the Mars colonization project based on the provided emails.
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: negative_02 [negative]
+  A: I don't have specific information about the CEO's salary in our records or emails. You would need to check HR documents or financial reports for that data. If you believe there was an email discussing...
+  ANOMALIES (2):
+    - NO_RETRIEVAL: query was answered without email retrieval
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_01 [multi_turn]
+  A: Project Falcon is nearing its March 17 launch date. Key activities and updates include:  - **UI Mockups**: Revised mockups incorporating all feedback have been completed by Patricia Owens, with featur...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_02 [multi_turn]
+  A: The launch date for Project Falcon is March 17, 2025. The original planned launch was on March 15, but a 2-day delay was requested by the marketing team to better align with the webinar schedule. This...
+  ANOMALIES (4):
+    - PROMPT: duplicate email header [Email 2] appears 2 times
+    - PROMPT: duplicate email header [Email 1] appears 2 times
+    - PROMPT: duplicate email header [Email 3] appears 2 times
+    - PROMPT: duplicate email header [Email 4] appears 2 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_03 [multi_turn]
+  A: The current launch date for Project Falcon is March 17, 2025. The original planned launch was on March 15, but it was moved to accommodate marketing efforts better aligned with webinar schedules.  QA ...
+  ANOMALIES (4):
+    - PROMPT: duplicate email header [Email 2] appears 2 times
+    - PROMPT: duplicate email header [Email 1] appears 3 times
+    - PROMPT: duplicate email header [Email 3] appears 2 times
+    - PROMPT: duplicate email header [Email 4] appears 2 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_04 [multi_turn]
+  A: The staging environment had a database migration issue that was resolved. The v3.2 schema migration failed on February 12, causing inconsistencies in the orders table and blocking integration tests [E...
+  ANOMALIES (4):
+    - PROMPT: duplicate email header [Email 2] appears 2 times
+    - PROMPT: duplicate email header [Email 1] appears 4 times
+    - PROMPT: duplicate email header [Email 3] appears 2 times
+    - PROMPT: duplicate email header [Email 4] appears 2 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_05 [multi_turn]
+  A: 
+  ANOMALIES (1):
+    - ANSWER TOO SHORT: 0 chars
+  SCORE: 0.33
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_06 [multi_turn]
+  A: The marketing plan for Project Falcon's launch is structured into four phases:  1. **Phase 1 (Mar 3-10): Teaser**    - Activities: social media posts, blog articles, and an email blast. 2. **Phase 2 (...
+  ANOMALIES (5):
+    - PROMPT: duplicate email header [Email 2] appears 3 times
+    - PROMPT: duplicate email header [Email 1] appears 5 times
+    - PROMPT: duplicate email header [Email 3] appears 3 times
+    - PROMPT: duplicate email header [Email 4] appears 2 times
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_07 [multi_turn]
+  A: There is one open bug related to API keys for payment gateway integration tests. Tony Russo reported that these tests are blocked due to pending API keys and noted a risk that if API keys aren't recei...
+  ANOMALIES (4):
+    - PROMPT: duplicate email header [Email 2] appears 3 times
+    - PROMPT: duplicate email header [Email 1] appears 6 times
+    - PROMPT: duplicate email header [Email 3] appears 3 times
+    - PROMPT: duplicate email header [Email 4] appears 2 times
+  SCORE: 0.67
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_08 [multi_turn]
+  A: Current risks and blockers for Project Falcon include:  - **API Keys**: Payment gateway integration tests are blocked due to pending API keys. If not received by March 5, QA won't meet its deadline [E...
+  ANOMALIES (4):
+    - PROMPT: duplicate email header [Email 2] appears 3 times
+    - PROMPT: duplicate email header [Email 1] appears 7 times
+    - PROMPT: duplicate email header [Email 3] appears 3 times
+    - PROMPT: duplicate email header [Email 4] appears 2 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_01 [multi_turn]
+  A: The production server outage was caused by a connection leak in the nightly analytics batch job deployed on Friday. This resulted in database connections being exhausted and all customer-facing APIs r...
+  ANOMALIES (1):
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_02 [multi_turn]
+  A: The connection leak in the nightly analytics batch job started causing the production server outage at 3:05 AM UTC on February 11, 2025 ([Email 2]).
+  ANOMALIES (1):
+    - PROMPT: duplicate email header [Email 1] appears 2 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_03 [multi_turn]
+  A: The production server outage lasted for 45 minutes with an additional ~12 minutes of degraded performance. The fix involved deploying a proper patch that cleaned up database connections in the finally...
+  ANOMALIES (1):
+    - PROMPT: duplicate email header [Email 1] appears 3 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_04 [multi_turn]
+  A: Yes, a postmortem was conducted. According to [Email 4], the production outage lasted for 45 minutes with an additional ~12 minutes of degraded performance. The fix involved deploying a patch that cle...
+  ANOMALIES (1):
+    - PROMPT: duplicate email header [Email 1] appears 4 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_05 [multi_turn]
+  A: A postmortem document was created after the production server outage on February 11, 2025. The root cause was a connection leak in the nightly analytics batch job ([Email 3]). A fix was deployed to cl...
+  ANOMALIES (1):
+    - PROMPT: duplicate email header [Email 1] appears 5 times
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_06 [multi_turn]
+  A: No customer complaints were mentioned in the provided emails regarding this outage. The issue was resolved internally without any reported issues from customers.  EMAILS REFERENCED ABOVE: [Email 1] do...
+  ANOMALIES (3):
+    - PROMPT: duplicate email header [Email 1] appears 7 times
+    - PROMPT: duplicate doc_id=server-reply2-018@test.example.com appears 2 times
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_07 [multi_turn]
+  A: There was a disk space warning on prod-db-01.acme.internal at 85% usage around the time of the outage ([Email 5]). However, this alert occurred after the outage had been resolved and does not appear t...
+  ANOMALIES (3):
+    - PROMPT: duplicate email header [Email 1] appears 9 times
+    - PROMPT: duplicate doc_id=escalation-resolved-028@test.example.com appears 2 times
+    - PROMPT: duplicate doc_id=server-reply2-018@test.example.com appears 2 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_lisa_01 [multi_turn]
+  A: Based on the emails provided in your archive, Lisa Wong was mentioned as part of the team working on Project Delta. She is listed as a project coordinator and has been involved in scheduling meetings ...
+  ANOMALIES (3):
+    - NO_RETRIEVAL: query was answered without email retrieval
+    - PROMPT: evidence section header present but no [Email 1] found
+    - CITATION OUT OF RANGE: [Email 1] vs 0 sources
+  SCORE: 0.50
+
+--------------------------------------------------------------------------------
+TEST: mt_lisa_02 [multi_turn]
+  A: Based on the emails provided, there were no reported issues with Lisa Wong during her onboarding process. Emails mentioning her presence in the team and seeking information indicate she was integrated...
+  No anomalies.
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: mt_lisa_03 [multi_turn]
+  A: During her first week, Lisa Wong asked for recommendations on the IDE to use for the Falcon backend project and whether she should continue using VS Code or switch to IntelliJ. She also requested inst...
+  ANOMALIES (1):
+    - PROMPT: duplicate email header [Email 1] appears 2 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_lisa_04 [multi_turn]
+  A: Lisa Wong has submitted code for PR review regarding a Falcon order validation refactor. [Email 3] contains feedback on her pull request where you approved with minor suggestions.
+  ANOMALIES (1):
+    - PROMPT: duplicate email header [Email 1] appears 3 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_lisa_05 [multi_turn]
+  A: Bob provided feedback on Lisa Wong's PR submission for the Falcon order validation refactor. He approved with minor suggestions: 1. Make validation rules configurable for product-specific rules later....
+  ANOMALIES (1):
+    - PROMPT: duplicate email header [Email 1] appears 4 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_01 [multi_turn]
+  A: Revised Falcon UI mockups incorporating your feedback are ready for sign-off according to [Email 1] from Patricia. Alice is out of the office from February 17-21 and has designated you as her point pe...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_02 [multi_turn]
+  A: The most urgent item is to review PR #847 for the fix regarding the production server issue before tonight's batch window. This was mentioned by Dave Wilson in [Email 3] and is referenced again in his...
+  ANOMALIES (5):
+    - PROMPT: duplicate email header [Email 2] appears 2 times
+    - PROMPT: duplicate email header [Email 1] appears 2 times
+    - PROMPT: duplicate email header [Email 3] appears 2 times
+    - PROMPT: duplicate email header [Email 4] appears 2 times
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_03 [multi_turn]
+  A: BigCorp ($500K ARR) reported intermittent API timeouts starting Monday, affecting ~15% of POST /api/v2/orders requests and resulting in $20K/day in failed transactions. Raj Gupta escalated this issue ...
+  ANOMALIES (4):
+    - PROMPT: duplicate email header [Email 2] appears 3 times
+    - PROMPT: duplicate email header [Email 1] appears 3 times
+    - PROMPT: duplicate email header [Email 3] appears 3 times
+    - PROMPT: duplicate email header [Email 4] appears 2 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_04 [multi_turn]
+  A: Project Falcon's launch date has been updated to March 17, 2025, with QA readiness required by March 12 and a dry run scheduled for March 14 [Email 3]. The original plan was set for March 15 [Email 4]...
+  ANOMALIES (5):
+    - PROMPT: duplicate email header [Email 2] appears 4 times
+    - PROMPT: duplicate email header [Email 1] appears 4 times
+    - PROMPT: duplicate email header [Email 3] appears 3 times
+    - PROMPT: duplicate email header [Email 4] appears 2 times
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_05 [multi_turn]
+  A: 
+  ANOMALIES (1):
+    - ANSWER TOO SHORT: 0 chars
+  SCORE: 0.33
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_06 [multi_turn]
+  A: Your performance review for FY2024 indicates that you exceeded expectations with a rating of 4/5. Your strengths include technical leadership on Project Falcon and effective incident response during t...
+  ANOMALIES (4):
+    - PROMPT: duplicate email header [Email 2] appears 5 times
+    - PROMPT: duplicate email header [Email 1] appears 5 times
+    - PROMPT: duplicate email header [Email 3] appears 4 times
+    - PROMPT: duplicate email header [Email 4] appears 3 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_07 [multi_turn]
+  A: Submit your outstanding Q4 2024 expense reports due February 21, including AWS training ($450), team dinner ($380), and JetBrains license ($249) [Email 2]. Review the attached Q1 financial report for ...
+  ANOMALIES (4):
+    - PROMPT: duplicate email header [Email 2] appears 5 times
+    - PROMPT: duplicate email header [Email 1] appears 6 times
+    - PROMPT: duplicate email header [Email 3] appears 4 times
+    - PROMPT: duplicate email header [Email 4] appears 3 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_08 [multi_turn]
+  A: You are scheduled to attend the DevOps Summit 2025 at Moscone Center SF from March 20-22. Travel has been approved with a budget of $3,800, and you need to book your flight via Concur in economy class...
+  ANOMALIES (4):
+    - PROMPT: duplicate email header [Email 2] appears 6 times
+    - PROMPT: duplicate email header [Email 1] appears 7 times
+    - PROMPT: duplicate email header [Email 3] appears 5 times
+    - PROMPT: duplicate email header [Email 4] appears 3 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_09 [multi_turn]
+  A: At the DevOps Summit 2025, you learned several key takeaways: 1. GitOps practices are accelerating, with ArgoCD and Flux becoming dominant tools. 2. OpenTelemetry is emerging as the standard for obser...
+  ANOMALIES (4):
+    - PROMPT: duplicate email header [Email 2] appears 6 times
+    - PROMPT: duplicate email header [Email 1] appears 8 times
+    - PROMPT: duplicate email header [Email 3] appears 5 times
+    - PROMPT: duplicate email header [Email 4] appears 3 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_10 [multi_turn]
+  A: Regarding security, you addressed a critical CVE-2025-1234 vulnerability in log4j by patching and deploying the fix to production at 10:45 UTC on February 11th [Email 4].  For upcoming events, Alice h...
+  ANOMALIES (5):
+    - PROMPT: duplicate email header [Email 2] appears 6 times
+    - PROMPT: duplicate email header [Email 1] appears 9 times
+    - PROMPT: duplicate email header [Email 3] appears 5 times
+    - PROMPT: duplicate email header [Email 4] appears 3 times
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_budget_01 [multi_turn]
+  A: Eve sent you a revised Q1 budget allocation for engineering on February 14, 2025. The total is $420,000 with changes in infrastructure spending and new headcount requests. You need to sign off by Febr...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_budget_02 [multi_turn]
+  A: The revised Q1 budget allocation sent on February 14, 2025, reflects increases in infrastructure spending due to cloud overruns and new headcount requests for engineering. The original financial repor...
+  ANOMALIES (1):
+    - PROMPT: duplicate email header [Email 1] appears 2 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_budget_03 [multi_turn]
+  A: The Q1 budget review meeting was rescheduled to February 24 at 2pm [Email 5].
+  ANOMALIES (2):
+    - PROMPT: duplicate email header [Email 2] appears 2 times
+    - PROMPT: duplicate email header [Email 1] appears 3 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_budget_04 [multi_turn]
+  A: Q4 2024 expense reports due February 21. Outstanding expenses include AWS training ($450) on December 12, team dinner ($380) on December 18, and JetBrains license ($249) on January 5 [Email 2].
+  ANOMALIES (2):
+    - PROMPT: duplicate email header [Email 2] appears 2 times
+    - PROMPT: duplicate email header [Email 1] appears 4 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_budget_05 [multi_turn]
+  A: The Q4 2024 expense reports due February 21 remain outstanding. No other financial deadlines were mentioned in the retrieved emails [Email 3].
+  ANOMALIES (2):
+    - PROMPT: duplicate email header [Email 2] appears 2 times
+    - PROMPT: duplicate email header [Email 1] appears 5 times
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: mt_budget_06 [multi_turn]
+  A: The total conference travel budget approved for the DevOps Summit 2025 is $3,800 [Email 1].
+  ANOMALIES (2):
+    - PROMPT: duplicate email header [Email 2] appears 2 times
+    - PROMPT: duplicate email header [Email 1] appears 6 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_security_01 [multi_turn]
+  A: [Email 3] contains a security-related alert about disk space warning on prod-db-01. The alert indicates that the /data/postgres partition is at 85% capacity and growing ~2%/day, with an estimated time...
+  No anomalies.
+  SCORE: 0.67
+
+--------------------------------------------------------------------------------
+TEST: mt_security_02 [multi_turn]
+  A: The Q1 security scan results found:  - 1 critical issue (CVE-2025-1234 in log4j) - 3 high issues (outdated TLS configuration, weak password policy, exposed debug endpoint) - 7 medium issues - 12 low i...
+  ANOMALIES (1):
+    - PROMPT: duplicate email header [Email 1] appears 3 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_security_03 [multi_turn]
+  A: There were no security scan findings listed in the provided emails. The most recent mention was about Q1 security scan results but did not include specific details of those findings. [Email 4]
+  ANOMALIES (1):
+    - PROMPT: duplicate email header [Email 1] appears 5 times
+  SCORE: 0.67
+
+--------------------------------------------------------------------------------
+TEST: mt_design_01 [multi_turn]
+  A: The Falcon UI design is ready for sign-off after incorporating all feedback. Revised mockups were sent on February 14, 2025, with updates including estimated delivery time in order tracking, CSV expor...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_design_02 [multi_turn]
+  A: You received feedback on the initial Falcon UI mockups on February 12, 2025 [Email 5].
+  ANOMALIES (1):
+    - PROMPT: duplicate email header [Email 1] appears 2 times
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: mt_design_03 [multi_turn]
+  A: The feedback was incorporated into the revised mockups sent on February 14, 2025. The changes included:  1. Added estimated delivery time in order tracking 2. Added CSV export to payment history 3. Ad...
+  ANOMALIES (1):
+    - PROMPT: duplicate email header [Email 1] appears 3 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_people_01 [multi_turn]
+  A: You've been emailing with Irene Novak (performance review), Alice Chen (out-of-office notification), Mark Johnson (new hire details), and Dave Wilson (server issue resolution). Their roles are in HR/m...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_people_02 [multi_turn]
+  A: Your recent performance review summary states that you received a rating of "Exceeds Expectations" (4/5). Your strengths include technical leadership on Falcon and incident response skills, particular...
+  ANOMALIES (1):
+    - POSSIBLE HALLUCINATED NAMES: mary
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_people_03 [multi_turn]
+  A: You have mandatory compliance training due by March 1, 2025. The training covers Data Privacy & GDPR, Information Security Awareness, Anti-Harassment Policy, and a Code of Conduct Refresher [Email 1]....
+  ANOMALIES (1):
+    - PROMPT: duplicate email header [Email 1] appears 2 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_people_04 [multi_turn]
+  A: The annual company offsite is scheduled for April 5-6 at the Lakeside Resort. You were asked to RSVP by February 25 and indicate any dietary restrictions [Email 2].
+  ANOMALIES (2):
+    - PROMPT: duplicate email header [Email 2] appears 2 times
+    - PROMPT: duplicate email header [Email 1] appears 3 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: crossref_01 [cross_reference]
+  A: Dave's team has confirmed that the payment gateway API keys for Falcon are pending approval from the vendor. Alice and Tony have emphasized the importance of receiving these keys by March 5 to meet th...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: crossref_02 [cross_reference]
+  A: The pending approval of payment gateway API keys for Falcon impacts QA testing because the team is blocked on completing two critical test cases: Payment processing and load testing. According to Tony...
+  ANOMALIES (2):
+    - PROMPT: duplicate email header [Email 2] appears 2 times
+    - PROMPT: duplicate email header [Email 1] appears 2 times
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: no_retrieval_01 [no_retrieval]
+  A: I'm just a computer program, so I don't have feelings or well-being. But thanks for asking! How can I assist you today?
+  ANOMALIES (2):
+    - NO_RETRIEVAL: query was answered without email retrieval
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: no_retrieval_02 [no_retrieval]
+  A: DKIM (DomainKeys Identified Mail) is a method for verifying a message was sent from a legitimate sender using public key cryptography. It doesn't appear in any of the provided emails, but here's how i...
+  No anomalies.
+  SCORE: 0.75
+
+--------------------------------------------------------------------------------
+TEST: no_retrieval_03 [no_retrieval]
+  A: Today is Wednesday, February 21, 2026.
+  ANOMALIES (2):
+    - NO_RETRIEVAL: query was answered without email retrieval
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: no_retrieval_04 [no_retrieval]
+  A: IMAP (Internet Message Access Protocol) and POP3 (Post Office Protocol version 3) are two different methods for retrieving emails from a mail server to your local email client.  **IMAP:** - Keeps your...
+  ANOMALIES (2):
+    - NO_RETRIEVAL: query was answered without email retrieval
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+================================================================================
+SUMMARY
+================================================================================
+Anomalies: 127
+  [factual_03] NO_RETRIEVAL: query was answered without email retrieval
+  [factual_03] PROMPT: evidence section header present but no [Email 1] found
+  [factual_03] CITATION OUT OF RANGE: [Email 4] vs 0 sources
+  [factual_03] POSSIBLE HALLUCINATED NAMES: tom
+  [factual_04] NO_RETRIEVAL: query was answered without email retrieval
+  [factual_04] PROMPT: evidence section header present but no [Email 1] found
+  [factual_05] NO_RETRIEVAL: query was answered without email retrieval
+  [factual_05] PROMPT: evidence section header present but no [Email 1] found
+  [thread_incident_01] NO_RETRIEVAL: query was answered without email retrieval
+  [thread_incident_01] PROMPT: evidence section header present but no [Email 1] found
+  [thread_incident_01] CITATION OUT OF RANGE: [Email 2] vs 0 sources
+  [thread_incident_03] PROMPT: duplicate email header [Email 1] appears 2 times
+  [thread_vendor_01] POSSIBLE HALLUCINATED NAMES: tom
+  [thread_vendor_02] PROMPT: duplicate email header [Email 2] appears 2 times
+  [thread_vendor_02] PROMPT: duplicate email header [Email 1] appears 2 times
+  [thread_vendor_02] PROMPT: duplicate email header [Email 3] appears 2 times
+  [thread_vendor_02] POSSIBLE HALLUCINATED NAMES: mary
+  [thread_vendor_03] PROMPT: duplicate email header [Email 2] appears 2 times
+  [thread_vendor_03] PROMPT: duplicate email header [Email 1] appears 3 times
+  [thread_vendor_03] PROMPT: duplicate email header [Email 3] appears 2 times
+  [broad_mark_02] PROMPT: duplicate email header [Email 1] appears 2 times
+  [negative_02] NO_RETRIEVAL: query was answered without email retrieval
+  [negative_02] PROMPT: evidence section header present but no [Email 1] found
+  [mt_falcon_02] PROMPT: duplicate email header [Email 2] appears 2 times
+  [mt_falcon_02] PROMPT: duplicate email header [Email 1] appears 2 times
+  [mt_falcon_02] PROMPT: duplicate email header [Email 3] appears 2 times
+  [mt_falcon_02] PROMPT: duplicate email header [Email 4] appears 2 times
+  [mt_falcon_03] PROMPT: duplicate email header [Email 2] appears 2 times
+  [mt_falcon_03] PROMPT: duplicate email header [Email 1] appears 3 times
+  [mt_falcon_03] PROMPT: duplicate email header [Email 3] appears 2 times
+  [mt_falcon_03] PROMPT: duplicate email header [Email 4] appears 2 times
+  [mt_falcon_04] PROMPT: duplicate email header [Email 2] appears 2 times
+  [mt_falcon_04] PROMPT: duplicate email header [Email 1] appears 4 times
+  [mt_falcon_04] PROMPT: duplicate email header [Email 3] appears 2 times
+  [mt_falcon_04] PROMPT: duplicate email header [Email 4] appears 2 times
+  [mt_falcon_05] ANSWER TOO SHORT: 0 chars
+  [mt_falcon_06] PROMPT: duplicate email header [Email 2] appears 3 times
+  [mt_falcon_06] PROMPT: duplicate email header [Email 1] appears 5 times
+  [mt_falcon_06] PROMPT: duplicate email header [Email 3] appears 3 times
+  [mt_falcon_06] PROMPT: duplicate email header [Email 4] appears 2 times
+  [mt_falcon_06] POSSIBLE HALLUCINATED NAMES: tom
+  [mt_falcon_07] PROMPT: duplicate email header [Email 2] appears 3 times
+  [mt_falcon_07] PROMPT: duplicate email header [Email 1] appears 6 times
+  [mt_falcon_07] PROMPT: duplicate email header [Email 3] appears 3 times
+  [mt_falcon_07] PROMPT: duplicate email header [Email 4] appears 2 times
+  [mt_falcon_08] PROMPT: duplicate email header [Email 2] appears 3 times
+  [mt_falcon_08] PROMPT: duplicate email header [Email 1] appears 7 times
+  [mt_falcon_08] PROMPT: duplicate email header [Email 3] appears 3 times
+  [mt_falcon_08] PROMPT: duplicate email header [Email 4] appears 2 times
+  [mt_incident_01] POSSIBLE HALLUCINATED NAMES: tom
+  [mt_incident_02] PROMPT: duplicate email header [Email 1] appears 2 times
+  [mt_incident_03] PROMPT: duplicate email header [Email 1] appears 3 times
+  [mt_incident_04] PROMPT: duplicate email header [Email 1] appears 4 times
+  [mt_incident_05] PROMPT: duplicate email header [Email 1] appears 5 times
+  [mt_incident_06] PROMPT: duplicate email header [Email 1] appears 7 times
+  [mt_incident_06] PROMPT: duplicate doc_id=server-reply2-018@test.example.com appears 2 times
+  [mt_incident_06] POSSIBLE HALLUCINATED NAMES: tom
+  [mt_incident_07] PROMPT: duplicate email header [Email 1] appears 9 times
+  [mt_incident_07] PROMPT: duplicate doc_id=escalation-resolved-028@test.example.com appears 2 times
+  [mt_incident_07] PROMPT: duplicate doc_id=server-reply2-018@test.example.com appears 2 times
+  [mt_lisa_01] NO_RETRIEVAL: query was answered without email retrieval
+  [mt_lisa_01] PROMPT: evidence section header present but no [Email 1] found
+  [mt_lisa_01] CITATION OUT OF RANGE: [Email 1] vs 0 sources
+  [mt_lisa_03] PROMPT: duplicate email header [Email 1] appears 2 times
+  [mt_lisa_04] PROMPT: duplicate email header [Email 1] appears 3 times
+  [mt_lisa_05] PROMPT: duplicate email header [Email 1] appears 4 times
+  [mt_mixed_02] PROMPT: duplicate email header [Email 2] appears 2 times
+  [mt_mixed_02] PROMPT: duplicate email header [Email 1] appears 2 times
+  [mt_mixed_02] PROMPT: duplicate email header [Email 3] appears 2 times
+  [mt_mixed_02] PROMPT: duplicate email header [Email 4] appears 2 times
+  [mt_mixed_02] POSSIBLE HALLUCINATED NAMES: tom
+  [mt_mixed_03] PROMPT: duplicate email header [Email 2] appears 3 times
+  [mt_mixed_03] PROMPT: duplicate email header [Email 1] appears 3 times
+  [mt_mixed_03] PROMPT: duplicate email header [Email 3] appears 3 times
+  [mt_mixed_03] PROMPT: duplicate email header [Email 4] appears 2 times
+  [mt_mixed_04] PROMPT: duplicate email header [Email 2] appears 4 times
+  [mt_mixed_04] PROMPT: duplicate email header [Email 1] appears 4 times
+  [mt_mixed_04] PROMPT: duplicate email header [Email 3] appears 3 times
+  [mt_mixed_04] PROMPT: duplicate email header [Email 4] appears 2 times
+  [mt_mixed_04] POSSIBLE HALLUCINATED NAMES: tom
+  [mt_mixed_05] ANSWER TOO SHORT: 0 chars
+  [mt_mixed_06] PROMPT: duplicate email header [Email 2] appears 5 times
+  [mt_mixed_06] PROMPT: duplicate email header [Email 1] appears 5 times
+  [mt_mixed_06] PROMPT: duplicate email header [Email 3] appears 4 times
+  [mt_mixed_06] PROMPT: duplicate email header [Email 4] appears 3 times
+  [mt_mixed_07] PROMPT: duplicate email header [Email 2] appears 5 times
+  [mt_mixed_07] PROMPT: duplicate email header [Email 1] appears 6 times
+  [mt_mixed_07] PROMPT: duplicate email header [Email 3] appears 4 times
+  [mt_mixed_07] PROMPT: duplicate email header [Email 4] appears 3 times
+  [mt_mixed_08] PROMPT: duplicate email header [Email 2] appears 6 times
+  [mt_mixed_08] PROMPT: duplicate email header [Email 1] appears 7 times
+  [mt_mixed_08] PROMPT: duplicate email header [Email 3] appears 5 times
+  [mt_mixed_08] PROMPT: duplicate email header [Email 4] appears 3 times
+  [mt_mixed_09] PROMPT: duplicate email header [Email 2] appears 6 times
+  [mt_mixed_09] PROMPT: duplicate email header [Email 1] appears 8 times
+  [mt_mixed_09] PROMPT: duplicate email header [Email 3] appears 5 times
+  [mt_mixed_09] PROMPT: duplicate email header [Email 4] appears 3 times
+  [mt_mixed_10] PROMPT: duplicate email header [Email 2] appears 6 times
+  [mt_mixed_10] PROMPT: duplicate email header [Email 1] appears 9 times
+  [mt_mixed_10] PROMPT: duplicate email header [Email 3] appears 5 times
+  [mt_mixed_10] PROMPT: duplicate email header [Email 4] appears 3 times
+  [mt_mixed_10] POSSIBLE HALLUCINATED NAMES: tom
+  [mt_budget_02] PROMPT: duplicate email header [Email 1] appears 2 times
+  [mt_budget_03] PROMPT: duplicate email header [Email 2] appears 2 times
+  [mt_budget_03] PROMPT: duplicate email header [Email 1] appears 3 times
+  [mt_budget_04] PROMPT: duplicate email header [Email 2] appears 2 times
+  [mt_budget_04] PROMPT: duplicate email header [Email 1] appears 4 times
+  [mt_budget_05] PROMPT: duplicate email header [Email 2] appears 2 times
+  [mt_budget_05] PROMPT: duplicate email header [Email 1] appears 5 times
+  [mt_budget_06] PROMPT: duplicate email header [Email 2] appears 2 times
+  [mt_budget_06] PROMPT: duplicate email header [Email 1] appears 6 times
+  [mt_security_02] PROMPT: duplicate email header [Email 1] appears 3 times
+  [mt_security_03] PROMPT: duplicate email header [Email 1] appears 5 times
+  [mt_design_02] PROMPT: duplicate email header [Email 1] appears 2 times
+  [mt_design_03] PROMPT: duplicate email header [Email 1] appears 3 times
+  [mt_people_02] POSSIBLE HALLUCINATED NAMES: mary
+  [mt_people_03] PROMPT: duplicate email header [Email 1] appears 2 times
+  [mt_people_04] PROMPT: duplicate email header [Email 2] appears 2 times
+  [mt_people_04] PROMPT: duplicate email header [Email 1] appears 3 times
+  [crossref_02] PROMPT: duplicate email header [Email 2] appears 2 times
+  [crossref_02] PROMPT: duplicate email header [Email 1] appears 2 times
+  [no_retrieval_01] NO_RETRIEVAL: query was answered without email retrieval
+  [no_retrieval_01] PROMPT: evidence section header present but no [Email 1] found
+  [no_retrieval_03] NO_RETRIEVAL: query was answered without email retrieval
+  [no_retrieval_03] PROMPT: evidence section header present but no [Email 1] found
+  [no_retrieval_04] NO_RETRIEVAL: query was answered without email retrieval
+  [no_retrieval_04] PROMPT: evidence section header present but no [Email 1] found
+Mean score: 0.90
+
+Per-case:
+  factual_01 [factual]: 1.00
+  factual_02 [factual]: 1.00
+  factual_03 [factual]: 0.67 *** LOW ***
+  factual_04 [factual]: 0.33 *** LOW ***
+  factual_05 [factual]: 0.33 *** LOW ***
+  triage_01 [triage]: 0.83
+  triage_02 [triage]: 1.00
+  thread_incident_01 [thread]: 0.50 *** LOW ***
+  thread_incident_02 [thread]: 1.00
+  thread_incident_03 [thread]: 1.00
+  thread_vendor_01 [thread]: 1.00
+  thread_vendor_02 [thread]: 1.00
+  thread_vendor_03 [thread]: 0.83
+  broad_mark_01 [broad]: 1.00
+  broad_mark_02 [broad]: 1.00
+  temporal_01 [temporal]: 1.00
+  temporal_02 [temporal]: 0.67 *** LOW ***
+  attachment_01 [attachment]: 0.50 *** LOW ***
+  attachment_02 [attachment]: 1.00
+  negative_01 [negative]: 1.00
+  negative_02 [negative]: 1.00
+  mt_falcon_01 [multi_turn]: 1.00
+  mt_falcon_02 [multi_turn]: 1.00
+  mt_falcon_03 [multi_turn]: 1.00
+  mt_falcon_04 [multi_turn]: 1.00
+  mt_falcon_05 [multi_turn]: 0.33 *** LOW ***
+  mt_falcon_06 [multi_turn]: 1.00
+  mt_falcon_07 [multi_turn]: 0.67 *** LOW ***
+  mt_falcon_08 [multi_turn]: 1.00
+  mt_incident_01 [multi_turn]: 1.00
+  mt_incident_02 [multi_turn]: 1.00
+  mt_incident_03 [multi_turn]: 1.00
+  mt_incident_04 [multi_turn]: 1.00
+  mt_incident_05 [multi_turn]: 0.83
+  mt_incident_06 [multi_turn]: 1.00
+  mt_incident_07 [multi_turn]: 1.00
+  mt_lisa_01 [multi_turn]: 0.50 *** LOW ***
+  mt_lisa_02 [multi_turn]: 0.83
+  mt_lisa_03 [multi_turn]: 1.00
+  mt_lisa_04 [multi_turn]: 1.00
+  mt_lisa_05 [multi_turn]: 1.00
+  mt_mixed_01 [multi_turn]: 1.00
+  mt_mixed_02 [multi_turn]: 0.83
+  mt_mixed_03 [multi_turn]: 1.00
+  mt_mixed_04 [multi_turn]: 1.00
+  mt_mixed_05 [multi_turn]: 0.33 *** LOW ***
+  mt_mixed_06 [multi_turn]: 1.00
+  mt_mixed_07 [multi_turn]: 1.00
+  mt_mixed_08 [multi_turn]: 1.00
+  mt_mixed_09 [multi_turn]: 1.00
+  mt_mixed_10 [multi_turn]: 1.00
+  mt_budget_01 [multi_turn]: 1.00
+  mt_budget_02 [multi_turn]: 1.00
+  mt_budget_03 [multi_turn]: 1.00
+  mt_budget_04 [multi_turn]: 1.00
+  mt_budget_05 [multi_turn]: 0.83
+  mt_budget_06 [multi_turn]: 1.00
+  mt_security_01 [multi_turn]: 0.67 *** LOW ***
+  mt_security_02 [multi_turn]: 1.00
+  mt_security_03 [multi_turn]: 0.67 *** LOW ***
+  mt_design_01 [multi_turn]: 1.00
+  mt_design_02 [multi_turn]: 0.83
+  mt_design_03 [multi_turn]: 1.00
+  mt_people_01 [multi_turn]: 1.00
+  mt_people_02 [multi_turn]: 1.00
+  mt_people_03 [multi_turn]: 1.00
+  mt_people_04 [multi_turn]: 1.00
+  crossref_01 [cross_reference]: 1.00
+  crossref_02 [cross_reference]: 1.00
+  no_retrieval_01 [no_retrieval]: 1.00
+  no_retrieval_02 [no_retrieval]: 0.75
+  no_retrieval_03 [no_retrieval]: 1.00
+  no_retrieval_04 [no_retrieval]: 1.00
+================================================================================

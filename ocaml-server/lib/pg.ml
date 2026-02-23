@@ -70,8 +70,9 @@ let use_ret (f : connection -> ('a, Caqti_error.t) result)
 let schema_statements () =
   [ {|CREATE TABLE IF NOT EXISTS emails (
        doc_id        TEXT PRIMARY KEY,
-       embed_model   TEXT NOT NULL DEFAULT '',
-       triage_model  TEXT NOT NULL DEFAULT '',
+       embed_model      TEXT NOT NULL DEFAULT '',
+       triage_model     TEXT NOT NULL DEFAULT '',
+       summarize_model  TEXT NOT NULL DEFAULT '',
        sender        TEXT NOT NULL DEFAULT '',
        recipient     TEXT NOT NULL DEFAULT '',
        cc            TEXT NOT NULL DEFAULT '',
@@ -97,6 +98,7 @@ let schema_statements () =
   ; {|CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON email_chunks(doc_id)|}
   (* Migration: drop redundant message_id column (identical to doc_id) *)
   ; {|ALTER TABLE emails DROP COLUMN IF EXISTS message_id|}
+  ; {|ALTER TABLE emails ADD COLUMN IF NOT EXISTS summarize_model TEXT NOT NULL DEFAULT ''|}
   ]
 
 let init_schema_with (module C : Caqti_eio.CONNECTION) =
@@ -128,6 +130,7 @@ let init ~(sw : Eio.Switch.t) ~(stdenv : Caqti_eio.stdenv) : (unit, string) resu
 
 let upsert_email
     ~(doc_id : string) ~(embed_model : string) ~(triage_model : string)
+    ~(summarize_model : string)
     ~(sender : string) ~(recipient : string) ~(cc : string) ~(bcc : string)
     ~(subject : string) ~(email_date : string)
     ~(attachments_json : string)
@@ -139,13 +142,14 @@ let upsert_email
   let doc_id = normalize_doc_id doc_id in
   let sql = {|
     INSERT INTO emails
-      (doc_id, embed_model, triage_model, sender, recipient, cc, bcc,
+      (doc_id, embed_model, triage_model, summarize_model, sender, recipient, cc, bcc,
        subject, email_date, attachments, action_score, importance_score,
        reply_by, processed, ingested_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')::timestamptz,$10::text[],$11,$12,NULLIF($13,'')::timestamptz,FALSE,NULLIF($14,'')::timestamptz)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,'')::timestamptz,$11::text[],$12,$13,NULLIF($14,'')::timestamptz,FALSE,NULLIF($15,'')::timestamptz)
     ON CONFLICT (doc_id) DO UPDATE SET
       embed_model = EXCLUDED.embed_model,
       triage_model = EXCLUDED.triage_model,
+      summarize_model = EXCLUDED.summarize_model,
       sender = EXCLUDED.sender,
       recipient = EXCLUDED.recipient,
       cc = EXCLUDED.cc,
@@ -159,22 +163,22 @@ let upsert_email
       ingested_at = EXCLUDED.ingested_at
   |} in
   let open Caqti_type in
+  (* Parameter order must match SQL: $1-$8 strings, $9 subject, $10 email_date,
+     $11 attachments, $12 action_score, $13 importance_score, $14 reply_by, $15 ingested_at *)
   let pt = t2
-    (t4 string string string string)
+    (t2 (t4 string string string string) (t4 string string string string))
     (t2
-      (t4 string string string string)
-      (t2
-        (t2 string string)
-        (t4 (option int) (option int) string string)))
+      (t2 string string)
+      (t2 (t2 string (option int)) (t3 (option int) string string)))
   in
   let req = Caqti_request.Infix.(pt ->. unit) ~oneshot:true sql in
   let result =
     use (fun (module C : Caqti_eio.CONNECTION) ->
       C.exec req
-        ((doc_id, embed_model, triage_model, sender),
-         ((recipient, cc, bcc, subject),
-          ((email_date, attachments_json),
-           (action_score, importance_score, reply_by, ingested_at)))))
+        (((doc_id, embed_model, triage_model, summarize_model),
+          (sender, recipient, cc, bcc)),
+         ((subject, email_date),
+          ((attachments_json, action_score), (importance_score, reply_by, ingested_at)))))
   in
   let dt = Unix.gettimeofday () -. t0 in
   Printf.eprintf "[timer] pg.upsert_email: %.3fs\n%!" dt;
@@ -230,21 +234,34 @@ let reset_all () : (unit, string) result =
 (* ---------- status queries ---------- *)
 
 let batch_ingested_status (ids : string list)
-    : ((string list * string list), string) result =
-  if ids = [] then Ok ([], [])
+    : ((string list * string list * (string * string) list), string) result =
+  if ids = [] then Ok ([], [], [])
   else
     let normed = List.map normalize_doc_id ids in
     let arr = pg_text_array normed in
-    let sql = "SELECT doc_id, processed FROM emails WHERE doc_id = ANY($1::text[])" in
+    let sql = "SELECT doc_id, processed, COALESCE(TO_CHAR(reply_by, 'YYYY-MM-DD'), '') FROM emails WHERE doc_id = ANY($1::text[])" in
     let open Caqti_type in
-    let req = Caqti_request.Infix.(string ->* t2 string bool) ~oneshot:true sql in
+    let req = Caqti_request.Infix.(string ->* t3 string bool string) ~oneshot:true sql in
     use_ret (fun (module C : Caqti_eio.CONNECTION) ->
       match C.collect_list req arr with
       | Error _ as e -> e
       | Ok rows ->
-          let ingested = List.map fst rows in
-          let processed = rows |> List.filter_map (fun (id, p) -> if p then Some id else None) in
-          Ok (ingested, processed))
+          let ingested = List.map (fun (id, _, _) -> id) rows in
+          let processed = rows |> List.filter_map (fun (id, p, _) -> if p then Some id else None) in
+          let reply_by = rows |> List.filter_map (fun (id, _, rb) ->
+            if String.trim rb <> "" then Some (id, rb) else None) in
+          Ok (ingested, processed, reply_by))
+
+let ingested_models (doc_id : string) : ((string * string * string) option, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  let sql = "SELECT embed_model, triage_model, summarize_model FROM emails WHERE doc_id = $1 LIMIT 1" in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(string ->? t3 string string string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.find_opt req doc_id with
+    | Ok (Some (em, tm, sm)) -> Ok (Some (em, tm, sm))
+    | Ok None -> Ok None
+    | Error _ as e -> e)
 
 let is_ingested (doc_id : string) : (bool, string) result =
   let doc_id = normalize_doc_id doc_id in
@@ -259,7 +276,7 @@ let is_ingested (doc_id : string) : (bool, string) result =
 let get_email_detail (doc_id : string) : (Yojson.Safe.t option, string) result =
   let doc_id = normalize_doc_id doc_id in
   let sql = {|
-    SELECT doc_id, embed_model, triage_model, sender, recipient, cc, bcc,
+    SELECT doc_id, embed_model, triage_model, summarize_model, sender, recipient, cc, bcc,
            subject,
            COALESCE(email_date::text, ''),
            COALESCE(array_to_json(attachments)::text, '[]'),
@@ -272,7 +289,7 @@ let get_email_detail (doc_id : string) : (Yojson.Safe.t option, string) result =
   |} in
   let open Caqti_type in
   let rt = t2
-    (t4 string string string string)
+    (t2 (t4 string string string string) string)
     (t2
       (t4 string string string string)
       (t2
@@ -286,7 +303,7 @@ let get_email_detail (doc_id : string) : (Yojson.Safe.t option, string) result =
     match C.find_opt req doc_id with
     | Error _ as e -> e
     | Ok None -> Ok None
-    | Ok (Some ((doc_id, embed_model, triage_model, sender),
+    | Ok (Some (((doc_id, embed_model, triage_model, summarize_model), sender),
                 ((recipient, cc, bcc, subject),
                  ((email_date, att_text),
                   ((action_score, importance_score, reply_by, processed),
@@ -313,6 +330,7 @@ let get_email_detail (doc_id : string) : (Yojson.Safe.t option, string) result =
           [ ("doc_id", `String doc_id)
           ; ("embed_model", `String embed_model)
           ; ("triage_model", `String triage_model)
+          ; ("summarize_model", `String summarize_model)
           ; ("metadata", metadata)
           ])))
 
@@ -322,21 +340,25 @@ let set_processed (doc_id : string) (value : bool) : (bool, string) result =
     let sql = {|
       UPDATE emails SET processed = TRUE, processed_at = $2::timestamptz
       WHERE doc_id = $1
+      RETURNING doc_id
     |} in
-    let req = Caqti_request.Infix.(Caqti_type.(t2 string string) ->. Caqti_type.unit) ~oneshot:true sql in
+    let req = Caqti_request.Infix.(Caqti_type.(t2 string string) ->? Caqti_type.string) ~oneshot:true sql in
     use_ret (fun (module C : Caqti_eio.CONNECTION) ->
-      match C.exec req (doc_id, now_utc_iso8601 ()) with
-      | Ok () -> Ok true
+      match C.find_opt req (doc_id, now_utc_iso8601 ()) with
+      | Ok (Some _) -> Ok true
+      | Ok None -> Ok false
       | Error _ as e -> e)
   else
     let sql = {|
       UPDATE emails SET processed = FALSE, processed_at = NULL
       WHERE doc_id = $1
+      RETURNING doc_id
     |} in
-    let req = Caqti_request.Infix.(Caqti_type.string ->. Caqti_type.unit) ~oneshot:true sql in
+    let req = Caqti_request.Infix.(Caqti_type.string ->? Caqti_type.string) ~oneshot:true sql in
     use_ret (fun (module C : Caqti_eio.CONNECTION) ->
-      match C.exec req doc_id with
-      | Ok () -> Ok true
+      match C.find_opt req doc_id with
+      | Ok (Some _) -> Ok true
+      | Ok None -> Ok false
       | Error _ as e -> e)
 
 (* ---------- kNN retrieval ---------- *)

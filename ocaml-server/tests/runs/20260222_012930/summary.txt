@@ -1,0 +1,125 @@
+================================================================================
+ThunderRAG Quality Test Report
+Run: 20260222_012930  Duration: 160.7s  Cases: 12
+================================================================================
+
+--------------------------------------------------------------------------------
+TEST: filter_sender_01 [filter]
+  A: You have two emails from Alice Chen: [Email 1] doc_id=one-on-one-046@test.example.com date=2025-02-13 08:00:00+00 subject=1:1 agenda - Feb 14 [Email 2] doc_id=alice-ooo-052@test.example.com date=2025-...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: filter_sender_02 [filter]
+  A: Dave Wilson sent you two emails:  1. Subject: Re: URGENT: Production server down - immediate action needed ([Email 3]) 2. Subject: Lunch today? ([Email 5])
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.86
+
+--------------------------------------------------------------------------------
+TEST: filter_sender_dept [filter]
+  A: [Email 2] doc_id=benefits-055@test.example.com date=Mon, 17 Feb 2025 08:00:00 +0000 from=HR Department <hr@acme.com> to=Bob Martinez <bob@acme.com> subject=Open enrollment deadline - Feb 28  [Email 1]...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: filter_date_01 [filter]
+  A: [Email 1] is the only email received after February 13, 2025. It was sent on Monday, February 17, 2025, reminding you about expense reports due by February 21.
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.86
+
+--------------------------------------------------------------------------------
+TEST: filter_date_02 [filter]
+  A: You received one email during the first week of February 2025 (Feb 1-7): - A password reset completion notification on February 3rd from IT Support [Email 1].  The other emails listed are not within t...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.71
+
+--------------------------------------------------------------------------------
+TEST: filter_subject_01 [filter]
+  A: [Email 1] doc_id=design-revised-032@test.example.com date=Fri, 14 Feb 2025 14:00:00 +0000 from=Patricia Owens <patricia@acme.com> to=Bob Martinez <bob@acme.com> cc=Alice Chen <alice@acme.com> subject=...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.86
+
+--------------------------------------------------------------------------------
+TEST: filter_processed_01 [filter]
+  A: Processed emails: [Email 1] date=Fri, 14 Feb 2025 10:00:00 +0000 from=Tony Russo <tony@acme.com> to=Alice Chen <alice@acme.com>, Bob Martinez <bob@acme.com> subject=Falcon QA status report - Week of F...
+  ANOMALIES (2):
+    - NO_RETRIEVAL: query was answered without email retrieval
+    - CITATION OUT OF RANGE: [Email 5] vs 0 sources
+  SCORE: 0.43
+
+--------------------------------------------------------------------------------
+TEST: filter_cc_01 [filter]
+  A: You were CC'd on [Email 5] and [Email 3].  [Email 5]: Bob Martinez <bob@acme.com> cc=Alice Chen <alice@acme.com> [Email 3]: Dave Wilson <dave@acme.com> cc=Ops Team <ops@acme.com>
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.71
+
+--------------------------------------------------------------------------------
+TEST: filter_external_01 [filter]
+  A: There are no emails from external domains (outside of acme.com) listed as possibly relevant to your query.
+  ANOMALIES (1):
+    - NO_RETRIEVAL: query was answered without email retrieval
+  SCORE: 0.29
+
+--------------------------------------------------------------------------------
+TEST: filter_combo_01 [filter]
+  A: [Email 2] and [Email 4] were sent after February 10. Here they are in order of recency:  - [Email 2]: Alice's out-of-office notification for February 17-21. - [Email 4]: Updated Falcon timeline with a...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.93
+
+--------------------------------------------------------------------------------
+TEST: filter_combo_02 [filter]
+  A: [Email 3], [Email 1] have URGENT or CRITICAL in their subjects.  - **[Email 3]** - Subject: "CRITICAL: CVE-2025-1234 in log4j - patch within 48h" (Tue, 11 Feb 2025 at 11:00:00 UTC) - **[Email 1]** - S...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.86
+
+--------------------------------------------------------------------------------
+TEST: filter_automated_01 [filter]
+  A: Automated notifications from CI and monitoring systems:  - [Email 2]: Failed CI build notification for falcon-backend #1847 - main branch (Thu, 13 Feb 2025) - [Email 5]: Disk space warning alert on pr...
+  ANOMALIES (2):
+    - PROMPT: evidence section header present but no [Email 1] found
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 0.86
+
+================================================================================
+SUMMARY
+================================================================================
+Anomalies: 14
+  [filter_sender_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_sender_02] PROMPT: evidence section header present but no [Email 1] found
+  [filter_sender_dept] PROMPT: evidence section header present but no [Email 1] found
+  [filter_date_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_date_02] PROMPT: evidence section header present but no [Email 1] found
+  [filter_subject_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_processed_01] NO_RETRIEVAL: query was answered without email retrieval
+  [filter_processed_01] CITATION OUT OF RANGE: [Email 5] vs 0 sources
+  [filter_cc_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_external_01] NO_RETRIEVAL: query was answered without email retrieval
+  [filter_combo_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_combo_02] PROMPT: evidence section header present but no [Email 1] found
+  [filter_automated_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_automated_01] POSSIBLE HALLUCINATED NAMES: tom
+Mean score: 0.78
+
+Per-case:
+  filter_sender_01 [filter]: 1.00
+  filter_sender_02 [filter]: 0.86
+  filter_sender_dept [filter]: 1.00
+  filter_date_01 [filter]: 0.86
+  filter_date_02 [filter]: 0.71
+  filter_subject_01 [filter]: 0.86
+  filter_processed_01 [filter]: 0.43 *** LOW ***
+  filter_cc_01 [filter]: 0.71
+  filter_external_01 [filter]: 0.29 *** LOW ***
+  filter_combo_01 [filter]: 0.93
+  filter_combo_02 [filter]: 0.86
+  filter_automated_01 [filter]: 0.86
+================================================================================

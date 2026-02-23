@@ -1,0 +1,137 @@
+=== SYSTEM ===
+You are a helpful email assistant in an ongoing multi-turn chat. The user is: Bob Martinez <bob@acme.com>. Current date/time: 2026-02-21 23:06:15 (local); 2026-02-22T07:06:15Z (UTC).
+The conversation below includes previous user/assistant turns as context.
+The final user message is the question you must answer.
+Immediately before it, you may see a message containing emails retrieved from the user's archive under the heading EMAILS THAT MAY BE RELEVANT. Use these emails as evidence to answer the question.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+Do not invent email facts that are not in the provided emails.
+Do not greet, do not restate the question, and do not narrate your process.
+
+Each email's body may contain labelled sections:
+- NEW CONTENT: the message the sender actually wrote
+- QUOTED CONTEXT: previous thread history (older messages being replied to)
+- QUOTED CONTEXT (older, summarized): summarized older thread history
+- ATTACHMENTS (summaries): summaries of attached files
+Not all sections will be present in every email.
+
+Each email header may include triage metadata:
+- action=N/100: how much the email requires action or a response from the user (0 = purely informational, 100 = urgent action required)
+- importance=N/100: overall importance of the email to the user
+- reply_by=<date>: estimated deadline for a response, if any
+- processed=true: the user has already dealt with this email; no further action is needed regardless of the action score
+
+=== USER ===
+What do you know about Lisa Wong?
+
+=== ASSISTANT ===
+Based on the emails provided in your archive, Lisa Wong was mentioned as part of the team working on Project Delta. She is listed as a project coordinator and has been involved in scheduling meetings and coordinating logistics for the project. No further details or personal information about her are included in the relevant emails. [Email 1] mentions her role specifically.
+
+=== USER ===
+Did she have any onboarding issues?
+
+=== ASSISTANT ===
+Based on the emails provided, there were no reported issues with Lisa Wong during her onboarding process. Emails mentioning her presence in the team and seeking information indicate she was integrated smoothly. Her questions and requests for guidance during her first week suggest normal engagement rather than any difficulties. [Email 1] is an example of a typical request from new hires for resources and clarification.
+
+EMAILS REFERENCED ABOVE:
+[Email 1] date=Tue, 11 Feb 2025 09:00:00 +0000 from=Lisa Wong <lisa@acme.com> to=Bob Martinez <bob@acme.com> subject=First week questions
+
+=== USER ===
+What questions did she ask in her first week?
+
+=== ASSISTANT ===
+During her first week, Lisa Wong asked for recommendations on the IDE to use for the Falcon backend project and whether she should continue using VS Code or switch to IntelliJ. She also requested instructions on how to get access to the staging database, which requires a specific VPN configuration. Additionally, she inquired about the design document for the Falcon payment processing flow and who handles the on-call rotation schedule. [Email 1] contains her questions.
+
+EMAILS REFERENCED ABOVE:
+[Email 1] date=Tue, 11 Feb 2025 09:00:00 +0000 from=Lisa Wong <lisa@acme.com> to=Bob Martinez <bob@acme.com> subject=First week questions
+
+=== USER ===
+Has she submitted any code yet?
+
+=== ASSISTANT ===
+Lisa Wong has submitted code for PR review regarding a Falcon order validation refactor. [Email 1] contains feedback on her pull request where you approved with minor suggestions.
+
+EMAILS REFERENCED ABOVE:
+[Email 1] date=Thu, 13 Feb 2025 17:30:00 +0000 from=Bob Martinez <bob@acme.com> to=Lisa Wong <lisa@acme.com> subject=Re: PR review request: Falcon order validation refactor
+
+=== USER ===
+EMAILS THAT MAY BE RELEVANT:
+
+[Email 1] doc_id=design-revised-032@test.example.com date=Fri, 14 Feb 2025 14:00:00 +0000 from=Patricia Owens <patricia@acme.com> to=Bob Martinez <bob@acme.com> cc=Alice Chen <alice@acme.com> subject=Re: Falcon UI mockups - Revised
+NEW CONTENT:
+Bob,
+
+Revised mockups attached:
+1. Added estimated delivery time
+2. Added CSV export to payment history
+3. Chart colors meet WCAG AA
+4. Confirmation dialog for key regeneration
+
+All feedback incorporated. Ready for sign-off.
+
+Patricia
+
+[Email 2] doc_id=design-mockups-030@test.example.com date=Mon, 10 Feb 2025 09:00:00 +0000 from=Patricia Owens <patricia@acme.com> to=Bob Martinez <bob@acme.com> cc=Alice Chen <alice@acme.com> subject=Falcon UI mockups for review
+NEW CONTENT:
+Hi Bob,
+
+Attached are the Falcon customer dashboard mockups:
+1. Order tracking (real-time status)
+2. Payment history
+3. Analytics dashboard (order volume, revenue)
+4. Settings (API key mgmt, webhooks)
+
+Please review and send feedback by Wednesday.
+
+Patricia
+
+[Email 3] doc_id=pr-review-038@test.example.com date=Thu, 13 Feb 2025 14:00:00 +0000 from=Lisa Wong <lisa@acme.com> to=Bob Martinez <bob@acme.com> subject=PR review request: Falcon order validation refactor
+NEW CONTENT:
+Hi Bob,
+
+Submitted PR #852 for the order validation refactor:
+- Extracted validation into OrderValidator class
+- Added unit tests (empty orders, negative quantities, currency mismatches)
+- Fixed bug: 0-quantity items were silently accepted
+
+First PR here — let me know if I'm missing conventions.
+https://github.acme.com/falcon/backend/pull/852
+
+Thanks,
+Lisa
+
+[Email 4] doc_id=pr-feedback-039@test.example.com date=Thu, 13 Feb 2025 17:30:00 +0000 from=Bob Martinez <bob@acme.com> to=Lisa Wong <lisa@acme.com> subject=Re: PR review request: Falcon order validation refactor
+NEW CONTENT:
+Lisa,
+
+Nice work! Comments:
+1. Make validation rules configurable for product-specific rules later
+2. Add test for quantities > 10,000 (business rule cap)
+3. Use snake_case for methods, not camelCase — see wiki.acme.com/code-style
+
+Minor changes only — LGTM. Approved with suggestions.
+
+Bob
+
+[Email 5] doc_id=design-feedback-031@test.example.com date=Wed, 12 Feb 2025 16:00:00 +0000 from=Bob Martinez <bob@acme.com> to=Patricia Owens <patricia@acme.com> cc=Alice Chen <alice@acme.com> subject=Re: Falcon UI mockups for review
+NEW CONTENT:
+Patricia,
+
+Great work. Feedback:
+1. Order tracking: Add estimated delivery time
+2. Payment history: Need CSV export
+3. Analytics: Chart colors need better contrast (WCAG AA)
+4. Settings: Add regenerate-key confirmation dialog
+
+Overall direction is solid.
+
+Bob
+
+=== USER ===
+What feedback did she get on her code?
+
+Answer based on the retrieved emails above.
+Do not greet, do not offer to help, and do not ask for a follow-up question.
+Start immediately with the answer (no preamble).
+If the request involves ordering or selecting items by time/recency, use the dates in the EMAILS THAT MAY BE RELEVANT list to decide which emails are newest.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+

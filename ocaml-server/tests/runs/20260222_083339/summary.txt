@@ -1,0 +1,123 @@
+================================================================================
+ThunderRAG Quality Test Report
+Run: 20260222_083339  Duration: 216.4s  Cases: 12
+================================================================================
+
+--------------------------------------------------------------------------------
+TEST: filter_sender_01 [filter]
+  A: [Email 1] [Email 4]
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.86
+
+--------------------------------------------------------------------------------
+TEST: filter_sender_02 [filter]
+  A: Dave Wilson sent you the following emails:  - Re: Falcon staging - database migration issue ([Email 2]) - Re: URGENT: Production server down - immediate action needed ([Email 4]) - Lunch today? ([Emai...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: filter_sender_dept [filter]
+  A: [Email 3] doc_id=benefits-055@test.example.com date=Mon, 17 Feb 2025 08:00:00 +0000 from=HR Department <hr@acme.com> to=Bob Martinez <bob@acme.com> subject=Open enrollment deadline - Feb 28
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: filter_date_01 [filter]
+  A: The emails you received after February 13, 2025 are:  [Email 4] [Email 5]
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.86
+
+--------------------------------------------------------------------------------
+TEST: filter_date_02 [filter]
+  A: None of the retrieved emails fall within the period of February 1-7, 2025. The earliest date mentioned is February 11, 2025.
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.57
+
+--------------------------------------------------------------------------------
+TEST: filter_subject_01 [filter]
+  A: [Email 1] doc_id=design-revised-032@test.example.com date=Fri, 14 Feb 2025 14:00:00 +0000 from=Patricia Owens <patricia@acme.com> to=Bob Martinez <bob@acme.com> cc=Alice Chen <alice@acme.com> subject=...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: filter_processed_01 [filter]
+  A: The following email has been processed:  - [Email 5] doc_id=design-feedback-031@test.example.com date=Wed, 12 Feb 2025 16:00:00 +0000 from=Bob Martinez <bob@acme.com> to=Patricia Owens <patricia@acme....
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.71
+
+--------------------------------------------------------------------------------
+TEST: filter_cc_01 [filter]
+  A: [Email 1] [Email 5]
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.86
+
+--------------------------------------------------------------------------------
+TEST: filter_external_01 [filter]
+  A: No emails from people outside acme.com are listed in the provided emails.
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.43
+
+--------------------------------------------------------------------------------
+TEST: filter_combo_01 [filter]
+  A: [Email 4], [Email 3]
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.82
+
+--------------------------------------------------------------------------------
+TEST: filter_combo_02 [filter]
+  A: The unprocessed emails with URGENT or CRITICAL in the subject are:  - Email 2: Re: URGENT: Production server down - immediate action needed [Email 2] - Email 4: Re: CRITICAL: CVE-2025-1234 in log4j - ...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: filter_automated_01 [filter]
+  A: Here are all automated notifications:  1. CI System notification about a failed build for falcon-backend (main branch) - [Email 2] 2. Monitoring system alert about disk space warning on prod-db-01.acm...
+  ANOMALIES (2):
+    - PROMPT: evidence section header present but no [Email 1] found
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 1.00
+
+================================================================================
+SUMMARY
+================================================================================
+Anomalies: 13
+  [filter_sender_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_sender_02] PROMPT: evidence section header present but no [Email 1] found
+  [filter_sender_dept] PROMPT: evidence section header present but no [Email 1] found
+  [filter_date_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_date_02] PROMPT: evidence section header present but no [Email 1] found
+  [filter_subject_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_processed_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_cc_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_external_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_combo_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_combo_02] PROMPT: evidence section header present but no [Email 1] found
+  [filter_automated_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_automated_01] POSSIBLE HALLUCINATED NAMES: tom
+Mean score: 0.84
+
+Per-case:
+  filter_sender_01 [filter]: 0.86
+  filter_sender_02 [filter]: 1.00
+  filter_sender_dept [filter]: 1.00
+  filter_date_01 [filter]: 0.86
+  filter_date_02 [filter]: 0.57 *** LOW ***
+  filter_subject_01 [filter]: 1.00
+  filter_processed_01 [filter]: 0.71
+  filter_cc_01 [filter]: 0.86
+  filter_external_01 [filter]: 0.43 *** LOW ***
+  filter_combo_01 [filter]: 0.82
+  filter_combo_02 [filter]: 1.00
+  filter_automated_01 [filter]: 1.00
+================================================================================

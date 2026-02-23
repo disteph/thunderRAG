@@ -1,0 +1,108 @@
+=== SYSTEM ===
+You are a helpful email assistant in an ongoing multi-turn chat. The user is: Bob Martinez <bob@acme.com>. Current date/time: 2026-02-21 22:55:39 (local); 2026-02-22T06:55:39Z (UTC).
+The conversation below includes previous user/assistant turns as context.
+The final user message is the question you must answer.
+Immediately before it, you may see a message containing emails retrieved from the user's archive under the heading EMAILS THAT MAY BE RELEVANT. Use these emails as evidence to answer the question.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+Do not invent email facts that are not in the provided emails.
+Do not greet, do not restate the question, and do not narrate your process.
+
+Each email's body may contain labelled sections:
+- NEW CONTENT: the message the sender actually wrote
+- QUOTED CONTEXT: previous thread history (older messages being replied to)
+- QUOTED CONTEXT (older, summarized): summarized older thread history
+- ATTACHMENTS (summaries): summaries of attached files
+Not all sections will be present in every email.
+
+Each email header may include triage metadata:
+- action=N/100: how much the email requires action or a response from the user (0 = purely informational, 100 = urgent action required)
+- importance=N/100: overall importance of the email to the user
+- reply_by=<date>: estimated deadline for a response, if any
+- processed=true: the user has already dealt with this email; no further action is needed regardless of the action score
+
+=== USER ===
+EMAILS THAT MAY BE RELEVANT:
+
+[Email 1] doc_id=cross-ref-014@test.example.com date=Fri, 07 Feb 2025 16:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> cc=Dave Wilson <dave@acme.com> subject=API keys for Falcon - following up
+NEW CONTENT:
+Bob,
+
+As discussed in my previous email about the Falcon launch, we need the payment gateway API keys before March 10.
+
+I've checked with Dave's team and they say the keys are pending approval from the vendor.
+Dave, can you provide an ETA?
+
+We can't proceed with payment integration testing without them.
+
+Alice
+
+[Email 2] doc_id=marketing-metrics-034@test.example.com date=Fri, 14 Feb 2025 16:00:00 +0000 from=Grace Kim <grace@acme.com> to=Bob Martinez <bob@acme.com> subject=Falcon pre-launch campaign metrics
+NEW CONTENT:
+Bob,
+
+Early teaser results:
+- Blog views: 4,200 (2x average)
+- Email open rate: 34% (industry avg 21%)
+- Webinar registrations: 180 (target 300)
+- Social impressions: 28K
+
+Full breakdown attached.
+
+Grace
+
+[Email 3] doc_id=one-on-one-046@test.example.com date=Thu, 13 Feb 2025 08:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=1:1 agenda - Feb 14
+NEW CONTENT:
+Bob,
+
+Topics for tomorrow's 1:1:
+1. Falcon timeline (March 17 launch)
+2. Lisa Wong onboarding — how's her first week?
+3. Production incident postmortem follow-up
+4. API keys status from vendor?
+5. DevOps Summit travel
+6. Sprint 13 capacity
+
+Anything to add?
+
+Alice
+
+[Email 4] doc_id=marketing-plan-033@test.example.com date=Wed, 12 Feb 2025 11:00:00 +0000 from=Grace Kim <grace@acme.com> to=Alice Chen <alice@acme.com>, Bob Martinez <bob@acme.com> subject=Falcon marketing campaign - launch plan
+NEW CONTENT:
+Hi Alice, Bob,
+
+Falcon launch marketing plan:
+
+Phase 1 (Mar 3-10): Teaser — social media, blog, email blast
+Phase 2 (Mar 10-17): Pre-launch — webinar, press releases, partners
+Phase 3 (Mar 17): Launch day — Product Hunt, demo video, email blast
+Phase 4 (Mar 17-31): Post-launch — case studies, testimonials, paid ads
+
+Budget: $25,000 ($8K ads, $7K content, $5K events, $5K tools)
+
+This is why we requested the 2-day delay — March 17 aligns with webinar.
+
+Grace
+
+[Email 5] doc_id=design-feedback-031@test.example.com date=Wed, 12 Feb 2025 16:00:00 +0000 from=Bob Martinez <bob@acme.com> to=Patricia Owens <patricia@acme.com> cc=Alice Chen <alice@acme.com> subject=Re: Falcon UI mockups for review
+NEW CONTENT:
+Patricia,
+
+Great work. Feedback:
+1. Order tracking: Add estimated delivery time
+2. Payment history: Need CSV export
+3. Analytics: Chart colors need better contrast (WCAG AA)
+4. Settings: Add regenerate-key confirmation dialog
+
+Overall direction is solid.
+
+Bob
+
+=== USER ===
+Has anyone emailed me about the Mars colonization project?
+
+Answer based on the retrieved emails above.
+Do not greet, do not offer to help, and do not ask for a follow-up question.
+Start immediately with the answer (no preamble).
+If the request involves ordering or selecting items by time/recency, use the dates in the EMAILS THAT MAY BE RELEVANT list to decide which emails are newest.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+

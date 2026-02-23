@@ -106,6 +106,9 @@ function renderMetadataHtml(data, entry) {
   if (data.triage_model) {
     html += `<div class="meta-key">triage model</div><div>${esc(data.triage_model)}</div>`;
   }
+  if (data.summarize_model) {
+    html += `<div class="meta-key">summarize model</div><div>${esc(data.summarize_model)}</div>`;
+  }
   if (md) {
     if (typeof md.action_score === "number") {
       html += `<div class="meta-key">action score</div><div>${md.action_score}/100</div>`;

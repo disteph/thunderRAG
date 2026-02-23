@@ -1,0 +1,814 @@
+================================================================================
+ThunderRAG Quality Test Report
+Run: 20260222_005755  Duration: 1624.3s  Cases: 85
+================================================================================
+
+--------------------------------------------------------------------------------
+TEST: factual_01 [factual]
+  A: The Project Falcon launch date is March 17, 2025. [Email 2] and [Email 3] discuss this change from the original date of March 15, 2025, due to a request by the marketing team.
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: factual_02 [factual]
+  A: Carol Davis scheduled the Q1 budget review meeting for February 24, 2025 at 2pm in Conference Room B. [Email 5]
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: factual_03 [factual]
+  A: The Q1 financial report highlights include:  - Revenue increased by 20% compared to last quarter. - Profit margins have expanded due to cost-cutting measures and improved operational efficiency. - The...
+  ANOMALIES (1):
+    - NO_RETRIEVAL: query was answered without email retrieval
+  SCORE: 0.50
+
+--------------------------------------------------------------------------------
+TEST: factual_04 [factual]
+  A: The CloudStore contract renewal price is $120,000. The recommendation was to negotiate for a 15% discount based on our long-term partnership and recent budget cuts. [Email 4] provides these details.
+  ANOMALIES (2):
+    - NO_RETRIEVAL: query was answered without email retrieval
+    - CITATION OUT OF RANGE: [Email 4] vs 0 sources
+  SCORE: 0.67
+
+--------------------------------------------------------------------------------
+TEST: factual_05 [factual]
+  A: A critical SQL injection vulnerability (CVE-2026-1234) was discovered in our database server. This issue allows an attacker to manipulate queries, potentially accessing or modifying sensitive data. Th...
+  ANOMALIES (2):
+    - NO_RETRIEVAL: query was answered without email retrieval
+    - CITATION OUT OF RANGE: [Email 5] vs 0 sources
+  SCORE: 0.50
+
+--------------------------------------------------------------------------------
+TEST: triage_01 [triage]
+  A: No urgent emails from Bob Martinez <bob@acme.com> require immediate attention; the emails listed show that he has already addressed critical issues and does not have any outgoing urgent communications...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.50
+
+--------------------------------------------------------------------------------
+TEST: triage_02 [triage]
+  A: Action items and deadlines based on the retrieved emails:  1. Sign off on revised Falcon UI mockups (action=20/100) by incorporating feedback and reviewing attached files ([Email 1]).     2. Review PR...
+  ANOMALIES (2):
+    - PROMPT: evidence section header present but no [Email 1] found
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 0.67
+
+--------------------------------------------------------------------------------
+TEST: thread_incident_01 [thread]
+  A: The production server incident occurred on February 18th when there was an unexpected spike in traffic that overwhelmed the server resources, leading to a degradation of service quality and eventually...
+  ANOMALIES (1):
+    - NO_RETRIEVAL: query was answered without email retrieval
+  SCORE: 0.33
+
+--------------------------------------------------------------------------------
+TEST: thread_incident_02 [thread]
+  A: To fix the production server incident, the IT team took the following steps:  1. **Initial Response**: The team identified that the sudden spike in traffic had caused resource exhaustion on the server...
+  ANOMALIES (2):
+    - NO_RETRIEVAL: query was answered without email retrieval
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 0.33
+
+--------------------------------------------------------------------------------
+TEST: thread_incident_03 [thread]
+  A: Yes, there were customer-facing consequences during the production server incident:  - **Service Unavailability**: Customers reported being unable to access critical services for approximately 4 hours...
+  ANOMALIES (2):
+    - NO_RETRIEVAL: query was answered without email retrieval
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 0.33
+
+--------------------------------------------------------------------------------
+TEST: thread_vendor_01 [thread]
+  A: Frank Lee initiated negotiations for renewing Acme's contract with CloudStore Inc., noting a $7,000/year price increase and suggesting comparison analysis with competitor DataVault. Grace Kim conducte...
+  ANOMALIES (2):
+    - PROMPT: evidence section header present but no [Email 1] found
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 0.67
+
+--------------------------------------------------------------------------------
+TEST: thread_vendor_02 [thread]
+  A: Grace Kim's comparison found that CloudStore offers 5TB storage with a 99.9% uptime SLA and includes 24/7 phone support, while DataVault provides similar storage at 99.5% uptime but only offers email-...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: thread_vendor_03 [thread]
+  A: Grace's analysis compared CloudStore and DataVault based on storage capacity, uptime SLA, support options, migration risks, and cost. She found that:  - **CloudStore**: 5TB storage with a 99.9% uptime...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: broad_mark_01 [broad]
+  A: None of the retrieved emails mention topics discussed with Mark Johnson.
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.50
+
+--------------------------------------------------------------------------------
+TEST: broad_mark_02 [broad]
+  A: There are no emails in your archive where Mark Johnson mentions a new hire or discusses details about one. If you have received such an email, it may not be included in the retrieved emails.
+  ANOMALIES (1):
+    - NO_RETRIEVAL: query was answered without email retrieval
+  SCORE: 0.33
+
+--------------------------------------------------------------------------------
+TEST: temporal_01 [temporal]
+  A: The most recent email you received from Alice is [Email 2] dated Fri, 14 Feb 2025 17:00:00 +0000.
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: temporal_02 [temporal]
+  A: You have a Q1 budget review meeting rescheduled for Feb 24 (Monday) at 2pm in Conference Room B. Alice Chen will be out of office from February 17-21 due to a family vacation and you need her input on...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.33
+
+--------------------------------------------------------------------------------
+TEST: attachment_01 [attachment]
+  A: None of the emails listed have attachments. Therefore, no reports or documents have been sent to you as attachments based on the provided information.
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.50
+
+--------------------------------------------------------------------------------
+TEST: attachment_02 [attachment]
+  A: The Q1 security scan report found 1 critical vulnerability (CVE-2025-1234 in log4j), and this had been patched within 48 hours as per policy. Additionally, there were 3 high, 7 medium, and 12 low seve...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: negative_01 [negative]
+  A: No one has emailed you about the Mars colonization project based on the provided emails. The most recent emails do not mention this topic.
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: negative_02 [negative]
+  A: I don't have that information in my records. The salary details of executives like the CEO are often confidential and not part of our regular communication unless you need it for a specific reason rel...
+  ANOMALIES (1):
+    - NO_RETRIEVAL: query was answered without email retrieval
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_01 [multi_turn]
+  A: Project Falcon is a company initiative with scheduled launch on March 15, 2025. Key dates include: - QA readiness by March 10 [Email 3]. - Staging environment validation before March 12 [Email 3]. - M...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_02 [multi_turn]
+  A: The current launch date for Project Falcon is March 17, 2025. The marketing team requested a 2-day delay, shifting all other deadlines accordingly to ensure alignment with their webinar plans [Email 2...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_03 [multi_turn]
+  A: The current launch date for Project Falcon is March 17, 2025. The marketing team requested a delay due to their webinar plans [Email 1].  QA status is as follows: - Completed: User auth flow, payment ...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_04 [multi_turn]
+  A: Yes, there were staging environment issues. Specifically, a database migration issue that blocked integration tests due to inconsistent orders table data and foreign key constraint violations on the p...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_05 [multi_turn]
+  A: 
+  ANOMALIES (1):
+    - ANSWER TOO SHORT: 0 chars
+  SCORE: 0.33
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_06 [multi_turn]
+  A: The marketing plan for Project Falcon is structured into four phases:  1. **Phase 1 (Mar 3-10):** Teaser phase with social media posts, blog articles, and an email blast. 2. **Phase 2 (Mar 10-17):** P...
+  ANOMALIES (2):
+    - PROMPT: evidence section header present but no [Email 1] found
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_07 [multi_turn]
+  A: There is no indication of open bugs directly related to Project Falcon based on the provided emails. However, there were staging environment issues and a production server downtime incident addressed ...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.67
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_08 [multi_turn]
+  A: Current risks and blockers for Project Falcon:  1. **API Key Delivery**: Waiting for API keys needed for payment gateway integration tests; QA completion is at risk if not received by March 5 [Email 1...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_01 [multi_turn]
+  A: We discussed a production server outage on February 11, 2025. The server was down due to a connection leak caused by the nightly analytics batch job that was deployed on Friday, February 7th [Email 2]...
+  ANOMALIES (2):
+    - PROMPT: evidence section header present but no [Email 1] found
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_02 [multi_turn]
+  A: The production server outage on February 11, 2025, was caused by a connection leak in the nightly analytics batch job deployed on Friday, February 7th. The job failed to release database connections a...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_03 [multi_turn]
+  A: The production server outage lasted 45 minutes with an additional ~12 minutes of degraded service before the issue was fully resolved. The fix involved adding a connection cleanup in the finally block...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_04 [multi_turn]
+  A: The postmortem for the production server outage was completed and detailed in Email 4. The root cause was a connection leak due to missing finally blocks in the database client code related to the nig...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_05 [multi_turn]
+  A: Yes, BigCorp reported intermittent API timeouts since Monday affecting 15% of requests and causing $20K/day in failed transactions. This issue was escalated by Raj Gupta on February 12th [Email 4], an...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_06 [multi_turn]
+  A: The customer issue with BigCorp is now resolved. Success rates have returned to 99.97% over the last 48 hours [Email 1]. Sam Chen, CTO at BigCorp, confirmed this and expressed satisfaction with the de...
+  ANOMALIES (2):
+    - PROMPT: evidence section header present but no [Email 1] found
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_07 [multi_turn]
+  A: The customer issue with BigCorp is resolved. Success rates have returned to 99.97% over the last 48 hours. Sam Chen confirmed this and expressed satisfaction with the dedicated connection pool impleme...
+  ANOMALIES (2):
+    - PROMPT: evidence section header present but no [Email 1] found
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: mt_lisa_01 [multi_turn]
+  A: Lisa Wong joined the backend team on February 10, 2025. She has been inquiring about various aspects related to her role and tasks, such as preferred IDEs for working on Falcon projects, how to gain a...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_lisa_02 [multi_turn]
+  A: Based on the information available, there is no indication of specific onboarding issues for Lisa Wong. Her emails suggest that she has been asking questions about her role and technical requirements,...
+  ANOMALIES (2):
+    - NO_RETRIEVAL: query was answered without email retrieval
+    - CITATION OUT OF RANGE: [Email 1] vs 0 sources
+  SCORE: 0.67
+
+--------------------------------------------------------------------------------
+TEST: mt_lisa_03 [multi_turn]
+  A: In her first week, Lisa Wong asked about:  1. Recommended IDE for Falcon backend development (using VS Code but saw some on IntelliJ). 2. How to get access to the staging database and noted that while...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_lisa_04 [multi_turn]
+  A: Yes, Lisa Wong has submitted a pull request for Falcon order validation refactor. You provided feedback on this PR, approving it with minor suggestions regarding code style and additional tests. [Emai...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_lisa_05 [multi_turn]
+  A: Bob provided feedback on Lisa's pull request for the Falcon order validation refactor. The comments included:  1. Make validation rules configurable for product-specific rules later. 2. Add a test for...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_01 [multi_turn]
+  A: Recent emails include feedback on Falcon UI mockups with revised versions attached and sign-off requested, out-of-office notifications for team members, a lunch invitation declined due to work schedul...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_02 [multi_turn]
+  A: The most urgent item is reviewing PR #847 for the fix to the connection leak issue and approving its deployment before tonight's batch window. The email from Dave Wilson mentions this action and also ...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_03 [multi_turn]
+  A: The BigCorp situation began with API timeout issues reported on February 12th. Raj Gupta escalated the issue due to potential CEO escalation by BigCorp's CTO Sam Chen if not resolved quickly [Email 4]...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_04 [multi_turn]
+  A: The launch date for Project Falcon has been delayed to March 17, 2025. All deadlines have shifted accordingly: QA is now due on March 12 and dry runs are scheduled for March 14 [Email 3].  QA status s...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_05 [multi_turn]
+  A: 
+  ANOMALIES (1):
+    - ANSWER TOO SHORT: 0 chars
+  SCORE: 0.33
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_06 [multi_turn]
+  A: Your performance review summary indicates a rating of Exceeds Expectations (4/5). The strengths highlighted include technical leadership on Project Falcon, incident response during the Q3 DB migration...
+  ANOMALIES (2):
+    - PROMPT: evidence section header present but no [Email 1] found
+    - POSSIBLE HALLUCINATED NAMES: mary
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_07 [multi_turn]
+  A: You need to submit your Q4 2024 expense reports by February 21st according to Eve Park's reminder [Email 2]. Additionally, prepare for the rescheduled Q1 budget review meeting on February 24th where y...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_08 [multi_turn]
+  A: You are approved for travel to the DevOps Summit 2025 from March 20-22 in San Francisco. Submit your travel request via Concur by February 21st for a budget of $3,800, which includes flight and hotel ...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_09 [multi_turn]
+  A: At the DevOps Summit 2025, you learned: 1. GitOps is accelerating with ArgoCD and Flux becoming dominant tools. 2. OpenTelemetry has become the standard for observability (consider migrating from Data...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_10 [multi_turn]
+  A: You patched the critical CVE-2025-1234 vulnerability in log4j within 48 hours of being alerted by Henry Liu on February 11th [Email 4]. The security scan results indicated this was a critical issue th...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_budget_01 [multi_turn]
+  A: The Q1 budget review meeting has been rescheduled from February 20 to February 24 at 2pm in Conference Room B. You have received a revised Q1 engineering budget allocation document that requires sign-...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: mt_budget_02 [multi_turn]
+  A: The revised Q1 engineering budget allocation document [Email 2] shows updated figures compared to the original Q1 report [Email 4]:  Revised Q1 Engineering Budget: - Infrastructure: $180,000 (up from ...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_budget_03 [multi_turn]
+  A: The Q1 budget review meeting is rescheduled for February 24 at 2pm in Conference Room B. [Email 5]
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_budget_04 [multi_turn]
+  A: You need to submit your Q4 2024 expense reports by February 21. The outstanding items in Concur include AWS training ($450) - Dec 12, Team dinner ($380) - Dec 18, and JetBrains license ($249) - Jan 5 ...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_budget_05 [multi_turn]
+  A: The only financial deadline you need to be aware of is submitting your Q4 2024 expense reports by February 21. Outstanding items in Concur include AWS training ($450) - Dec 12, Team dinner ($380) - De...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: mt_budget_06 [multi_turn]
+  A: The total conference travel budget approved for the DevOps Summit 2025 is $3,800 [Email 1].
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_security_01 [multi_turn]
+  A: Security-related emails:  - [Email 3] Security scan results for Q1. Summary includes 1 critical CVE (CVE-2025-1234 in log4j) that must be patched within 48 hours per policy, and other high, medium, an...
+  ANOMALIES (2):
+    - PROMPT: evidence section header present but no [Email 1] found
+    - POSSIBLE HALLUCINATED NAMES: mary
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_security_02 [multi_turn]
+  A: The security scan results are:  - Critical: 1 (CVE-2025-1234 in log4j) - High: 3 (outdated TLS, weak password policy, exposed debug endpoint) - Medium: 7 - Low: 12  [Email 1]
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_security_03 [multi_turn]
+  A: The security scan results include:  - Critical: 1 (CVE-2025-1234 in log4j) - High: 3 (outdated TLS, weak password policy, exposed debug endpoint) - Medium: 7 - Low: 12  [Email 1]
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.67
+
+--------------------------------------------------------------------------------
+TEST: mt_design_01 [multi_turn]
+  A: The Falcon UI design is ready for sign-off. Revised mockups incorporating all feedback have been submitted by Patricia Owens on February 14, 2025 [Email 1].
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_design_02 [multi_turn]
+  A: Initial feedback on the Falcon UI mockups provided by Bob Martinez included: 1. Order tracking: Add estimated delivery time. 2. Payment history: Need CSV export. 3. Analytics: Chart colors need better...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_design_03 [multi_turn]
+  A: Yes, the feedback was incorporated into the revised mockups sent on February 14, 2025 [Email 1]: - Added estimated delivery time to order tracking. - Added CSV export for payment history. - Chart colo...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_people_01 [multi_turn]
+  A: You've been emailing with Sam Chen (CTO at BigCorp) about resolving technical issues and planning for API v3 migration ([Email 1]). Alice Chen is your manager at Acme who informed you she will be out ...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_people_02 [multi_turn]
+  A: In your annual performance review for FY2024 ([Email 1]), you were rated Exceeds Expectations (4/5). Your strengths include technical leadership on the Falcon project and handling the Q3 database migr...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_people_03 [multi_turn]
+  A: You have upcoming compliance training due by March 1 ([Email 1]). Additionally, you were nominated for the DevOps Summit 2025 in San Francisco and need to confirm your attendance by February 14 ([Emai...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_people_04 [multi_turn]
+  A: The annual company offsite is scheduled for April 5-6 at the Lakeside Resort. You need to RSVP by February 25 and indicate any dietary restrictions ([Email 2]).
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: crossref_01 [cross_reference]
+  A: The payment gateway API keys for Falcon are still pending approval from the vendor. According to Tony Russo's QA status report, Dave Wilson’s team mentioned this in their update on February 7th [Ema...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: crossref_02 [cross_reference]
+  A: The payment gateway API keys for Falcon are still pending approval from the vendor. As per Tony Russo’s QA status report dated February 14th [Email 2], Dave Wilson's team mentioned this in their upd...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: no_retrieval_01 [no_retrieval]
+  A: Irene provided your annual performance review summary for FY2024 and mentioned that you exceeded expectations with a rating of 4/5. You received an 8% salary increase effective March 1st, along with a...
+  ANOMALIES (2):
+    - PROMPT: evidence section header present but no [Email 1] found
+    - POSSIBLE HALLUCINATED NAMES: mary
+  SCORE: 0.75
+
+--------------------------------------------------------------------------------
+TEST: no_retrieval_02 [no_retrieval]
+  A: DKIM stands for DomainKeys Identified Mail. It's an email authentication standard that allows an organization to take responsibility for a message in a way that can be verified by the recipient. Here�...
+  ANOMALIES (1):
+    - NO_RETRIEVAL: query was answered without email retrieval
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: no_retrieval_03 [no_retrieval]
+  A: It is Friday. The date is 2026-02-22 according to your message header information.
+  ANOMALIES (1):
+    - NO_RETRIEVAL: query was answered without email retrieval
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: no_retrieval_04 [no_retrieval]
+  A: IMAP (Internet Message Access Protocol) and POP3 (Post Office Protocol version 3) are two different methods for retrieving emails from a server to your local device. Here’s how they differ:  **IMAP:...
+  ANOMALIES (2):
+    - NO_RETRIEVAL: query was answered without email retrieval
+    - POSSIBLE HALLUCINATED NAMES: mary
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: filter_sender_01 [filter]
+  A: [Email 2] doc_id=one-on-one-046@test.example.com date=Thu, 13 Feb 2025 08:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=1:1 agenda - Feb 14 NEW CONTENT: Bob,  Top...
+  ANOMALIES (3):
+    - REWRITE: resolved_question is garbage: "..."
+    - PROMPT: evidence section header present but no [Email 1] found
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 0.86
+
+--------------------------------------------------------------------------------
+TEST: filter_sender_02 [filter]
+  A: Dave Wilson sent you two emails:  1. Subject: Re: URGENT: Production server down - immediate action needed ([Email 4]) 2. Subject: Lunch today? ([Email 5])
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.86
+
+--------------------------------------------------------------------------------
+TEST: filter_sender_dept [filter]
+  A: [Email 1] doc_id=holiday-schedule-005@test.example.com date=Fri, 03 Jan 2025 10:00:00 +0000 from=HR Department <hr@acme.com> [Email 4] doc_id=benefits-055@test.example.com date=Mon, 17 Feb 2025 08:00:...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.86
+
+--------------------------------------------------------------------------------
+TEST: filter_date_01 [filter]
+  A: [Email 5] is the only email received after February 13, 2025. It was sent on Monday, February 17, 2025, reminding you about expense reports due by February 21.
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.86
+
+--------------------------------------------------------------------------------
+TEST: filter_date_02 [filter]
+  A: You received two emails during the first week of February 2025: - A password reset completion notification on February 3rd from IT Support [Email 2]. - A request for compliance audit documents by Nora...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.71
+
+--------------------------------------------------------------------------------
+TEST: filter_subject_01 [filter]
+  A: [Email 1] doc_id=design-revised-032@test.example.com date=Fri, 14 Feb 2025 14:00:00 +0000 from=Patricia Owens <patricia@acme.com> to=Bob Martinez <bob@acme.com> cc=Alice Chen <alice@acme.com> subject=...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.86
+
+--------------------------------------------------------------------------------
+TEST: filter_processed_01 [filter]
+  A: Processed emails: [Email 1], [Email 2], [Email 3], [Email 4], [Email 5]
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.57
+
+--------------------------------------------------------------------------------
+TEST: filter_cc_01 [filter]
+  A: You were CC'd on [Email 1] and [Email 5].
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.71
+
+--------------------------------------------------------------------------------
+TEST: filter_external_01 [filter]
+  A: No, there are no emails from people outside acme.com in the provided list.
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.43
+
+--------------------------------------------------------------------------------
+TEST: filter_combo_01 [filter]
+  A: Alice is out of office from February 17-21 due to a family vacation. She has directed any Falcon-related matters during her absence to you. For urgent issues, she can be reached by text on her cell ph...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.86
+
+--------------------------------------------------------------------------------
+TEST: filter_combo_02 [filter]
+  A: [Email 2], [Email 3], and [Email 4] have URGENT or CRITICAL in their subjects. The most recent is [Email 4] on Tue, 11 Feb 2025 at 11:00:00 UTC regarding a critical log4j vulnerability patch deploymen...
+  ANOMALIES (1):
+    - PROMPT: evidence section header present but no [Email 1] found
+  SCORE: 0.71
+
+--------------------------------------------------------------------------------
+TEST: filter_automated_01 [filter]
+  A: To show all automated notifications from JIRA, CI, or monitoring systems based on the provided emails:  - [Email 2] is a failed CI build notification. - There are no JIRA notifications in the given em...
+  ANOMALIES (2):
+    - PROMPT: evidence section header present but no [Email 1] found
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 1.00
+
+================================================================================
+SUMMARY
+================================================================================
+Anomalies: 103
+  [factual_01] PROMPT: evidence section header present but no [Email 1] found
+  [factual_02] PROMPT: evidence section header present but no [Email 1] found
+  [factual_03] NO_RETRIEVAL: query was answered without email retrieval
+  [factual_04] NO_RETRIEVAL: query was answered without email retrieval
+  [factual_04] CITATION OUT OF RANGE: [Email 4] vs 0 sources
+  [factual_05] NO_RETRIEVAL: query was answered without email retrieval
+  [factual_05] CITATION OUT OF RANGE: [Email 5] vs 0 sources
+  [triage_01] PROMPT: evidence section header present but no [Email 1] found
+  [triage_02] PROMPT: evidence section header present but no [Email 1] found
+  [triage_02] POSSIBLE HALLUCINATED NAMES: tom
+  [thread_incident_01] NO_RETRIEVAL: query was answered without email retrieval
+  [thread_incident_02] NO_RETRIEVAL: query was answered without email retrieval
+  [thread_incident_02] POSSIBLE HALLUCINATED NAMES: tom
+  [thread_incident_03] NO_RETRIEVAL: query was answered without email retrieval
+  [thread_incident_03] POSSIBLE HALLUCINATED NAMES: tom
+  [thread_vendor_01] PROMPT: evidence section header present but no [Email 1] found
+  [thread_vendor_01] POSSIBLE HALLUCINATED NAMES: tom
+  [thread_vendor_02] PROMPT: evidence section header present but no [Email 1] found
+  [thread_vendor_03] PROMPT: evidence section header present but no [Email 1] found
+  [broad_mark_01] PROMPT: evidence section header present but no [Email 1] found
+  [broad_mark_02] NO_RETRIEVAL: query was answered without email retrieval
+  [temporal_01] PROMPT: evidence section header present but no [Email 1] found
+  [temporal_02] PROMPT: evidence section header present but no [Email 1] found
+  [attachment_01] PROMPT: evidence section header present but no [Email 1] found
+  [attachment_02] PROMPT: evidence section header present but no [Email 1] found
+  [negative_01] PROMPT: evidence section header present but no [Email 1] found
+  [negative_02] NO_RETRIEVAL: query was answered without email retrieval
+  [mt_falcon_01] PROMPT: evidence section header present but no [Email 1] found
+  [mt_falcon_02] PROMPT: evidence section header present but no [Email 1] found
+  [mt_falcon_03] PROMPT: evidence section header present but no [Email 1] found
+  [mt_falcon_04] PROMPT: evidence section header present but no [Email 1] found
+  [mt_falcon_05] ANSWER TOO SHORT: 0 chars
+  [mt_falcon_06] PROMPT: evidence section header present but no [Email 1] found
+  [mt_falcon_06] POSSIBLE HALLUCINATED NAMES: tom
+  [mt_falcon_07] PROMPT: evidence section header present but no [Email 1] found
+  [mt_falcon_08] PROMPT: evidence section header present but no [Email 1] found
+  [mt_incident_01] PROMPT: evidence section header present but no [Email 1] found
+  [mt_incident_01] POSSIBLE HALLUCINATED NAMES: tom
+  [mt_incident_02] PROMPT: evidence section header present but no [Email 1] found
+  [mt_incident_03] PROMPT: evidence section header present but no [Email 1] found
+  [mt_incident_04] PROMPT: evidence section header present but no [Email 1] found
+  [mt_incident_05] PROMPT: evidence section header present but no [Email 1] found
+  [mt_incident_06] PROMPT: evidence section header present but no [Email 1] found
+  [mt_incident_06] POSSIBLE HALLUCINATED NAMES: tom
+  [mt_incident_07] PROMPT: evidence section header present but no [Email 1] found
+  [mt_incident_07] POSSIBLE HALLUCINATED NAMES: tom
+  [mt_lisa_01] PROMPT: evidence section header present but no [Email 1] found
+  [mt_lisa_02] NO_RETRIEVAL: query was answered without email retrieval
+  [mt_lisa_02] CITATION OUT OF RANGE: [Email 1] vs 0 sources
+  [mt_lisa_03] PROMPT: evidence section header present but no [Email 1] found
+  [mt_lisa_04] PROMPT: evidence section header present but no [Email 1] found
+  [mt_lisa_05] PROMPT: evidence section header present but no [Email 1] found
+  [mt_mixed_01] PROMPT: evidence section header present but no [Email 1] found
+  [mt_mixed_02] PROMPT: evidence section header present but no [Email 1] found
+  [mt_mixed_03] PROMPT: evidence section header present but no [Email 1] found
+  [mt_mixed_04] PROMPT: evidence section header present but no [Email 1] found
+  [mt_mixed_05] ANSWER TOO SHORT: 0 chars
+  [mt_mixed_06] PROMPT: evidence section header present but no [Email 1] found
+  [mt_mixed_06] POSSIBLE HALLUCINATED NAMES: mary
+  [mt_mixed_07] PROMPT: evidence section header present but no [Email 1] found
+  [mt_mixed_08] PROMPT: evidence section header present but no [Email 1] found
+  [mt_mixed_09] PROMPT: evidence section header present but no [Email 1] found
+  [mt_mixed_10] PROMPT: evidence section header present but no [Email 1] found
+  [mt_budget_01] PROMPT: evidence section header present but no [Email 1] found
+  [mt_budget_02] PROMPT: evidence section header present but no [Email 1] found
+  [mt_budget_03] PROMPT: evidence section header present but no [Email 1] found
+  [mt_budget_04] PROMPT: evidence section header present but no [Email 1] found
+  [mt_budget_05] PROMPT: evidence section header present but no [Email 1] found
+  [mt_budget_06] PROMPT: evidence section header present but no [Email 1] found
+  [mt_security_01] PROMPT: evidence section header present but no [Email 1] found
+  [mt_security_01] POSSIBLE HALLUCINATED NAMES: mary
+  [mt_security_02] PROMPT: evidence section header present but no [Email 1] found
+  [mt_security_03] PROMPT: evidence section header present but no [Email 1] found
+  [mt_design_01] PROMPT: evidence section header present but no [Email 1] found
+  [mt_design_02] PROMPT: evidence section header present but no [Email 1] found
+  [mt_design_03] PROMPT: evidence section header present but no [Email 1] found
+  [mt_people_01] PROMPT: evidence section header present but no [Email 1] found
+  [mt_people_02] PROMPT: evidence section header present but no [Email 1] found
+  [mt_people_03] PROMPT: evidence section header present but no [Email 1] found
+  [mt_people_04] PROMPT: evidence section header present but no [Email 1] found
+  [crossref_01] PROMPT: evidence section header present but no [Email 1] found
+  [crossref_02] PROMPT: evidence section header present but no [Email 1] found
+  [no_retrieval_01] PROMPT: evidence section header present but no [Email 1] found
+  [no_retrieval_01] POSSIBLE HALLUCINATED NAMES: mary
+  [no_retrieval_02] NO_RETRIEVAL: query was answered without email retrieval
+  [no_retrieval_03] NO_RETRIEVAL: query was answered without email retrieval
+  [no_retrieval_04] NO_RETRIEVAL: query was answered without email retrieval
+  [no_retrieval_04] POSSIBLE HALLUCINATED NAMES: mary
+  [filter_sender_01] REWRITE: resolved_question is garbage: "..."
+  [filter_sender_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_sender_01] POSSIBLE HALLUCINATED NAMES: tom
+  [filter_sender_02] PROMPT: evidence section header present but no [Email 1] found
+  [filter_sender_dept] PROMPT: evidence section header present but no [Email 1] found
+  [filter_date_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_date_02] PROMPT: evidence section header present but no [Email 1] found
+  [filter_subject_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_processed_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_cc_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_external_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_combo_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_combo_02] PROMPT: evidence section header present but no [Email 1] found
+  [filter_automated_01] PROMPT: evidence section header present but no [Email 1] found
+  [filter_automated_01] POSSIBLE HALLUCINATED NAMES: tom
+Mean score: 0.85
+
+Per-case:
+  factual_01 [factual]: 1.00
+  factual_02 [factual]: 1.00
+  factual_03 [factual]: 0.50 *** LOW ***
+  factual_04 [factual]: 0.67 *** LOW ***
+  factual_05 [factual]: 0.50 *** LOW ***
+  triage_01 [triage]: 0.50 *** LOW ***
+  triage_02 [triage]: 0.67 *** LOW ***
+  thread_incident_01 [thread]: 0.33 *** LOW ***
+  thread_incident_02 [thread]: 0.33 *** LOW ***
+  thread_incident_03 [thread]: 0.33 *** LOW ***
+  thread_vendor_01 [thread]: 0.67 *** LOW ***
+  thread_vendor_02 [thread]: 1.00
+  thread_vendor_03 [thread]: 0.83
+  broad_mark_01 [broad]: 0.50 *** LOW ***
+  broad_mark_02 [broad]: 0.33 *** LOW ***
+  temporal_01 [temporal]: 0.83
+  temporal_02 [temporal]: 0.33 *** LOW ***
+  attachment_01 [attachment]: 0.50 *** LOW ***
+  attachment_02 [attachment]: 1.00
+  negative_01 [negative]: 1.00
+  negative_02 [negative]: 1.00
+  mt_falcon_01 [multi_turn]: 1.00
+  mt_falcon_02 [multi_turn]: 1.00
+  mt_falcon_03 [multi_turn]: 1.00
+  mt_falcon_04 [multi_turn]: 1.00
+  mt_falcon_05 [multi_turn]: 0.33 *** LOW ***
+  mt_falcon_06 [multi_turn]: 1.00
+  mt_falcon_07 [multi_turn]: 0.67 *** LOW ***
+  mt_falcon_08 [multi_turn]: 1.00
+  mt_incident_01 [multi_turn]: 0.83
+  mt_incident_02 [multi_turn]: 1.00
+  mt_incident_03 [multi_turn]: 1.00
+  mt_incident_04 [multi_turn]: 1.00
+  mt_incident_05 [multi_turn]: 1.00
+  mt_incident_06 [multi_turn]: 1.00
+  mt_incident_07 [multi_turn]: 0.83
+  mt_lisa_01 [multi_turn]: 1.00
+  mt_lisa_02 [multi_turn]: 0.67 *** LOW ***
+  mt_lisa_03 [multi_turn]: 1.00
+  mt_lisa_04 [multi_turn]: 1.00
+  mt_lisa_05 [multi_turn]: 1.00
+  mt_mixed_01 [multi_turn]: 1.00
+  mt_mixed_02 [multi_turn]: 1.00
+  mt_mixed_03 [multi_turn]: 1.00
+  mt_mixed_04 [multi_turn]: 1.00
+  mt_mixed_05 [multi_turn]: 0.33 *** LOW ***
+  mt_mixed_06 [multi_turn]: 1.00
+  mt_mixed_07 [multi_turn]: 1.00
+  mt_mixed_08 [multi_turn]: 1.00
+  mt_mixed_09 [multi_turn]: 1.00
+  mt_mixed_10 [multi_turn]: 1.00
+  mt_budget_01 [multi_turn]: 0.83
+  mt_budget_02 [multi_turn]: 1.00
+  mt_budget_03 [multi_turn]: 1.00
+  mt_budget_04 [multi_turn]: 1.00
+  mt_budget_05 [multi_turn]: 0.83
+  mt_budget_06 [multi_turn]: 1.00
+  mt_security_01 [multi_turn]: 1.00
+  mt_security_02 [multi_turn]: 1.00
+  mt_security_03 [multi_turn]: 0.67 *** LOW ***
+  mt_design_01 [multi_turn]: 1.00
+  mt_design_02 [multi_turn]: 1.00
+  mt_design_03 [multi_turn]: 1.00
+  mt_people_01 [multi_turn]: 1.00
+  mt_people_02 [multi_turn]: 1.00
+  mt_people_03 [multi_turn]: 1.00
+  mt_people_04 [multi_turn]: 1.00
+  crossref_01 [cross_reference]: 1.00
+  crossref_02 [cross_reference]: 1.00
+  no_retrieval_01 [no_retrieval]: 0.75
+  no_retrieval_02 [no_retrieval]: 1.00
+  no_retrieval_03 [no_retrieval]: 1.00
+  no_retrieval_04 [no_retrieval]: 1.00
+  filter_sender_01 [filter]: 0.86
+  filter_sender_02 [filter]: 0.86
+  filter_sender_dept [filter]: 0.86
+  filter_date_01 [filter]: 0.86
+  filter_date_02 [filter]: 0.71
+  filter_subject_01 [filter]: 0.86
+  filter_processed_01 [filter]: 0.57 *** LOW ***
+  filter_cc_01 [filter]: 0.71
+  filter_external_01 [filter]: 0.43 *** LOW ***
+  filter_combo_01 [filter]: 0.86
+  filter_combo_02 [filter]: 0.71
+  filter_automated_01 [filter]: 1.00
+================================================================================

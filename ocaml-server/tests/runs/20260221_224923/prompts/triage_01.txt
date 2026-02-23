@@ -1,0 +1,106 @@
+=== SYSTEM ===
+You are a helpful email assistant in an ongoing multi-turn chat. The user is: Bob Martinez <bob@acme.com>. Current date/time: 2026-02-21 22:49:57 (local); 2026-02-22T06:49:57Z (UTC).
+The conversation below includes previous user/assistant turns as context.
+The final user message is the question you must answer.
+Immediately before it, you may see a message containing emails retrieved from the user's archive under the heading EMAILS THAT MAY BE RELEVANT. Use these emails as evidence to answer the question.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+Do not invent email facts that are not in the provided emails.
+Do not greet, do not restate the question, and do not narrate your process.
+
+Each email's body may contain labelled sections:
+- NEW CONTENT: the message the sender actually wrote
+- QUOTED CONTEXT: previous thread history (older messages being replied to)
+- QUOTED CONTEXT (older, summarized): summarized older thread history
+- ATTACHMENTS (summaries): summaries of attached files
+Not all sections will be present in every email.
+
+Each email header may include triage metadata:
+- action=N/100: how much the email requires action or a response from the user (0 = purely informational, 100 = urgent action required)
+- importance=N/100: overall importance of the email to the user
+- reply_by=<date>: estimated deadline for a response, if any
+- processed=true: the user has already dealt with this email; no further action is needed regardless of the action score
+
+=== USER ===
+EMAILS THAT MAY BE RELEVANT:
+
+[Email 1] doc_id=alice-ooo-052@test.example.com date=Fri, 14 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Engineering Team <engineering@acme.com> subject=Out of office Feb 17-21
+NEW CONTENT:
+Team,
+
+OOO February 17-21 (family vacation).
+
+During my absence:
+- Falcon: Bob Martinez
+- Budget: Carol Davis
+- Urgent: Text my cell
+
+Limited email, will respond to critical items within 24h.
+
+Alice
+
+[Email 2] doc_id=server-down-004@test.example.com date=Tue, 11 Feb 2025 03:15:00 +0000 from=Dave Wilson <dave@acme.com> to=Bob Martinez <bob@acme.com> cc=Ops Team <ops@acme.com> subject=URGENT: Production server down - immediate action needed
+NEW CONTENT:
+Bob,
+
+Production server us-east-1 is DOWN. All customer-facing APIs are returning 503.
+This started at 3:05 AM UTC. We need someone to investigate ASAP.
+
+The monitoring dashboard shows:
+- CPU usage spiked to 100% at 3:04 AM
+- Database connections exhausted
+- No recent deployments in the last 24h
+
+I've already paged the on-call team but haven't gotten a response.
+Please escalate if you can.
+
+-- Dave
+
+[Email 3] doc_id=server-reply1-017@test.example.com date=Tue, 11 Feb 2025 03:45:00 +0000 from=Bob Martinez <bob@acme.com> to=Dave Wilson <dave@acme.com> cc=Ops Team <ops@acme.com> subject=Re: URGENT: Production server down - immediate action needed
+NEW CONTENT:
+Dave,
+
+I'm on it. The new batch job deployed Friday has a connection leak — each run opens 50 connections and never releases them.
+
+Restarted the app server and bumped pool limit to 200. APIs responding again.
+
+Will push proper fix in the morning.
+
+Bob
+
+[Email 4] doc_id=server-reply2-018@test.example.com date=Tue, 11 Feb 2025 08:30:00 +0000 from=Dave Wilson <dave@acme.com> to=Bob Martinez <bob@acme.com> cc=Ops Team <ops@acme.com> subject=Re: URGENT: Production server down - immediate action needed
+NEW CONTENT:
+Bob,
+
+Confirmed: nightly analytics batch job missing a finally block in DB client. Leaking 50 connections per run since Friday.
+
+Fix deployed to staging. Please review PR #847 — want it in prod before tonight's batch window.
+
+Also added connection pool monitor to Grafana.
+
+Dave
+
+[Email 5] doc_id=server-resolved-019@test.example.com date=Tue, 11 Feb 2025 16:00:00 +0000 from=Dave Wilson <dave@acme.com> to=Bob Martinez <bob@acme.com>, Alice Chen <alice@acme.com> cc=Ops Team <ops@acme.com> subject=Re: URGENT: Production server down - RESOLVED + Postmortem
+NEW CONTENT:
+Team,
+
+Production outage fully resolved. Fix deployed to prod at 14:30 UTC.
+
+Postmortem:
+- Root cause: Connection leak in nightly analytics batch job (PR #831, deployed Fri Feb 7)
+- Impact: 45 minutes full outage, ~12 min degraded
+- Fix: Connection cleanup in finally block (PR #847)
+- Prevention: Connection pool monitoring alert at 80% capacity
+
+Full doc: https://wiki.acme.com/postmortem/2025-02-11
+
+Dave
+
+=== USER ===
+Are there any urgent emails that need immediate attention?
+
+Answer based on the retrieved emails above.
+Do not greet, do not offer to help, and do not ask for a follow-up question.
+Start immediately with the answer (no preamble).
+If the request involves ordering or selecting items by time/recency, use the dates in the EMAILS THAT MAY BE RELEVANT list to decide which emails are newest.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+

@@ -1,0 +1,223 @@
+######## LLM CALL 1: rewrite (model=qwen2.5:3b) ########
+
+--- SYSTEM ---
+You help search an email archive by generating queries that will be matched against stored emails via cosine similarity on text embeddings.
+The user (the email account owner) is: Bob Martinez <bob@acme.com>.
+
+Each stored email is indexed in this exact format:
+From: <sender>
+To: <recipients>
+Cc: <cc recipients>
+Bcc: <bcc recipients>
+Subject: <subject line>
+Date: <date>
+Attachments: <filenames, if any>
+TRIAGE: action_required=N/100 importance=N/100 reply_by=<date or none>
+
+QUOTED CONTEXT (older, summarized):
+<LLM-summarized older thread history, if the thread is long>
+
+QUOTED CONTEXT:
+<previous thread messages being replied to>
+
+ATTACHMENTS (summaries):
+<summaries of attached files, if any>
+
+NEW CONTENT:
+<the message the sender actually wrote>
+
+CRITICAL RULE: NEVER invent or fabricate information. Use ONLY what is explicitly stated in the user's question and the conversation context.
+
+Output ONLY a JSON object with these fields:
+- "no_retrieval": Boolean. Set to true if the question can clearly be answered without searching the email archive. You MUST set this to true for: greetings and small talk ("Hi", "Hello", "How are you?", "Thanks"), general knowledge questions unrelated to the user's emails ("What is DKIM?", "Explain TCP/IP", "What day is it?"), meta questions about the conversation itself, or arithmetic/logic questions. Set to false ONLY when the question is about the user's emails, contacts, meetings, projects, or anything that would require looking up actual email content. If no_retrieval is true, output ONLY {"no_retrieval": true} and nothing else.
+
+The remaining fields are ONLY required when no_retrieval is false:
+- "resolved_question": Rewrite the user's last message so that relative references (e.g. "the second email", "that one") are replaced by concrete identifiers from the conversation context. Also resolve pronouns, relative dates, and implicit references. NEVER add information that is not in the original question or conversation context. If the question is already self-contained, return it EXACTLY as-is, word for word. This field must ALWAYS be a real question — NEVER output "..." or an empty string here.
+- "hyp_from": The From header of a hypothetical email matching the question. Use names/emails from the question or context. For any detail you do not know, write "..." (three dots) as a placeholder.
+- "hyp_to": The To header. Use names/emails from the question or context. If unknown, write "...".
+- "hyp_subject": A Subject line using ONLY terms from the question. Do NOT invent a specific topic. If the question is broad (e.g. "what does X write about"), use "..." as the subject.
+- "hyp_body": 1-2 sentences using ONLY terms from the question. Use "..." for any unknown details. Write in first person as the sender. NEVER invent specific facts, projects, or topics not mentioned in the question.
+
+The following two fields are optional SQL fragments used to filter and rerank the vector search results.
+The query runs against the emails table with these columns:
+  doc_id TEXT, sender TEXT, recipient TEXT, cc TEXT, bcc TEXT, subject TEXT, email_date TIMESTAMPTZ, attachments TEXT[] (array of filenames), action_score INT, importance_score INT, reply_by TIMESTAMPTZ (deadline date), processed BOOLEAN, ingested_at TIMESTAMPTZ, cosine_distance FLOAT (0 = perfect match, 1 = unrelated)
+The base query already orders by cosine_distance ASC (most similar first).
+- "filter": A SQL WHERE-clause fragment to narrow results. Use only the columns listed above. Do NOT prefix columns with a table alias. Examples: "sender ILIKE '%alice%'", "email_date >= '2025-02-01'", "processed = FALSE". If no filtering is needed, omit this field or set it to null.
+- "score_expr": A SQL expression that produces a numeric score for reranking. Higher = better. You may combine cosine_distance with other columns. Example: "(1.0 - cosine_distance) + CASE WHEN email_date >= '2025-02-01' THEN 0.2 ELSE 0 END". If no reranking is needed, omit this field or set it to null.
+
+Current date/time: 2026-02-22 01:17:17.
+Output raw JSON only, no markdown fencing, no explanation.
+
+--- USER ---
+Give me a full overview of security-related emails.
+
+--- RESPONSE ---
+{"no_retrieval": false}                                                                                                                                                                                                  
+{
+    "resolved_question": "What is the summary of all security-related emails from Bob Martinez?",
+    "hyp_from": "Bob Martinez <bob@acme.com>",
+    "hyp_to": "...",
+    "hyp_subject": "security overview",
+    "hyp_body": "I am looking for a full overview of recent security-related emails sent by me."
+}
+
+========================================
+
+######## LLM CALL 2: select_evidence (model=qwen2.5:3b) ########
+
+--- SYSTEM ---
+You are helping decide which retrieved emails need their full content loaded to answer a user's question.
+The user (the email account owner) is: Bob Martinez <bob@acme.com>.
+
+Below is a table of emails retrieved from the user's archive by semantic similarity. Each row shows metadata only (no body text).
+
+[1] score=0.67 from=Henry Liu <henry@acme.com> to=Bob Martinez <bob@acme.com> subject=Q1 Security scan results date=2025-02-10 14:00:00+00
+[2] score=0.63 from=Monitoring <monitoring@acme.com> to=Bob Martinez <bob@acme.com> cc=Dave Wilson <dave@acme.com> subject=[ALERT] Disk space warning - prod-db-01 at 85% date=2025-02-12 22:00:00+00
+[3] score=0.62 from=Tony Russo <tony@acme.com> to=Alice Chen <alice@acme.com>, Bob Martinez <bob@acme.com> subject=Falcon QA status report - Week of Feb 10 date=2025-02-14 10:00:00+00
+[4] score=0.62 from=Eve Park <eve@acme.com> to=Bob Martinez <bob@acme.com> subject=Reminder: expense reports due Feb 21 date=2025-02-17 09:00:00+00
+[5] score=0.62 from=Grace Kim <grace@acme.com> to=Bob Martinez <bob@acme.com> subject=Falcon pre-launch campaign metrics date=2025-02-14 16:00:00+00
+
+The user's question is:
+Give me a full overview of security-related emails.
+
+Select ONLY the emails whose full body content is likely needed to answer the question.
+Consider:
+- Subject line relevance to the question
+- Sender/recipient relevance
+- Date relevance (e.g. if the user asks about recent emails)
+- Whether the question could be answered from headers alone (e.g. "who emailed me about X?" may only need headers)
+- Triage metadata (action_score, importance_score) if the question is about urgency or priorities
+
+Output ONLY a JSON array of the 1-based row numbers of relevant emails.
+Example: [1, 3, 5]
+If ALL emails seem relevant, return all their numbers.
+If NONE seem relevant, return an empty array: []
+Output raw JSON only, no markdown fencing, no explanation.
+
+--- RESPONSE ---
+[]
+
+========================================
+
+######## LLM CALL 3: chat (model=qwen2.5:14b) ########
+
+--- SYSTEM ---
+You are a helpful email assistant in an ongoing multi-turn chat. The user is: Bob Martinez <bob@acme.com>. Current date/time: 2026-02-22 01:17:21 (local); 2026-02-22T09:17:21Z (UTC).
+The conversation below includes previous user/assistant turns as context.
+The final user message is the question you must answer.
+Immediately before it, you may see a message containing emails retrieved from the user's archive under the heading EMAILS THAT MAY BE RELEVANT. Use these emails as evidence to answer the question.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+Do not invent email facts that are not in the provided emails.
+Do not greet, do not restate the question, and do not narrate your process.
+
+The email body may contain these labelled sections (in this order, not all will be present):
+- QUOTED CONTEXT (older, summarized): LLM-summarized older thread history
+- QUOTED CONTEXT: previous thread messages being replied to
+- ATTACHMENTS (summaries): summaries of attached files
+- NEW CONTENT: the message the sender actually wrote
+
+Each email header may include triage metadata:
+- action=N/100: how much the email requires action or a response from the user (0 = purely informational, 100 = urgent action required)
+- importance=N/100: overall importance of the email to the user
+- reply_by=<date>: estimated deadline for a response, if any
+- processed=true: the user has already dealt with this email; no further action is needed regardless of the action score
+
+--- USER ---
+EMAILS THAT MAY BE RELEVANT:
+
+[Email 1] doc_id=falcon-qa-020@test.example.com date=Fri, 14 Feb 2025 10:00:00 +0000 from=Tony Russo <tony@acme.com> to=Alice Chen <alice@acme.com>, Bob Martinez <bob@acme.com> subject=Falcon QA status report - Week of Feb 10
+NEW CONTENT:
+Hi Alice, Bob,
+
+QA status for Project Falcon:
+
+Completed:
+- User auth flow (32/32 passing)
+- Payment processing (28/30 — 2 blocked on API keys)
+- Dashboard analytics (all green)
+
+Blocked:
+- Payment gateway integration tests (waiting for API keys)
+- Load testing (staging had issues earlier this week)
+
+Risk: If API keys not received by March 5, we won't hit March 12 QA deadline.
+
+Tony
+
+[Email 2] doc_id=marketing-metrics-034@test.example.com date=Fri, 14 Feb 2025 16:00:00 +0000 from=Grace Kim <grace@acme.com> to=Bob Martinez <bob@acme.com> subject=Falcon pre-launch campaign metrics
+NEW CONTENT:
+Bob,
+
+Early teaser results:
+- Blog views: 4,200 (2x average)
+- Email open rate: 34% (industry avg 21%)
+- Webinar registrations: 180 (target 300)
+- Social impressions: 28K
+
+Full breakdown attached.
+
+Grace
+
+[Email 3] doc_id=security-scan-023@test.example.com date=Mon, 10 Feb 2025 14:00:00 +0000 from=Henry Liu <henry@acme.com> to=Bob Martinez <bob@acme.com> subject=Q1 Security scan results
+NEW CONTENT:
+Bob,
+
+Attached is the Q1 security scan report. Summary:
+
+- Critical: 1 (CVE-2025-1234 in log4j)
+- High: 3 (outdated TLS, weak password policy, exposed debug endpoint)
+- Medium: 7
+- Low: 12
+
+Critical CVE must be patched within 48 hours per policy.
+
+Henry
+
+[Email 4] doc_id=expense-deadline-048@test.example.com date=Mon, 17 Feb 2025 09:00:00 +0000 from=Eve Park <eve@acme.com> to=Bob Martinez <bob@acme.com> subject=Reminder: expense reports due Feb 21
+NEW CONTENT:
+Bob,
+
+Q4 2024 expense reports due February 21.
+
+Outstanding in Concur:
+1. AWS training ($450) - Dec 12
+2. Team dinner ($380) - Dec 18
+3. JetBrains license ($249) - Jan 5
+
+Please submit ASAP.
+
+Eve
+Finance
+
+[Email 5] doc_id=monitoring-disk-044@test.example.com date=Wed, 12 Feb 2025 22:00:00 +0000 from=Monitoring <monitoring@acme.com> to=Bob Martinez <bob@acme.com> cc=Dave Wilson <dave@acme.com> subject=[ALERT] Disk space warning - prod-db-01 at 85%
+NEW CONTENT:
+ALERT: Disk space warning
+
+Host: prod-db-01.acme.internal
+Metric: disk_usage_percent | Current: 85% | Threshold: 80%
+Partition: /data/postgres
+
+Growing ~2%/day. Est. full in ~7 days.
+
+Action: Archive old transaction logs or expand volume.
+
+Automated alert.
+
+--- USER ---
+Give me a full overview of security-related emails.
+
+Answer based on the retrieved emails above.
+Do not greet, do not offer to help, and do not ask for a follow-up question.
+Start immediately with the answer (no preamble).
+If the request involves ordering or selecting items by time/recency, use the dates in the EMAILS THAT MAY BE RELEVANT list to decide which emails are newest.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+
+--- RESPONSE ---
+Security-related emails:
+
+- [Email 3] Security scan results for Q1. Summary includes 1 critical CVE (CVE-2025-1234 in log4j) that must be patched within 48 hours per policy, and other high, medium, and low-risk issues.
+
+No other security-related emails were found in the provided list.
+
+========================================
+

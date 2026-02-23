@@ -149,12 +149,20 @@ let ingestQueueNextId = 1;
 /*
   Ingestion status cache for custom column display.
 
-  Maps headerMessageId → { ingested: bool, processed: bool }.
+  Maps headerMessageId → { ingested: bool, processed: bool, reply_by: string }.
   Populated by the background script via updateIngestStatusCache(), which
   polls the OCaml server's /admin/ingested_status endpoint.
   Read synchronously by the custom column handler's getCellText().
 */
 const ingestStatusCache = new Map();
+
+/* Parse "YYYY-MM-DD" to days since epoch; returns 0 on failure. */
+function replyByToDays(s) {
+  if (!s) return 0;
+  const ms = Date.parse(s + "T00:00:00Z");
+  if (Number.isNaN(ms)) return 0;
+  return Math.floor(ms / 86400000);
+}
 
 /* Column handler ID used for gDBView.addColumnHandler / treecol element. */
 const INGEST_COL_ID = "ragIngestStatusCol";
@@ -196,9 +204,9 @@ const ingestColumnHandler = {
   getSortLongForRow(hdr) {
     const mid = hdr.messageId || "";
     const st = ingestStatusCache.get(mid);
-    if (!st) return 0;
-    if (!st.ingested) return 1;
-    return st.processed ? 3 : 2;
+    if (!st || !st.ingested) return 999999999;
+    const days = replyByToDays(st.reply_by);
+    return days > 0 ? days : 999999998;
   },
   getSortStringForRow(hdr) { return ""; },
   isString() { return false; },
@@ -302,10 +310,11 @@ function registerIngestColumn() {
 
       if (ThreadPaneColumns.addCustomColumn) {
         // TB 140 signature: addCustomColumn(id, properties)
+        // name = "ThunderRAG" appears in the column picker dropdown menu.
+        // The column header text is overridden to 🛢 via DOM fixup below.
         ThreadPaneColumns.addCustomColumn(INGEST_COL_ID, {
-          name: "RAG",
+          name: "ThunderRAG",
           hidden: false,
-          icon: false,
           resizable: false,
           sortable: true,
           textCallback(msgHdr) {
@@ -319,6 +328,51 @@ function registerIngestColumn() {
         });
         cachedThreadPaneColumns = ThreadPaneColumns;
         consoleService.logStringMessage("[ragFilterAction] registered RAG column via ThreadPaneColumns.addCustomColumn");
+
+        // Inject persistent CSS to override the column header text with 🛢
+        // and enforce narrow fixed width.  The stylesheet stays in the
+        // about:3pane document across folder switches (no page reload).
+        try {
+          const doc = about3Pane.document || win.document;
+          const STYLE_ID = "ragIngestStatusCol-style";
+          if (doc && !doc.getElementById(STYLE_ID)) {
+            const style = doc.createElement("style");
+            style.id = STYLE_ID;
+            style.textContent = `
+              /* --- ThunderRAG column header: show 🛢 instead of "ThunderRAG" --- */
+              th#${INGEST_COL_ID},
+              [is="tree-view-table-header-cell"]#${INGEST_COL_ID} {
+                max-width: 32px !important;
+                min-width: 32px !important;
+                width: 32px !important;
+              }
+              th#${INGEST_COL_ID} button,
+              [is="tree-view-table-header-cell"]#${INGEST_COL_ID} button {
+                font-size: 0 !important;
+                overflow: hidden !important;
+                padding: 0 2px !important;
+              }
+              th#${INGEST_COL_ID} button::before,
+              [is="tree-view-table-header-cell"]#${INGEST_COL_ID} button::before {
+                content: "\\1F6E2" !important;
+                font-size: 14px !important;
+              }
+              /* --- ThunderRAG column cells: fixed narrow width --- */
+              td.${INGEST_COL_ID}-column,
+              [data-column-id="${INGEST_COL_ID}"] {
+                max-width: 32px !important;
+                min-width: 32px !important;
+                width: 32px !important;
+                text-align: center !important;
+              }
+            `;
+            (doc.head || doc.documentElement).appendChild(style);
+            consoleService.logStringMessage("[ragFilterAction] injected persistent column CSS");
+          }
+        } catch (cssErr) {
+          consoleService.logStringMessage("[ragFilterAction] CSS injection error: " + cssErr);
+        }
+
         return true;
       } else {
         consoleService.logStringMessage(
@@ -342,9 +396,10 @@ function registerIngestColumn() {
               ? doc.createXULElement("treecol")
               : doc.createElement("treecol");
             col.setAttribute("id", INGEST_COL_ID);
-            col.setAttribute("label", "RAG");
+            col.setAttribute("label", "ThunderRAG");
+            col.setAttribute("display", "\uD83D\uDEE2");
             col.setAttribute("tooltiptext", "ThunderRAG ingestion status");
-            col.setAttribute("width", "36");
+            col.setAttribute("width", "28");
             col.setAttribute("fixed", "true");
             threadCols.appendChild(col);
             consoleService.logStringMessage("[ragFilterAction] added RAG column via legacy treecol fallback");
@@ -1238,11 +1293,16 @@ function ensureMsgWindowForConversion(msgWindow) {
 /* POST raw RFC822 bytes to the OCaml ingest endpoint as message/rfc822.
    Retries with 127.0.0.1 if localhost fails (common IPv6/IPv4 mismatch). */
 async function postMessage(endpoint, rawBytes, msgHdr) {
+  const msgId = msgHdr?.messageId || "";
   let blob = new Blob([rawBytes], { type: "message/rfc822" });
 
   let headers = new Headers();
   headers.set("Content-Type", "message/rfc822");
-  headers.set("X-Thunderbird-Message-Id", msgHdr.messageId || "");
+  headers.set("X-Thunderbird-Message-Id", msgId);
+
+  consoleService.logStringMessage(
+    `[ragFilterAction] postMessage: POSTing ${rawBytes.length} bytes to ${endpoint} messageId=${msgId}`
+  );
 
   let resp;
   try {
@@ -1252,7 +1312,6 @@ async function postMessage(endpoint, rawBytes, msgHdr) {
       body: blob,
     });
   } catch (e) {
-    const msgId = msgHdr?.messageId || "";
     const msg = String(e || "");
     const isNetworkError = msg.includes("NetworkError") || msg.includes("Failed to fetch");
 
@@ -1301,8 +1360,15 @@ async function postMessage(endpoint, rawBytes, msgHdr) {
     if (bodyText && bodyText.length > 500) {
       bodyText = bodyText.slice(0, 500) + "…";
     }
+    consoleService.logStringMessage(
+      `[ragFilterAction] postMessage: server returned ${resp.status} messageId=${msgId} body=${bodyText}`
+    );
     throw new Error(`POST failed: ${resp.status} ${resp.statusText}${bodyText ? ` body=${bodyText}` : ""}`);
   }
+
+  consoleService.logStringMessage(
+    `[ragFilterAction] postMessage: success ${resp.status} messageId=${msgId}`
+  );
 }
 
 /* Signal filter completion to Thunderbird's copy listener.
@@ -1894,10 +1960,10 @@ var ragFilterAction = class extends ExtensionCommon.ExtensionAPI {
             const obj = JSON.parse(cacheJson);
             for (const [k, v] of Object.entries(obj)) {
               if (v && typeof v === "object") {
-                ingestStatusCache.set(k, { ingested: !!v.ingested, processed: !!v.processed });
+                ingestStatusCache.set(k, { ingested: !!v.ingested, processed: !!v.processed, reply_by: v.reply_by || "" });
               } else {
                 // Legacy boolean format fallback.
-                ingestStatusCache.set(k, { ingested: !!v, processed: false });
+                ingestStatusCache.set(k, { ingested: !!v, processed: false, reply_by: "" });
               }
             }
             // Refresh the column so it repaints with the new cache data.

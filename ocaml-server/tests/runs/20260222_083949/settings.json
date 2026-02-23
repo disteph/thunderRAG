@@ -1,0 +1,33 @@
+{
+  "ollama": {
+    "base_url": "http://127.0.0.1:11434",
+    "embed_model": "nomic-embed-text",
+    "llm_model": "qwen2.5:14b",
+    "summarize_model": "qwen2.5:3b",
+    "triage_model": "qwen2.5:14b",
+    "rewrite_model": "qwen2.5:14b"
+  },
+  "pg": { "database": "thunderrag_test" },
+  "rag": {
+    "chunk_size": 1500,
+    "chunk_overlap": 200,
+    "max_evidence_sources": 8,
+    "max_evidence_chars_per_email": 4000,
+    "quoted_context": {
+      "summarize": true,
+      "max_lines": 150,
+      "max_chars": 8000,
+      "max_input_chars": 30000
+    },
+    "attachments": {
+      "summarize": true,
+      "max_attachments": 4,
+      "max_chars": 1500,
+      "max_input_chars": 20000,
+      "max_bytes": 5000000,
+      "use_pdftotext": true,
+      "use_pandoc": true
+    }
+  },
+  "debug": { "ollama_embed": true, "ollama_chat": true, "retrieval": true }
+}

@@ -1,0 +1,139 @@
+=== SYSTEM ===
+You are a helpful email assistant in an ongoing multi-turn chat. The user is: Bob Martinez <bob@acme.com>. Current date/time: 2026-02-21 23:12:36 (local); 2026-02-22T07:12:36Z (UTC).
+The conversation below includes previous user/assistant turns as context.
+The final user message is the question you must answer.
+Immediately before it, you may see a message containing emails retrieved from the user's archive under the heading EMAILS THAT MAY BE RELEVANT. Use these emails as evidence to answer the question.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+Do not invent email facts that are not in the provided emails.
+Do not greet, do not restate the question, and do not narrate your process.
+
+Each email's body may contain labelled sections:
+- NEW CONTENT: the message the sender actually wrote
+- QUOTED CONTEXT: previous thread history (older messages being replied to)
+- QUOTED CONTEXT (older, summarized): summarized older thread history
+- ATTACHMENTS (summaries): summaries of attached files
+Not all sections will be present in every email.
+
+Each email header may include triage metadata:
+- action=N/100: how much the email requires action or a response from the user (0 = purely informational, 100 = urgent action required)
+- importance=N/100: overall importance of the email to the user
+- reply_by=<date>: estimated deadline for a response, if any
+- processed=true: the user has already dealt with this email; no further action is needed regardless of the action score
+
+=== USER ===
+What's the current state of our Q1 budget?
+
+=== ASSISTANT ===
+Eve sent you a revised Q1 budget allocation for engineering on February 14, 2025. The total is $420,000 with changes in infrastructure spending and new headcount requests. You need to sign off by February 21 [Email 1].
+
+EMAILS REFERENCED ABOVE:
+[Email 1] date=Fri, 14 Feb 2025 12:00:00 +0000 from=Eve Park <eve@acme.com> to=Bob Martinez <bob@acme.com> cc=Carol Davis <carol@acme.com> subject=Revised Q1 budget allocation - engineering
+
+=== USER ===
+How does the revised budget compare to the original Q1 report?
+
+=== ASSISTANT ===
+The revised Q1 budget allocation sent on February 14, 2025, reflects increases in infrastructure spending due to cloud overruns and new headcount requests for engineering. The original financial report indicates that operating expenses are within the initial budget but does not specify exact figures for engineering costs [Email 1]. The revised allocation totals $420,000, with adjustments primarily impacting infrastructure at $180,000 (up from an unspecified prior amount) and headcount additions [Email 2].
+
+EMAILS REFERENCED ABOVE:
+[Email 1] date=Thu, 13 Feb 2025 11:30:00 +0000 from=Eve Park <eve@acme.com> to=Bob Martinez <bob@acme.com> subject=Q1 financial report attached
+[Email 2] date=Fri, 14 Feb 2025 12:00:00 +0000 from=Eve Park <eve@acme.com> to=Bob Martinez <bob@acme.com> cc=Carol Davis <carol@acme.com> subject=Revised Q1 budget allocation - engineering
+
+=== USER ===
+When is the budget review meeting?
+
+=== ASSISTANT ===
+The Q1 budget review meeting was rescheduled to February 24 at 2pm [Email 1].
+
+EMAILS REFERENCED ABOVE:
+[Email 1] date=Wed, 19 Feb 2025 09:00:00 +0000 from=Carol Davis <carol@acme.com> to=Bob Martinez <bob@acme.com> subject=Q1 budget review - rescheduled to Feb 24
+
+=== USER ===
+EMAILS THAT MAY BE RELEVANT:
+
+[Email 1] doc_id=budget-meeting-003@test.example.com date=Mon, 10 Feb 2025 08:00:00 +0000 from=Carol Davis <carol@acme.com> to=Engineering Team <engineering@acme.com> cc=Bob Martinez <bob@acme.com>, Finance <finance@acme.com> subject=Q1 budget review meeting - Feb 20
+NEW CONTENT:
+Hi team,
+
+Reminder: the Q1 budget review meeting is scheduled for February 20, 2025 at 2pm in Conference Room B.
+
+Please bring your department expense reports and any budget change requests.
+We need to finalize allocations before the March board meeting.
+
+Agenda:
+1. Q1 actuals vs. plan
+2. Headcount requests
+3. Infrastructure spending
+4. Travel budget adjustments
+
+Regards,
+Carol
+
+[Email 2] doc_id=expense-deadline-048@test.example.com date=Mon, 17 Feb 2025 09:00:00 +0000 from=Eve Park <eve@acme.com> to=Bob Martinez <bob@acme.com> subject=Reminder: expense reports due Feb 21
+NEW CONTENT:
+Bob,
+
+Q4 2024 expense reports due February 21.
+
+Outstanding in Concur:
+1. AWS training ($450) - Dec 12
+2. Team dinner ($380) - Dec 18
+3. JetBrains license ($249) - Jan 5
+
+Please submit ASAP.
+
+Eve
+Finance
+
+[Email 3] doc_id=q1-report-006@test.example.com date=Thu, 13 Feb 2025 11:30:00 +0000 from=Eve Park <eve@acme.com> to=Bob Martinez <bob@acme.com> subject=Q1 financial report attached
+NEW CONTENT:
+Hi Bob,
+
+Please find attached the Q1 financial report for your review before the budget meeting.
+
+Key highlights:
+- Revenue: $2.4M (up 15% YoY)
+- Operating expenses: $1.8M (within budget)
+- Net margin: 25%
+
+Let me know if you have questions.
+
+Eve
+
+[Email 4] doc_id=deadline-013@test.example.com date=Wed, 12 Feb 2025 09:00:00 +0000 from=Nora Patel <nora@acme.com> to=Bob Martinez <bob@acme.com> subject=Compliance audit documents needed by Feb 28
+NEW CONTENT:
+Hi Bob,
+
+The annual compliance audit is coming up. I need these documents by February 28, 2025:
+
+1. Code review logs for Q4 2024
+2. Security incident reports
+3. Access control audit trail
+4. Data retention policy acknowledgments
+
+This deadline is firm - the auditors arrive March 3.
+
+Thanks,
+Nora
+
+[Email 5] doc_id=meeting-reschedule-053@test.example.com date=Wed, 19 Feb 2025 09:00:00 +0000 from=Carol Davis <carol@acme.com> to=Bob Martinez <bob@acme.com> subject=Q1 budget review - rescheduled to Feb 24
+NEW CONTENT:
+Bob,
+
+Q1 budget review rescheduled from Feb 20 to Feb 24 (Monday) 2pm, Conference Room B.
+
+Alice is OOO this week and we need her input on Falcon budget.
+
+Same agenda. Bring updated expense reports.
+
+Carol
+
+=== USER ===
+What expense reports do I need to submit?
+
+Answer based on the retrieved emails above.
+Do not greet, do not offer to help, and do not ask for a follow-up question.
+Start immediately with the answer (no preamble).
+If the request involves ordering or selecting items by time/recency, use the dates in the EMAILS THAT MAY BE RELEVANT list to decide which emails are newest.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+

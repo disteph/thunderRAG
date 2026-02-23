@@ -1,0 +1,516 @@
+================================================================================
+ThunderRAG Quality Test Report
+Run: 20260220_195341  Duration: 1440.3s  Cases: 69
+================================================================================
+
+--------------------------------------------------------------------------------
+TEST: factual_01 [factual]
+  A: The Project Falcon launch date is March 17, 2025. [Email 2]
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: factual_02 [factual]
+  A: Carol Davis scheduled the Q1 budget review meeting on February 10, 2025. Initially set for February 20, 2025 at 2pm in Conference Room B, it was later rescheduled to February 24, 2025 [Email 3, Email ...
+  No anomalies.
+  SCORE: 0.67
+
+--------------------------------------------------------------------------------
+TEST: factual_03 [factual]
+  A: Key highlights from the Q1 financial report include: - Revenue: $2.4M (up 15% YoY) - Operating expenses: $1.8M (within budget) - Net margin: 25%  [Email 5]
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: factual_04 [factual]
+  A: The CloudStore Inc. contract renewal price is $45,000/year, up from $38,000. The recommendation was to negotiate for a lower price using DataVault's offer of $35,000/year and aim for a final agreement...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: factual_05 [factual]
+  A: CVE-2025-1234, a critical remote code execution vulnerability in log4j 2.17.0, was found affecting the order-processing-service in production. It has been patched and deployed to production at 10:45 U...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: triage_01 [triage]
+  A: [Email 2] requires immediate action due to the urgent issue with the production server. No other urgent actions are indicated in the emails provided.
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: triage_02 [triage]
+  A: - Falcon timeline and March 17 launch: Discuss with Alice during 1:1 meeting on Feb 14 [Email 2]. - Lisa Wong onboarding follow-up: Check in with her progress since she started a week ago; discuss wit...
+  No anomalies.
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: thread_incident_01 [thread]
+  A: On February 11, 2025, at 3:05 AM UTC, the production server in us-east-1 experienced a downtime where all customer-facing APIs were returning 503 errors. Dave Wilson reported that CPU usage spiked to ...
+  ANOMALIES (1):
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: thread_incident_02 [thread]
+  A: The production server outage was fixed when Dave Wilson identified a connection leak issue in a new batch job deployed on February 7th and pushed a fix for the connection leak to staging. The proper f...
+  ANOMALIES (1):
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: thread_incident_03 [thread]
+  A: BigCorp reported intermittent API timeouts since Monday, impacting 15% of POST /api/v2/orders requests. This affected $20K/day in failed transactions and threatened a CEO escalation if not resolved by...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: thread_vendor_01 [thread]
+  A: Frank Lee initiated a contract renewal negotiation with CloudStore Inc. for their storage services expiring on March 31, 2025, noting that CloudStore's current offer is $45,000/year while competitor D...
+  ANOMALIES (1):
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: thread_vendor_02 [thread]
+  A: Grace Kim compared CloudStore's offer at $45,000/year with DataVault's at $35,000/year. She recommended negotiating with CloudStore for a price of $40,000/year based on the higher quality and support ...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: thread_vendor_03 [thread]
+  A: Grace's analysis compared CloudStore and DataVault based on price, storage capacity, uptime SLA, support level, and migration risk. Specifically:  - **CloudStore**: $45,000/year with 99.9% uptime SLA,...
+  No anomalies.
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: broad_mark_01 [broad]
+  A: Mark Johnson is not mentioned in any of the retrieved emails.
+  No anomalies.
+  SCORE: 0.50
+
+--------------------------------------------------------------------------------
+TEST: broad_mark_02 [broad]
+  A: Mark Johnson emailed you about Lisa Wong starting as a new hire on Monday, February 10th. He requested that you set up her accounts and assign her a buddy [Email 2].
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: temporal_01 [temporal]
+  A: The most recent email you got from Alice is [Email 2] where she informs the team about her out-of-office status from February 17-21.
+  No anomalies.
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: temporal_02 [temporal]
+  A: You have a Q1 budget review meeting rescheduled for February 24 at 2pm in Conference Room B. Alice Chen is out of office until February 21 and will be unavailable during this period. Additionally, the...
+  No anomalies.
+  SCORE: 0.33
+
+--------------------------------------------------------------------------------
+TEST: attachment_01 [attachment]
+  A: The attachments you have received include: - Revised Falcon UI mockups ([Email 1]) - Alice Chen's out-of-office notification for February 17-21 ([Email 2]) - Compliance audit documents needed by Febru...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: attachment_02 [attachment]
+  A: The Q1 security scan report found 1 critical vulnerability (CVE-2025-1234 in log4j) and required it to be patched within 48 hours. There were also 3 high, 7 medium, and 12 low severity issues identifi...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: negative_01 [negative]
+  A: None of the retrieved emails mention a Mars colonization project. There is no correspondence related to this topic in the provided email archive.
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: negative_02 [negative]
+  A: The retrieved emails do not contain information about the CEO's salary. There is no mention of such details in any of the provided communications.
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_01 [multi_turn]
+  A: Project Falcon is a major project at Acme. The launch date for Project Falcon was confirmed on February 5, 2025, set for March 15, 2025 [Email 4]. Bob Martinez communicated that the QA team would be r...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_02 [multi_turn]
+  A: The original launch date for Project Falcon was set for March 15, 2025 [Email 3]. This date was updated by Alice Chen on February 13, 2025, to March 17, 2025 due to a request from the marketing team f...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_03 [multi_turn]
+  A: The current launch date for Project Falcon is March 17, 2025. The initial launch date was set for March 15, 2025, but it was updated to March 17 due to a request from the marketing team to align with ...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_04 [multi_turn]
+  A: Yes, there were staging environment issues. Specifically, on February 12, 2025, the Falcon v3.2 schema migration failed halfway through and left the orders table inconsistent, blocking integration tes...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_05 [multi_turn]
+  A: 
+  ANOMALIES (1):
+    - ANSWER TOO SHORT: 0 chars
+  SCORE: 0.33
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_06 [multi_turn]
+  A: The marketing plan for Project Falcon's launch includes four phases:  1. **Phase 1 (Mar 3-10): Teaser** — Social media, blog posts, and email blasts. 2. **Phase 2 (Mar 10-17): Pre-launch** — Webin...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_07 [multi_turn]
+  A: There is one open bug related to QA testing for Project Falcon. The payment gateway integration tests are blocked due to waiting for API keys and load testing issues need resolution after staging envi...
+  No anomalies.
+  SCORE: 0.67
+
+--------------------------------------------------------------------------------
+TEST: mt_falcon_08 [multi_turn]
+  A: Current risks and blockers for Project Falcon include:  1. **Payment Gateway Integration Tests**: Blocked due to waiting for API keys [Email 1]. 2. **Load Testing**: Staging environment issues earlier...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_01 [multi_turn]
+  A: The production server outage occurred on February 11, 2025. The us-east-1 server went down at 3:05 AM UTC with all customer-facing APIs returning 503 errors due to a connection leak issue caused by th...
+  ANOMALIES (1):
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_02 [multi_turn]
+  A: The production server outage occurred on February 11, 2025. The us-east-1 server went down at 3:05 AM UTC with all customer-facing APIs returning 503 errors due to a connection leak issue caused by th...
+  ANOMALIES (1):
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_03 [multi_turn]
+  A: The production server outage occurred on February 11, 2025. It started at 3:05 AM UTC and was fully resolved by 2:30 PM UTC. The fix involved restarting the application server and temporarily increasi...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_04 [multi_turn]
+  A: Yes, a postmortem was conducted and provided by Dave Wilson on February 11, 2025. According to the postmortem [Email 4], the root cause was a connection leak in the nightly analytics batch job deploye...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_05 [multi_turn]
+  A: Yes, BigCorp reported intermittent API timeouts since Monday, affecting 15% of requests for POST /api/v2/orders and resulting in $20K/day in failed transactions. Raj Gupta escalated this to Bob Martin...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_06 [multi_turn]
+  A: The customer issue with BigCorp is now resolved. Success rates have returned to 99.97% over the last 48 hours [Email 1]. Sam Chen confirmed that issues are resolved on their end and thanked for the qu...
+  ANOMALIES (1):
+    - POSSIBLE HALLUCINATED NAMES: tom
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_incident_07 [multi_turn]
+  A: There was a disk space warning for prod-db-01 on February 12th, indicating that the disk usage reached 85% and is growing at approximately 2%/day. The alert suggests archiving old transaction logs or ...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_lisa_01 [multi_turn]
+  A: I wrote about Lisa Wong on February 13, 2025, when I replied to her PR review request regarding the Falcon order validation refactor. The reason was to provide feedback and approval for her code chang...
+  No anomalies.
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: mt_lisa_02 [multi_turn]
+  A: According to Mark Johnson's message on February 6, 2025, Lisa Wong was scheduled to start working for the backend team at Acme starting on Monday, February 10. As no specific issues related to her onb...
+  No anomalies.
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: mt_lisa_03 [multi_turn]
+  A: In her first week, Lisa Wong asked several questions on February 11: 1. Recommended IDE for Falcon backend (she was using VS Code and saw some others use IntelliJ). 2. How to get staging DB access (st...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_lisa_04 [multi_turn]
+  A: Yes, Lisa Wong submitted a code pull request for Falcon order validation refactor. She asked about it on February 11 and received feedback with approval from Bob Martinez on February 13 [Email 4, Emai...
+  No anomalies.
+  SCORE: 0.67
+
+--------------------------------------------------------------------------------
+TEST: mt_lisa_05 [multi_turn]
+  A: Bob Martinez provided feedback on Lisa Wong's pull request for the Falcon order validation refactor. He approved her PR with suggestions: 1. Make validation rules configurable for product-specific rul...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_01 [multi_turn]
+  A: Recent emails have covered several topics: - Revised Falcon UI mockups were reviewed and feedback was incorporated. Ready for sign-off according to Patricia's latest update [Email 1]. - Alice Chen is ...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_02 [multi_turn]
+  A: The most urgent item is the production incident postmortem follow-up. Alice Chen's 1:1 agenda for February 14 includes discussing this topic and she mentioned a timeline for March 17 launch. Review th...
+  No anomalies.
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_03 [multi_turn]
+  A: The BigCorp situation involved API timeouts affecting their POST /api/v2/orders endpoint since Monday. Raj Gupta escalated this issue urgently due to potential CEO escalation if not resolved by Friday...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_04 [multi_turn]
+  A: Project Falcon's launch date has been updated to March 17, 2025, due to a marketing request. QA readiness is now required by March 12, and the dry run should be scheduled for March 14 [Email 3].  Tony...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_05 [multi_turn]
+  A: 
+  ANOMALIES (1):
+    - ANSWER TOO SHORT: 0 chars
+  SCORE: 0.33
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_06 [multi_turn]
+  A: Your performance review summary for FY2024 indicates that you exceeded expectations with a rating of 4 out of 5. Your strengths include technical leadership on Project Falcon and effective incident re...
+  ANOMALIES (1):
+    - POSSIBLE HALLUCINATED NAMES: mary
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_07 [multi_turn]
+  A: You need to: - Submit outstanding Q4 2024 expense reports by February 21 ([Email 2]). - Review and provide feedback on the Q1 financial report attached in [Email 3] before the budget meeting. - Provid...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_08 [multi_turn]
+  A: You have travel approved for the DevOps Summit 2025 in San Francisco from March 20-22. Submit your travel request in Concur by February 21 ([Email 1]). Additionally, you are scheduled to attend a Q1 b...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_09 [multi_turn]
+  A: At the DevOps Summit 2025, key takeaways included: 1. GitOps acceleration with ArgoCD and Flux becoming dominant tools. 2. OpenTelemetry emerging as the standard for observability (recommended to migr...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_mixed_10 [multi_turn]
+  A: Regarding casual or low-priority information:  - Henry Liu sent a Q1 security scan report indicating that critical CVE-2025-1234 in log4j must be patched within 48 hours per policy ([Email 1]). - The ...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_budget_01 [multi_turn]
+  A: The Q1 budget review meeting has been rescheduled from February 20 to February 24 at 2pm in Conference Room B. Revised budgets and expense reports are due before this meeting. Eve also sent a revised ...
+  No anomalies.
+  SCORE: 0.50
+
+--------------------------------------------------------------------------------
+TEST: mt_budget_02 [multi_turn]
+  A: The Q1 budget review has been rescheduled from February 20 to February 24. The latest financial report highlights a revenue of $2.4M (up 15% YoY) and operating expenses of $1.8M within the budget, res...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_budget_03 [multi_turn]
+  A: The Q1 budget review meeting has been rescheduled from February 20 to February 24 at 2pm in Conference Room B [Email 5].
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_budget_04 [multi_turn]
+  A: Q4 2024 expense reports due February 21. Outstanding items include AWS training ($450) - Dec 12, Team dinner ($380) - Dec 18, and JetBrains license ($249) - Jan 5 [Email 2].
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_budget_05 [multi_turn]
+  A: The Q1 budget review meeting is rescheduled for February 24 at 2pm in Conference Room B. Expense reports for Q4 2024 are due by February 21. No other financial deadlines were mentioned in the provided...
+  No anomalies.
+  SCORE: 0.83
+
+--------------------------------------------------------------------------------
+TEST: mt_budget_06 [multi_turn]
+  A: The total conference travel budget approved for Bob's attendance at the DevOps Summit 2025 is $3,800 [Email 1].
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_security_01 [multi_turn]
+  A: [Email 3] contains Q1 security scan results with one critical vulnerability (CVE-2025-1234 in log4j) that must be patched within 48 hours according to policy. There are also three high, seven medium, ...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_security_02 [multi_turn]
+  A: The Q1 security scan identified one critical vulnerability (CVE-2025-1234 in log4j), three high vulnerabilities (outdated TLS, weak password policy, exposed debug endpoint), seven medium vulnerabiliti...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_security_03 [multi_turn]
+  A: The critical CVE-2025-1234 in log4j has been patched and deployed to production by 10:45 UTC on February 11th. No other vulnerable instances were found after scanning.  Disk space issues on prod-db-01...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_design_01 [multi_turn]
+  A: Bob Martinez's feedback on the Falcon UI design has been addressed and revised by Patricia Owens. The revisions include adding estimated delivery time in order tracking, enabling CSV export for paymen...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_design_02 [multi_turn]
+  A: Feedback on the initial mockups given by Bob Martinez included: 1. Order tracking: Add estimated delivery time ([Email 5]) 2. Payment history: Need CSV export ([Email 5]) 3. Analytics: Chart colors ne...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_design_03 [multi_turn]
+  A: Yes, Patricia Owens implemented Bob Martinez's feedback on the initial Falcon UI mockups. The changes included adding estimated delivery time in order tracking, enabling CSV export for payment history...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_people_01 [multi_turn]
+  A: Alice Chen is a project lead for Falcon and has been following up on API keys. Dave Wilson works with Alice on the project and has provided updates on technical issues like database migrations. Tony R...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_people_02 [multi_turn]
+  A: Your annual performance review was conducted on February 7, 2025. The summary states that your rating is Exceeds Expectations (4/5). Strengths include technical leadership on Falcon and incident respo...
+  ANOMALIES (1):
+    - POSSIBLE HALLUCINATED NAMES: mary
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_people_03 [multi_turn]
+  A: You have mandatory compliance training due by March 1, 2025. The training includes Data Privacy & GDPR (45 min), Information Security Awareness (30 min), Anti-Harassment Policy (20 min), and a Code of...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: mt_people_04 [multi_turn]
+  A: The company offsite is scheduled for April 5-6 at Lakeside Resort. RSVP by February 25 and indicate any dietary restrictions. Activities include team-building exercises, a keynote from the CEO, and a ...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: crossref_01 [cross_reference]
+  A: According to Tony Russo's status report on February 14, 2025, the payment gateway integration tests are blocked due to pending API keys. Dave Wilson's team has indicated that the keys are still pendin...
+  No anomalies.
+  SCORE: 1.00
+
+--------------------------------------------------------------------------------
+TEST: crossref_02 [cross_reference]
+  A: The pending payment gateway API keys block QA testing for 2 out of 30 tests. Tony Russo's status report on February 14, 2025, indicates this will prevent hitting the March 12 QA deadline if not receiv...
+  No anomalies.
+  SCORE: 1.00
+
+================================================================================
+SUMMARY
+================================================================================
+Anomalies: 10
+  [thread_incident_01] POSSIBLE HALLUCINATED NAMES: tom
+  [thread_incident_02] POSSIBLE HALLUCINATED NAMES: tom
+  [thread_vendor_01] POSSIBLE HALLUCINATED NAMES: tom
+  [mt_falcon_05] ANSWER TOO SHORT: 0 chars
+  [mt_incident_01] POSSIBLE HALLUCINATED NAMES: tom
+  [mt_incident_02] POSSIBLE HALLUCINATED NAMES: tom
+  [mt_incident_06] POSSIBLE HALLUCINATED NAMES: tom
+  [mt_mixed_05] ANSWER TOO SHORT: 0 chars
+  [mt_mixed_06] POSSIBLE HALLUCINATED NAMES: mary
+  [mt_people_02] POSSIBLE HALLUCINATED NAMES: mary
+Mean score: 0.93
+
+Per-case:
+  factual_01 [factual]: 1.00
+  factual_02 [factual]: 0.67 *** LOW ***
+  factual_03 [factual]: 1.00
+  factual_04 [factual]: 1.00
+  factual_05 [factual]: 1.00
+  triage_01 [triage]: 1.00
+  triage_02 [triage]: 0.83
+  thread_incident_01 [thread]: 1.00
+  thread_incident_02 [thread]: 1.00
+  thread_incident_03 [thread]: 1.00
+  thread_vendor_01 [thread]: 1.00
+  thread_vendor_02 [thread]: 1.00
+  thread_vendor_03 [thread]: 0.83
+  broad_mark_01 [broad]: 0.50 *** LOW ***
+  broad_mark_02 [broad]: 1.00
+  temporal_01 [temporal]: 0.83
+  temporal_02 [temporal]: 0.33 *** LOW ***
+  attachment_01 [attachment]: 1.00
+  attachment_02 [attachment]: 1.00
+  negative_01 [negative]: 1.00
+  negative_02 [negative]: 1.00
+  mt_falcon_01 [multi_turn]: 1.00
+  mt_falcon_02 [multi_turn]: 1.00
+  mt_falcon_03 [multi_turn]: 1.00
+  mt_falcon_04 [multi_turn]: 1.00
+  mt_falcon_05 [multi_turn]: 0.33 *** LOW ***
+  mt_falcon_06 [multi_turn]: 1.00
+  mt_falcon_07 [multi_turn]: 0.67 *** LOW ***
+  mt_falcon_08 [multi_turn]: 1.00
+  mt_incident_01 [multi_turn]: 1.00
+  mt_incident_02 [multi_turn]: 1.00
+  mt_incident_03 [multi_turn]: 1.00
+  mt_incident_04 [multi_turn]: 1.00
+  mt_incident_05 [multi_turn]: 1.00
+  mt_incident_06 [multi_turn]: 1.00
+  mt_incident_07 [multi_turn]: 1.00
+  mt_lisa_01 [multi_turn]: 0.83
+  mt_lisa_02 [multi_turn]: 0.83
+  mt_lisa_03 [multi_turn]: 1.00
+  mt_lisa_04 [multi_turn]: 0.67 *** LOW ***
+  mt_lisa_05 [multi_turn]: 1.00
+  mt_mixed_01 [multi_turn]: 1.00
+  mt_mixed_02 [multi_turn]: 0.83
+  mt_mixed_03 [multi_turn]: 1.00
+  mt_mixed_04 [multi_turn]: 1.00
+  mt_mixed_05 [multi_turn]: 0.33 *** LOW ***
+  mt_mixed_06 [multi_turn]: 1.00
+  mt_mixed_07 [multi_turn]: 1.00
+  mt_mixed_08 [multi_turn]: 1.00
+  mt_mixed_09 [multi_turn]: 1.00
+  mt_mixed_10 [multi_turn]: 1.00
+  mt_budget_01 [multi_turn]: 0.50 *** LOW ***
+  mt_budget_02 [multi_turn]: 1.00
+  mt_budget_03 [multi_turn]: 1.00
+  mt_budget_04 [multi_turn]: 1.00
+  mt_budget_05 [multi_turn]: 0.83
+  mt_budget_06 [multi_turn]: 1.00
+  mt_security_01 [multi_turn]: 1.00
+  mt_security_02 [multi_turn]: 1.00
+  mt_security_03 [multi_turn]: 1.00
+  mt_design_01 [multi_turn]: 1.00
+  mt_design_02 [multi_turn]: 1.00
+  mt_design_03 [multi_turn]: 1.00
+  mt_people_01 [multi_turn]: 1.00
+  mt_people_02 [multi_turn]: 1.00
+  mt_people_03 [multi_turn]: 1.00
+  mt_people_04 [multi_turn]: 1.00
+  crossref_01 [cross_reference]: 1.00
+  crossref_02 [cross_reference]: 1.00
+================================================================================

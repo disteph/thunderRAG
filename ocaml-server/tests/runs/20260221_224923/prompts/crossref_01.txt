@@ -1,0 +1,107 @@
+=== SYSTEM ===
+You are a helpful email assistant in an ongoing multi-turn chat. The user is: Bob Martinez <bob@acme.com>. Current date/time: 2026-02-21 23:16:46 (local); 2026-02-22T07:16:46Z (UTC).
+The conversation below includes previous user/assistant turns as context.
+The final user message is the question you must answer.
+Immediately before it, you may see a message containing emails retrieved from the user's archive under the heading EMAILS THAT MAY BE RELEVANT. Use these emails as evidence to answer the question.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+Do not invent email facts that are not in the provided emails.
+Do not greet, do not restate the question, and do not narrate your process.
+
+Each email's body may contain labelled sections:
+- NEW CONTENT: the message the sender actually wrote
+- QUOTED CONTEXT: previous thread history (older messages being replied to)
+- QUOTED CONTEXT (older, summarized): summarized older thread history
+- ATTACHMENTS (summaries): summaries of attached files
+Not all sections will be present in every email.
+
+Each email header may include triage metadata:
+- action=N/100: how much the email requires action or a response from the user (0 = purely informational, 100 = urgent action required)
+- importance=N/100: overall importance of the email to the user
+- reply_by=<date>: estimated deadline for a response, if any
+- processed=true: the user has already dealt with this email; no further action is needed regardless of the action score
+
+=== USER ===
+EMAILS THAT MAY BE RELEVANT:
+
+[Email 1] doc_id=cross-ref-014@test.example.com date=Fri, 07 Feb 2025 16:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> cc=Dave Wilson <dave@acme.com> subject=API keys for Falcon - following up
+NEW CONTENT:
+Bob,
+
+As discussed in my previous email about the Falcon launch, we need the payment gateway API keys before March 10.
+
+I've checked with Dave's team and they say the keys are pending approval from the vendor.
+Dave, can you provide an ETA?
+
+We can't proceed with payment integration testing without them.
+
+Alice
+
+[Email 2] doc_id=falcon-qa-020@test.example.com date=Fri, 14 Feb 2025 10:00:00 +0000 from=Tony Russo <tony@acme.com> to=Alice Chen <alice@acme.com>, Bob Martinez <bob@acme.com> subject=Falcon QA status report - Week of Feb 10
+NEW CONTENT:
+Hi Alice, Bob,
+
+QA status for Project Falcon:
+
+Completed:
+- User auth flow (32/32 passing)
+- Payment processing (28/30 — 2 blocked on API keys)
+- Dashboard analytics (all green)
+
+Blocked:
+- Payment gateway integration tests (waiting for API keys)
+- Load testing (staging had issues earlier this week)
+
+Risk: If API keys not received by March 5, we won't hit March 12 QA deadline.
+
+Tony
+
+[Email 3] doc_id=design-revised-032@test.example.com date=Fri, 14 Feb 2025 14:00:00 +0000 from=Patricia Owens <patricia@acme.com> to=Bob Martinez <bob@acme.com> cc=Alice Chen <alice@acme.com> subject=Re: Falcon UI mockups - Revised
+NEW CONTENT:
+Bob,
+
+Revised mockups attached:
+1. Added estimated delivery time
+2. Added CSV export to payment history
+3. Chart colors meet WCAG AA
+4. Confirmation dialog for key regeneration
+
+All feedback incorporated. Ready for sign-off.
+
+Patricia
+
+[Email 4] doc_id=design-mockups-030@test.example.com date=Mon, 10 Feb 2025 09:00:00 +0000 from=Patricia Owens <patricia@acme.com> to=Bob Martinez <bob@acme.com> cc=Alice Chen <alice@acme.com> subject=Falcon UI mockups for review
+NEW CONTENT:
+Hi Bob,
+
+Attached are the Falcon customer dashboard mockups:
+1. Order tracking (real-time status)
+2. Payment history
+3. Analytics dashboard (order volume, revenue)
+4. Settings (API key mgmt, webhooks)
+
+Please review and send feedback by Wednesday.
+
+Patricia
+
+[Email 5] doc_id=lisa-access-041@test.example.com date=Mon, 10 Feb 2025 15:00:00 +0000 from=Lisa Wong <lisa@acme.com> to=Bob Martinez <bob@acme.com> cc=IT Support <it@acme.com> subject=Can't access falcon-backend repo
+NEW CONTENT:
+Bob,
+
+Getting 403 trying to clone falcon-backend. Username: lwong.
+
+Error: Permission to acme/falcon-backend.git denied to lwong.
+
+Need to be added to falcon-dev team. Submitted access request in IT portal this morning.
+
+Thanks,
+Lisa
+
+=== USER ===
+What's the situation with the payment gateway API keys for Falcon?
+
+Answer based on the retrieved emails above.
+Do not greet, do not offer to help, and do not ask for a follow-up question.
+Start immediately with the answer (no preamble).
+If the request involves ordering or selecting items by time/recency, use the dates in the EMAILS THAT MAY BE RELEVANT list to decide which emails are newest.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+

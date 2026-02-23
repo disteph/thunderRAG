@@ -1,0 +1,110 @@
+=== SYSTEM ===
+You are a helpful email assistant in an ongoing multi-turn chat. The user is: Bob Martinez <bob@acme.com>. Current date/time: 2026-02-21 23:11:33 (local); 2026-02-22T07:11:33Z (UTC).
+The conversation below includes previous user/assistant turns as context.
+The final user message is the question you must answer.
+Immediately before it, you may see a message containing emails retrieved from the user's archive under the heading EMAILS THAT MAY BE RELEVANT. Use these emails as evidence to answer the question.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+Do not invent email facts that are not in the provided emails.
+Do not greet, do not restate the question, and do not narrate your process.
+
+Each email's body may contain labelled sections:
+- NEW CONTENT: the message the sender actually wrote
+- QUOTED CONTEXT: previous thread history (older messages being replied to)
+- QUOTED CONTEXT (older, summarized): summarized older thread history
+- ATTACHMENTS (summaries): summaries of attached files
+Not all sections will be present in every email.
+
+Each email header may include triage metadata:
+- action=N/100: how much the email requires action or a response from the user (0 = purely informational, 100 = urgent action required)
+- importance=N/100: overall importance of the email to the user
+- reply_by=<date>: estimated deadline for a response, if any
+- processed=true: the user has already dealt with this email; no further action is needed regardless of the action score
+
+=== USER ===
+EMAILS THAT MAY BE RELEVANT:
+
+[Email 1] doc_id=revised-budget-047@test.example.com date=Fri, 14 Feb 2025 12:00:00 +0000 from=Eve Park <eve@acme.com> to=Bob Martinez <bob@acme.com> cc=Carol Davis <carol@acme.com> subject=Revised Q1 budget allocation - engineering
+NEW CONTENT:
+Bob,
+
+Revised Q1 engineering allocations:
+- Infrastructure: $180,000 (up from $150K, cloud overruns)
+- Headcount: 2 new (1 senior backend, 1 SRE)
+- Training: $15,000
+- Tools: $45,000
+Total: $420,000
+
+See attached. Sign off by Feb 21.
+
+Eve
+
+[Email 2] doc_id=budget-meeting-003@test.example.com date=Mon, 10 Feb 2025 08:00:00 +0000 from=Carol Davis <carol@acme.com> to=Engineering Team <engineering@acme.com> cc=Bob Martinez <bob@acme.com>, Finance <finance@acme.com> subject=Q1 budget review meeting - Feb 20
+NEW CONTENT:
+Hi team,
+
+Reminder: the Q1 budget review meeting is scheduled for February 20, 2025 at 2pm in Conference Room B.
+
+Please bring your department expense reports and any budget change requests.
+We need to finalize allocations before the March board meeting.
+
+Agenda:
+1. Q1 actuals vs. plan
+2. Headcount requests
+3. Infrastructure spending
+4. Travel budget adjustments
+
+Regards,
+Carol
+
+[Email 3] doc_id=expense-deadline-048@test.example.com date=Mon, 17 Feb 2025 09:00:00 +0000 from=Eve Park <eve@acme.com> to=Bob Martinez <bob@acme.com> subject=Reminder: expense reports due Feb 21
+NEW CONTENT:
+Bob,
+
+Q4 2024 expense reports due February 21.
+
+Outstanding in Concur:
+1. AWS training ($450) - Dec 12
+2. Team dinner ($380) - Dec 18
+3. JetBrains license ($249) - Jan 5
+
+Please submit ASAP.
+
+Eve
+Finance
+
+[Email 4] doc_id=q1-report-006@test.example.com date=Thu, 13 Feb 2025 11:30:00 +0000 from=Eve Park <eve@acme.com> to=Bob Martinez <bob@acme.com> subject=Q1 financial report attached
+NEW CONTENT:
+Hi Bob,
+
+Please find attached the Q1 financial report for your review before the budget meeting.
+
+Key highlights:
+- Revenue: $2.4M (up 15% YoY)
+- Operating expenses: $1.8M (within budget)
+- Net margin: 25%
+
+Let me know if you have questions.
+
+Eve
+
+[Email 5] doc_id=meeting-reschedule-053@test.example.com date=Wed, 19 Feb 2025 09:00:00 +0000 from=Carol Davis <carol@acme.com> to=Bob Martinez <bob@acme.com> subject=Q1 budget review - rescheduled to Feb 24
+NEW CONTENT:
+Bob,
+
+Q1 budget review rescheduled from Feb 20 to Feb 24 (Monday) 2pm, Conference Room B.
+
+Alice is OOO this week and we need her input on Falcon budget.
+
+Same agenda. Bring updated expense reports.
+
+Carol
+
+=== USER ===
+What's the current state of my Q1 budget?
+
+Answer based on the retrieved emails above.
+Do not greet, do not offer to help, and do not ask for a follow-up question.
+Start immediately with the answer (no preamble).
+If the request involves ordering or selecting items by time/recency, use the dates in the EMAILS THAT MAY BE RELEVANT list to decide which emails are newest.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+

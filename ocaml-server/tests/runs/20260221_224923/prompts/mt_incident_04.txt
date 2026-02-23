@@ -1,0 +1,129 @@
+=== SYSTEM ===
+You are a helpful email assistant in an ongoing multi-turn chat. The user is: Bob Martinez <bob@acme.com>. Current date/time: 2026-02-21 23:00:41 (local); 2026-02-22T07:00:41Z (UTC).
+The conversation below includes previous user/assistant turns as context.
+The final user message is the question you must answer.
+Immediately before it, you may see a message containing emails retrieved from the user's archive under the heading EMAILS THAT MAY BE RELEVANT. Use these emails as evidence to answer the question.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+Do not invent email facts that are not in the provided emails.
+Do not greet, do not restate the question, and do not narrate your process.
+
+Each email's body may contain labelled sections:
+- NEW CONTENT: the message the sender actually wrote
+- QUOTED CONTEXT: previous thread history (older messages being replied to)
+- QUOTED CONTEXT (older, summarized): summarized older thread history
+- ATTACHMENTS (summaries): summaries of attached files
+Not all sections will be present in every email.
+
+Each email header may include triage metadata:
+- action=N/100: how much the email requires action or a response from the user (0 = purely informational, 100 = urgent action required)
+- importance=N/100: overall importance of the email to the user
+- reply_by=<date>: estimated deadline for a response, if any
+- processed=true: the user has already dealt with this email; no further action is needed regardless of the action score
+
+=== USER ===
+Tell me about the production server outage.
+
+=== ASSISTANT ===
+The production server outage was caused by a connection leak in the nightly analytics batch job deployed on Friday. This resulted in database connections being exhausted and all customer-facing APIs returning 503 errors starting at 3:05 AM UTC on February 11, 2025. The issue was resolved by deploying a fix to clean up connections in the finally block ([Email 1]). A postmortem document has been created detailing the root cause and steps for prevention, including adding connection pool monitoring alerts ([Email 1]).
+
+EMAILS REFERENCED ABOVE:
+[Email 1] date=Tue, 11 Feb 2025 16:00:00 +0000 from=Dave Wilson <dave@acme.com> to=Bob Martinez <bob@acme.com>, Alice Chen <alice@acme.com> cc=Ops Team <ops@acme.com> subject=Re: URGENT: Production server down - RESOLVED + Postmortem
+
+=== USER ===
+What was the root cause?
+
+=== ASSISTANT ===
+The connection leak in the nightly analytics batch job started causing the production server outage at 3:05 AM UTC on February 11, 2025 ([Email 1]).
+
+EMAILS REFERENCED ABOVE:
+[Email 1] date=Tue, 11 Feb 2025 03:15:00 +0000 from=Dave Wilson <dave@acme.com> to=Bob Martinez <bob@acme.com> cc=Ops Team <ops@acme.com> subject=URGENT: Production server down - immediate action needed
+
+=== USER ===
+How long was the outage and what was done to fix it?
+
+=== ASSISTANT ===
+The production server outage lasted for 45 minutes with an additional ~12 minutes of degraded performance. The fix involved deploying a proper patch that cleaned up database connections in the finally block ([Email 1]). Additionally, a connection pool monitoring alert was set at 80% capacity to prevent future issues.
+
+EMAILS REFERENCED ABOVE:
+[Email 1] date=Tue, 11 Feb 2025 16:00:00 +0000 from=Dave Wilson <dave@acme.com> to=Bob Martinez <bob@acme.com>, Alice Chen <alice@acme.com> cc=Ops Team <ops@acme.com> subject=Re: URGENT: Production server down - RESOLVED + Postmortem
+
+=== USER ===
+EMAILS THAT MAY BE RELEVANT:
+
+[Email 1] doc_id=bigcorp-thanks-029@test.example.com date=Fri, 14 Feb 2025 11:00:00 +0000 from=Sam Chen <sam@bigcorp.com> to=Bob Martinez <bob@acme.com> cc=Raj Gupta <raj@acme.com> subject=Re: ESCALATION: BigCorp - RESOLVED
+NEW CONTENT:
+Bob,
+
+Thank you for the quick turnaround. Issues confirmed resolved on our end.
+
+The dedicated connection pool gives us more confidence. Looking forward to discussing API v3 migration next month.
+
+Best,
+Sam Chen
+CTO, BigCorp
+
+[Email 2] doc_id=alice-ooo-052@test.example.com date=Fri, 14 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Engineering Team <engineering@acme.com> subject=Out of office Feb 17-21
+NEW CONTENT:
+Team,
+
+OOO February 17-21 (family vacation).
+
+During my absence:
+- Falcon: Bob Martinez
+- Budget: Carol Davis
+- Urgent: Text my cell
+
+Limited email, will respond to critical items within 24h.
+
+Alice
+
+[Email 3] doc_id=cve-patched-025@test.example.com date=Tue, 11 Feb 2025 11:00:00 +0000 from=Bob Martinez <bob@acme.com> to=Henry Liu <henry@acme.com> cc=Dave Wilson <dave@acme.com> subject=Re: CRITICAL: CVE-2025-1234 in log4j - patch within 48h
+NEW CONTENT:
+Henry,
+
+Patched and deployed to production at 10:45 UTC. order-processing-service now on log4j 2.17.1.
+
+Scanned other services — no other vulnerable instances.
+Dave updating WAF rules as precaution.
+
+Bob
+
+[Email 4] doc_id=server-resolved-019@test.example.com date=Tue, 11 Feb 2025 16:00:00 +0000 from=Dave Wilson <dave@acme.com> to=Bob Martinez <bob@acme.com>, Alice Chen <alice@acme.com> cc=Ops Team <ops@acme.com> subject=Re: URGENT: Production server down - RESOLVED + Postmortem
+NEW CONTENT:
+Team,
+
+Production outage fully resolved. Fix deployed to prod at 14:30 UTC.
+
+Postmortem:
+- Root cause: Connection leak in nightly analytics batch job (PR #831, deployed Fri Feb 7)
+- Impact: 45 minutes full outage, ~12 min degraded
+- Fix: Connection cleanup in finally block (PR #847)
+- Prevention: Connection pool monitoring alert at 80% capacity
+
+Full doc: https://wiki.acme.com/postmortem/2025-02-11
+
+Dave
+
+[Email 5] doc_id=monitoring-disk-044@test.example.com date=Wed, 12 Feb 2025 22:00:00 +0000 from=Monitoring <monitoring@acme.com> to=Bob Martinez <bob@acme.com> cc=Dave Wilson <dave@acme.com> subject=[ALERT] Disk space warning - prod-db-01 at 85%
+NEW CONTENT:
+ALERT: Disk space warning
+
+Host: prod-db-01.acme.internal
+Metric: disk_usage_percent | Current: 85% | Threshold: 80%
+Partition: /data/postgres
+
+Growing ~2%/day. Est. full in ~7 days.
+
+Action: Archive old transaction logs or expand volume.
+
+Automated alert.
+
+=== USER ===
+Was there a postmortem?
+
+Answer based on the retrieved emails above.
+Do not greet, do not offer to help, and do not ask for a follow-up question.
+Start immediately with the answer (no preamble).
+If the request involves ordering or selecting items by time/recency, use the dates in the EMAILS THAT MAY BE RELEVANT list to decide which emails are newest.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+

@@ -1,0 +1,3884 @@
+[
+  {
+    "question": "When is the Project Falcon launch date?",
+    "session_id": "quality-test-session_factual_01",
+    "user_name": "Bob Martinez <bob@acme.com>",
+    "query_response": {
+      "status": "need_messages",
+      "request_id": "00613e6fd612c87cf5f85974523d7735",
+      "message_ids": [
+        "<falcon-launch-001@test.example.com>",
+        "<alice-recent-016@test.example.com>",
+        "<falcon-reply-002@test.example.com>",
+        "<cross-ref-014@test.example.com>",
+        "<mark-topic3-012@test.example.com>"
+      ],
+      "sources": [
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "text": "",
+          "score": 0.8319991230964661,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Project Falcon launch date",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "text": "",
+          "score": 0.8036766052246094,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "bcc": "",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "text": "",
+          "score": 0.7777395248413086,
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "from": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 14,
+          "doc_id": "<cross-ref-014@test.example.com>",
+          "text": "",
+          "score": 0.6998761296272278,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "API keys for Falcon - following up",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Dave Wilson <dave@acme.com>",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 16:00:00 +0000",
+            "bcc": "",
+            "message_id": "<cross-ref-014@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 12,
+          "doc_id": "<mark-topic3-012@test.example.com>",
+          "text": "",
+          "score": 0.6272794008255005,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Company offsite - April 5-6",
+            "from": "Mark Johnson <mark@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Mon, 10 Feb 2025 11:00:00 +0000",
+            "bcc": "",
+            "message_id": "<mark-topic3-012@test.example.com>"
+          }
+        }
+      ]
+    },
+    "evidence_uploads": [
+      {
+        "message_id": "<falcon-launch-001@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<alice-recent-016@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<falcon-reply-002@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<cross-ref-014@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<mark-topic3-012@test.example.com>",
+        "status": 200
+      }
+    ],
+    "complete_response": {
+      "answer": "The Project Falcon launch date is March 17, 2025. This was updated due to a delay requested by the marketing team [Email 3]. Originally, the launch was scheduled for March 15, 2025 [Email 4].",
+      "sources": [
+        {
+          "chunk_id": 14,
+          "doc_id": "<cross-ref-014@test.example.com>",
+          "score": 0.6998761296272278,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "API keys for Falcon - following up",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Dave Wilson <dave@acme.com>",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 16:00:00 +0000",
+            "message_id": "<cross-ref-014@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 12,
+          "doc_id": "<mark-topic3-012@test.example.com>",
+          "score": 0.6272794008255005,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Mark Johnson <mark@acme.com>",
+            "subject": "Company offsite - April 5-6",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Mon, 10 Feb 2025 11:00:00 +0000",
+            "message_id": "<mark-topic3-012@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "score": 0.8036766052246094,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "score": 0.8319991230964661,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "score": 0.7777395248413086,
+          "text": "",
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Bob Martinez <bob@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        }
+      ]
+    },
+    "session_debug": {
+      "session_id": "quality-test-session_factual_01",
+      "history_summary": "",
+      "tail": [
+        {
+          "role": "user",
+          "content": "When is the Project Falcon launch date?"
+        },
+        {
+          "role": "assistant",
+          "content": "The Project Falcon launch date is March 17, 2025. This was updated due to a delay requested by the marketing team [Email 1]. Originally, the launch was scheduled for March 15, 2025 [Email 2].\n\nEMAILS REFERENCED ABOVE:\n[Email 1] date=Thu, 13 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Updated Falcon timeline\n[Email 2] date=Wed, 05 Feb 2025 09:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Project Falcon launch date"
+        }
+      ]
+    },
+    "error": null,
+    "test_id": "factual_01",
+    "category": "factual",
+    "criteria": {
+      "must_contain_any": [
+        "March 15",
+        "March 17"
+      ],
+      "must_not_contain": [],
+      "must_cite_emails": true,
+      "expected_email_subjects_any": [
+        "Project Falcon launch date",
+        "Updated Falcon timeline"
+      ],
+      "hallucination_keywords": []
+    }
+  },
+  {
+    "question": "Who scheduled the Q1 budget review meeting and when is it?",
+    "session_id": "quality-test-session_factual_02",
+    "user_name": "Bob Martinez <bob@acme.com>",
+    "query_response": {
+      "status": "need_messages",
+      "request_id": "5f9739473265940f445314788e815987",
+      "message_ids": [
+        "<budget-meeting-003@test.example.com>",
+        "<q1-report-006@test.example.com>",
+        "<mark-topic2-011@test.example.com>",
+        "<falcon-launch-001@test.example.com>",
+        "<mark-topic3-012@test.example.com>"
+      ],
+      "sources": [
+        {
+          "chunk_id": 3,
+          "doc_id": "<budget-meeting-003@test.example.com>",
+          "text": "",
+          "score": 0.8306078910827637,
+          "metadata": {
+            "to": "Engineering Team <engineering@acme.com>",
+            "subject": "Q1 budget review meeting - Feb 20",
+            "from": "Carol Davis <carol@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Bob Martinez <bob@acme.com>, Finance <finance@acme.com>",
+            "processed": false,
+            "date": "Mon, 10 Feb 2025 08:00:00 +0000",
+            "bcc": "",
+            "message_id": "<budget-meeting-003@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 6,
+          "doc_id": "<q1-report-006@test.example.com>",
+          "text": "",
+          "score": 0.7425134778022766,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Q1 financial report attached",
+            "from": "Eve Park <eve@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 11:30:00 +0000",
+            "bcc": "",
+            "message_id": "<q1-report-006@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 11,
+          "doc_id": "<mark-topic2-011@test.example.com>",
+          "text": "",
+          "score": 0.6897563934326172,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Office renovation schedule - Building 3",
+            "from": "Mark Johnson <mark@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 15:00:00 +0000",
+            "bcc": "",
+            "message_id": "<mark-topic2-011@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "text": "",
+          "score": 0.6624371409416199,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Project Falcon launch date",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 12,
+          "doc_id": "<mark-topic3-012@test.example.com>",
+          "text": "",
+          "score": 0.6608151197433472,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Company offsite - April 5-6",
+            "from": "Mark Johnson <mark@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Mon, 10 Feb 2025 11:00:00 +0000",
+            "bcc": "",
+            "message_id": "<mark-topic3-012@test.example.com>"
+          }
+        }
+      ]
+    },
+    "evidence_uploads": [
+      {
+        "message_id": "<budget-meeting-003@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<q1-report-006@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<mark-topic2-011@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<falcon-launch-001@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<mark-topic3-012@test.example.com>",
+        "status": 200
+      }
+    ],
+    "complete_response": {
+      "answer": "Carol Davis scheduled the Q1 budget review meeting, which is happening on February 20, 2025 at 2pm in Conference Room B. [Email 2]",
+      "sources": [
+        {
+          "chunk_id": 11,
+          "doc_id": "<mark-topic2-011@test.example.com>",
+          "score": 0.6897563934326172,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Mark Johnson <mark@acme.com>",
+            "subject": "Office renovation schedule - Building 3",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 15:00:00 +0000",
+            "message_id": "<mark-topic2-011@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 3,
+          "doc_id": "<budget-meeting-003@test.example.com>",
+          "score": 0.8306078910827637,
+          "text": "",
+          "metadata": {
+            "to": "Engineering Team <engineering@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Carol Davis <carol@acme.com>",
+            "subject": "Q1 budget review meeting - Feb 20",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Bob Martinez <bob@acme.com>, Finance <finance@acme.com>",
+            "processed": false,
+            "date": "Mon, 10 Feb 2025 08:00:00 +0000",
+            "message_id": "<budget-meeting-003@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 12,
+          "doc_id": "<mark-topic3-012@test.example.com>",
+          "score": 0.6608151197433472,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Mark Johnson <mark@acme.com>",
+            "subject": "Company offsite - April 5-6",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Mon, 10 Feb 2025 11:00:00 +0000",
+            "message_id": "<mark-topic3-012@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 6,
+          "doc_id": "<q1-report-006@test.example.com>",
+          "score": 0.7425134778022766,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Eve Park <eve@acme.com>",
+            "subject": "Q1 financial report attached",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 11:30:00 +0000",
+            "message_id": "<q1-report-006@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "score": 0.6624371409416199,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        }
+      ]
+    },
+    "session_debug": {
+      "session_id": "quality-test-session_factual_02",
+      "history_summary": "",
+      "tail": [
+        {
+          "role": "user",
+          "content": "Who scheduled the Q1 budget review meeting and when is it?"
+        },
+        {
+          "role": "assistant",
+          "content": "Carol Davis scheduled the Q1 budget review meeting, which is happening on February 20, 2025 at 2pm in Conference Room B. [Email 1]\n\nEMAILS REFERENCED ABOVE:\n[Email 1] date=Mon, 10 Feb 2025 08:00:00 +0000 from=Carol Davis <carol@acme.com> to=Engineering Team <engineering@acme.com> cc=Bob Martinez <bob@acme.com>, Finance <finance@acme.com> subject=Q1 budget review meeting - Feb 20"
+        }
+      ]
+    },
+    "error": null,
+    "test_id": "factual_02",
+    "category": "factual",
+    "criteria": {
+      "must_contain_any": [
+        "Carol",
+        "February 20",
+        "Feb 20"
+      ],
+      "must_not_contain": [],
+      "must_cite_emails": true,
+      "expected_email_subjects_any": [
+        "Q1 budget review"
+      ],
+      "hallucination_keywords": []
+    }
+  },
+  {
+    "question": "What are the key highlights from the Q1 financial report?",
+    "session_id": "quality-test-session_factual_03",
+    "user_name": "Bob Martinez <bob@acme.com>",
+    "query_response": {
+      "status": "need_messages",
+      "request_id": "7541ec286ef42b0c18ec61ba9f6130c3",
+      "message_ids": [
+        "<q1-report-006@test.example.com>",
+        "<budget-meeting-003@test.example.com>",
+        "<mark-topic3-012@test.example.com>",
+        "<mark-topic2-011@test.example.com>",
+        "<falcon-launch-001@test.example.com>"
+      ],
+      "sources": [
+        {
+          "chunk_id": 6,
+          "doc_id": "<q1-report-006@test.example.com>",
+          "text": "",
+          "score": 0.8390164375305176,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Q1 financial report attached",
+            "from": "Eve Park <eve@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 11:30:00 +0000",
+            "bcc": "",
+            "message_id": "<q1-report-006@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 3,
+          "doc_id": "<budget-meeting-003@test.example.com>",
+          "text": "",
+          "score": 0.7728953957557678,
+          "metadata": {
+            "to": "Engineering Team <engineering@acme.com>",
+            "subject": "Q1 budget review meeting - Feb 20",
+            "from": "Carol Davis <carol@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Bob Martinez <bob@acme.com>, Finance <finance@acme.com>",
+            "processed": false,
+            "date": "Mon, 10 Feb 2025 08:00:00 +0000",
+            "bcc": "",
+            "message_id": "<budget-meeting-003@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 12,
+          "doc_id": "<mark-topic3-012@test.example.com>",
+          "text": "",
+          "score": 0.700610876083374,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Company offsite - April 5-6",
+            "from": "Mark Johnson <mark@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Mon, 10 Feb 2025 11:00:00 +0000",
+            "bcc": "",
+            "message_id": "<mark-topic3-012@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 11,
+          "doc_id": "<mark-topic2-011@test.example.com>",
+          "text": "",
+          "score": 0.6971301436424255,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Office renovation schedule - Building 3",
+            "from": "Mark Johnson <mark@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 15:00:00 +0000",
+            "bcc": "",
+            "message_id": "<mark-topic2-011@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "text": "",
+          "score": 0.6903625726699829,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Project Falcon launch date",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        }
+      ]
+    },
+    "evidence_uploads": [
+      {
+        "message_id": "<q1-report-006@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<budget-meeting-003@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<mark-topic3-012@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<mark-topic2-011@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<falcon-launch-001@test.example.com>",
+        "status": 200
+      }
+    ],
+    "complete_response": {
+      "answer": "The key highlights from Bob Martinez's Q1 financial report are:\n- Revenue: $2.4M (up 15% YoY)\n- Operating expenses: $1.8M (within budget)\n- Net margin: 25%\n\n[Eve Park <eve@acme.com>; Thu, 13 Feb 2025 11:30:00 +0000]",
+      "sources": [
+        {
+          "chunk_id": 11,
+          "doc_id": "<mark-topic2-011@test.example.com>",
+          "score": 0.6971301436424255,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Mark Johnson <mark@acme.com>",
+            "subject": "Office renovation schedule - Building 3",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 15:00:00 +0000",
+            "message_id": "<mark-topic2-011@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 3,
+          "doc_id": "<budget-meeting-003@test.example.com>",
+          "score": 0.7728953957557678,
+          "text": "",
+          "metadata": {
+            "to": "Engineering Team <engineering@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Carol Davis <carol@acme.com>",
+            "subject": "Q1 budget review meeting - Feb 20",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Bob Martinez <bob@acme.com>, Finance <finance@acme.com>",
+            "processed": false,
+            "date": "Mon, 10 Feb 2025 08:00:00 +0000",
+            "message_id": "<budget-meeting-003@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 12,
+          "doc_id": "<mark-topic3-012@test.example.com>",
+          "score": 0.700610876083374,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Mark Johnson <mark@acme.com>",
+            "subject": "Company offsite - April 5-6",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Mon, 10 Feb 2025 11:00:00 +0000",
+            "message_id": "<mark-topic3-012@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 6,
+          "doc_id": "<q1-report-006@test.example.com>",
+          "score": 0.8390164375305176,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Eve Park <eve@acme.com>",
+            "subject": "Q1 financial report attached",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 11:30:00 +0000",
+            "message_id": "<q1-report-006@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "score": 0.6903625726699829,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        }
+      ]
+    },
+    "session_debug": {
+      "session_id": "quality-test-session_factual_03",
+      "history_summary": "",
+      "tail": [
+        {
+          "role": "user",
+          "content": "What are the key highlights from the Q1 financial report?"
+        },
+        {
+          "role": "assistant",
+          "content": "The key highlights from Bob Martinez's Q1 financial report are:\n- Revenue: $2.4M (up 15% YoY)\n- Operating expenses: $1.8M (within budget)\n- Net margin: 25%\n\n[Eve Park <eve@acme.com>; Thu, 13 Feb 2025 11:30:00 +0000]"
+        }
+      ]
+    },
+    "error": null,
+    "test_id": "factual_03",
+    "category": "factual",
+    "criteria": {
+      "must_contain_any": [
+        "2.4M",
+        "$2.4M",
+        "2.4 million",
+        "revenue",
+        "25%"
+      ],
+      "must_not_contain": [],
+      "must_cite_emails": true,
+      "expected_email_subjects_any": [
+        "Q1 financial report"
+      ],
+      "hallucination_keywords": []
+    }
+  },
+  {
+    "question": "Are there any urgent emails that need immediate attention?",
+    "session_id": "quality-test-session_urgent_01",
+    "user_name": "Bob Martinez <bob@acme.com>",
+    "query_response": {
+      "status": "need_messages",
+      "request_id": "61f0c75e2c9d88cfda08ffbec086005e",
+      "message_ids": [
+        "<server-down-004@test.example.com>",
+        "<alice-recent-016@test.example.com>",
+        "<processed-015@test.example.com>",
+        "<mark-topic2-011@test.example.com>",
+        "<cross-ref-014@test.example.com>"
+      ],
+      "sources": [
+        {
+          "chunk_id": 4,
+          "doc_id": "<server-down-004@test.example.com>",
+          "text": "",
+          "score": 0.6473438739776611,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "URGENT: Production server down - immediate action needed",
+            "from": "Dave Wilson <dave@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Ops Team <ops@acme.com>",
+            "processed": false,
+            "date": "Tue, 11 Feb 2025 03:15:00 +0000",
+            "bcc": "",
+            "message_id": "<server-down-004@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "text": "",
+          "score": 0.5940890908241272,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "bcc": "",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 15,
+          "doc_id": "<processed-015@test.example.com>",
+          "text": "",
+          "score": 0.58075350522995,
+          "metadata": {
+            "processed_at": "2026-02-20T21:58:34Z",
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Password reset completed",
+            "from": "IT Support <it@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": true,
+            "date": "Mon, 03 Feb 2025 12:00:00 +0000",
+            "bcc": "",
+            "message_id": "<processed-015@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 11,
+          "doc_id": "<mark-topic2-011@test.example.com>",
+          "text": "",
+          "score": 0.5802311301231384,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Office renovation schedule - Building 3",
+            "from": "Mark Johnson <mark@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 15:00:00 +0000",
+            "bcc": "",
+            "message_id": "<mark-topic2-011@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 14,
+          "doc_id": "<cross-ref-014@test.example.com>",
+          "text": "",
+          "score": 0.578144907951355,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "API keys for Falcon - following up",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Dave Wilson <dave@acme.com>",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 16:00:00 +0000",
+            "bcc": "",
+            "message_id": "<cross-ref-014@test.example.com>"
+          }
+        }
+      ]
+    },
+    "evidence_uploads": [
+      {
+        "message_id": "<server-down-004@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<alice-recent-016@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<processed-015@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<mark-topic2-011@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<cross-ref-014@test.example.com>",
+        "status": 200
+      }
+    ],
+    "complete_response": {
+      "answer": "[Email 5] is urgent and requires immediate attention. It reports a critical issue with the production server being down since 3:05 AM UTC, affecting customer-facing APIs. You should escalate this to ensure it gets resolved quickly.",
+      "sources": [
+        {
+          "chunk_id": 11,
+          "doc_id": "<mark-topic2-011@test.example.com>",
+          "score": 0.5802311301231384,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Mark Johnson <mark@acme.com>",
+            "subject": "Office renovation schedule - Building 3",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 15:00:00 +0000",
+            "message_id": "<mark-topic2-011@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 14,
+          "doc_id": "<cross-ref-014@test.example.com>",
+          "score": 0.578144907951355,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "API keys for Falcon - following up",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Dave Wilson <dave@acme.com>",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 16:00:00 +0000",
+            "message_id": "<cross-ref-014@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 15,
+          "doc_id": "<processed-015@test.example.com>",
+          "score": 0.58075350522995,
+          "text": "",
+          "metadata": {
+            "processed_at": "2026-02-20T21:58:34Z",
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "IT Support <it@acme.com>",
+            "subject": "Password reset completed",
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": true,
+            "date": "Mon, 03 Feb 2025 12:00:00 +0000",
+            "message_id": "<processed-015@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "score": 0.5940890908241272,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 4,
+          "doc_id": "<server-down-004@test.example.com>",
+          "score": 0.6473438739776611,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Dave Wilson <dave@acme.com>",
+            "subject": "URGENT: Production server down - immediate action needed",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Ops Team <ops@acme.com>",
+            "processed": false,
+            "date": "Tue, 11 Feb 2025 03:15:00 +0000",
+            "message_id": "<server-down-004@test.example.com>"
+          }
+        }
+      ]
+    },
+    "session_debug": {
+      "session_id": "quality-test-session_urgent_01",
+      "history_summary": "",
+      "tail": [
+        {
+          "role": "user",
+          "content": "Are there any urgent emails that need immediate attention?"
+        },
+        {
+          "role": "assistant",
+          "content": "[Email 1] is urgent and requires immediate attention. It reports a critical issue with the production server being down since 3:05 AM UTC, affecting customer-facing APIs. You should escalate this to ensure it gets resolved quickly.\n\nEMAILS REFERENCED ABOVE:\n[Email 1] date=Tue, 11 Feb 2025 03:15:00 +0000 from=Dave Wilson <dave@acme.com> to=Bob Martinez <bob@acme.com> cc=Ops Team <ops@acme.com> subject=URGENT: Production server down - immediate action needed"
+        }
+      ]
+    },
+    "error": null,
+    "test_id": "urgent_01",
+    "category": "triage",
+    "criteria": {
+      "must_contain_any": [
+        "server",
+        "down",
+        "production",
+        "Dave",
+        "503"
+      ],
+      "must_not_contain": [],
+      "must_cite_emails": true,
+      "expected_email_subjects_any": [
+        "URGENT",
+        "Production server down"
+      ],
+      "hallucination_keywords": []
+    }
+  },
+  {
+    "question": "What is the current status of the CloudStore vendor contract negotiation?",
+    "session_id": "quality-test-session_thread_01",
+    "user_name": "Bob Martinez <bob@acme.com>",
+    "query_response": {
+      "status": "need_messages",
+      "request_id": "e0b01a471514ee0483ea5f5cbe5a17f9",
+      "message_ids": [
+        "<vendor-original-007@test.example.com>",
+        "<vendor-reply2-009@test.example.com>",
+        "<vendor-reply1-008@test.example.com>",
+        "<falcon-reply-002@test.example.com>",
+        "<cross-ref-014@test.example.com>"
+      ],
+      "sources": [
+        {
+          "chunk_id": 7,
+          "doc_id": "<vendor-original-007@test.example.com>",
+          "text": "",
+          "score": 0.8136414885520935,
+          "metadata": {
+            "to": "Grace Kim <grace@acme.com>",
+            "subject": "Vendor contract renewal - CloudStore Inc.",
+            "from": "Frank Lee <frank@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Heidi Tanaka <heidi@acme.com>",
+            "processed": false,
+            "date": "Mon, 03 Feb 2025 09:00:00 +0000",
+            "bcc": "",
+            "message_id": "<vendor-original-007@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 9,
+          "doc_id": "<vendor-reply2-009@test.example.com>",
+          "text": "",
+          "score": 0.7764849662780762,
+          "metadata": {
+            "to": "Frank Lee <frank@acme.com>, Grace Kim <grace@acme.com>",
+            "subject": "Re: Re: Vendor contract renewal - CloudStore Inc.",
+            "from": "Heidi Tanaka <heidi@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 10:00:00 +0000",
+            "bcc": "",
+            "message_id": "<vendor-reply2-009@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 8,
+          "doc_id": "<vendor-reply1-008@test.example.com>",
+          "text": "",
+          "score": 0.7729795575141907,
+          "metadata": {
+            "to": "Frank Lee <frank@acme.com>",
+            "subject": "Re: Vendor contract renewal - CloudStore Inc.",
+            "from": "Grace Kim <grace@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Heidi Tanaka <heidi@acme.com>",
+            "processed": false,
+            "date": "Tue, 04 Feb 2025 14:00:00 +0000",
+            "bcc": "",
+            "message_id": "<vendor-reply1-008@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "text": "",
+          "score": 0.6798527240753174,
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "from": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 14,
+          "doc_id": "<cross-ref-014@test.example.com>",
+          "text": "",
+          "score": 0.6756302118301392,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "API keys for Falcon - following up",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Dave Wilson <dave@acme.com>",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 16:00:00 +0000",
+            "bcc": "",
+            "message_id": "<cross-ref-014@test.example.com>"
+          }
+        }
+      ]
+    },
+    "evidence_uploads": [
+      {
+        "message_id": "<vendor-original-007@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<vendor-reply2-009@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<vendor-reply1-008@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<falcon-reply-002@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<cross-ref-014@test.example.com>",
+        "status": 200
+      }
+    ],
+    "complete_response": {
+      "answer": "The latest update on the cloud storage vendor contract negotiations is that Heidi Tanaka plans to negotiate with CloudStore's account manager for a rate of $40,000/year and to include an automatic scaling clause if you exceed 5TB. This discussion follows Grace Kim's analysis comparing CloudStore Inc. to DataVault Inc., which is summarized in [Email 3] and [Email 4].",
+      "sources": [
+        {
+          "chunk_id": 14,
+          "doc_id": "<cross-ref-014@test.example.com>",
+          "score": 0.6756302118301392,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "API keys for Falcon - following up",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Dave Wilson <dave@acme.com>",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 16:00:00 +0000",
+            "message_id": "<cross-ref-014@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 7,
+          "doc_id": "<vendor-original-007@test.example.com>",
+          "score": 0.8136414885520935,
+          "text": "",
+          "metadata": {
+            "to": "Grace Kim <grace@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Frank Lee <frank@acme.com>",
+            "subject": "Vendor contract renewal - CloudStore Inc.",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Heidi Tanaka <heidi@acme.com>",
+            "processed": false,
+            "date": "Mon, 03 Feb 2025 09:00:00 +0000",
+            "message_id": "<vendor-original-007@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 8,
+          "doc_id": "<vendor-reply1-008@test.example.com>",
+          "score": 0.7729795575141907,
+          "text": "",
+          "metadata": {
+            "to": "Frank Lee <frank@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Grace Kim <grace@acme.com>",
+            "subject": "Re: Vendor contract renewal - CloudStore Inc.",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Heidi Tanaka <heidi@acme.com>",
+            "processed": false,
+            "date": "Tue, 04 Feb 2025 14:00:00 +0000",
+            "message_id": "<vendor-reply1-008@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 9,
+          "doc_id": "<vendor-reply2-009@test.example.com>",
+          "score": 0.7764849662780762,
+          "text": "",
+          "metadata": {
+            "to": "Frank Lee <frank@acme.com>, Grace Kim <grace@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Heidi Tanaka <heidi@acme.com>",
+            "subject": "Re: Re: Vendor contract renewal - CloudStore Inc.",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 10:00:00 +0000",
+            "message_id": "<vendor-reply2-009@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "score": 0.6798527240753174,
+          "text": "",
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Bob Martinez <bob@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        }
+      ]
+    },
+    "session_debug": {
+      "session_id": "quality-test-session_thread_01",
+      "history_summary": "",
+      "tail": [
+        {
+          "role": "user",
+          "content": "What is the current status of the CloudStore vendor contract negotiation?"
+        },
+        {
+          "role": "assistant",
+          "content": "The latest update on the cloud storage vendor contract negotiations is that Heidi Tanaka plans to negotiate with CloudStore's account manager for a rate of $40,000/year and to include an automatic scaling clause if you exceed 5TB. This discussion follows Grace Kim's analysis comparing CloudStore Inc. to DataVault Inc., which is summarized in [Email 1] and [Email 2].\n\nEMAILS REFERENCED ABOVE:\n[Email 1] date=Tue, 04 Feb 2025 14:00:00 +0000 from=Grace Kim <grace@acme.com> to=Frank Lee <frank@acme.com> cc=Heidi Tanaka <heidi@acme.com> subject=Re: Vendor contract renewal - CloudStore Inc.\n[Email 2] date=Wed, 05 Feb 2025 10:00:00 +0000 from=Heidi Tanaka <heidi@acme.com> to=Frank Lee <frank@acme.com>, Grace Kim <grace@acme.com> subject=Re: Re: Vendor contract renewal - CloudStore Inc."
+        }
+      ]
+    },
+    "error": null,
+    "test_id": "thread_01",
+    "category": "thread",
+    "criteria": {
+      "must_contain_any": [
+        "$40,000",
+        "40,000",
+        "40K",
+        "negotiate",
+        "Heidi",
+        "Grace"
+      ],
+      "must_not_contain": [],
+      "must_cite_emails": true,
+      "expected_email_subjects_any": [
+        "Vendor contract renewal"
+      ],
+      "hallucination_keywords": []
+    }
+  },
+  {
+    "question": "What did Grace recommend about the CloudStore contract?",
+    "session_id": "quality-test-session_thread_02",
+    "user_name": "Bob Martinez <bob@acme.com>",
+    "query_response": {
+      "status": "need_messages",
+      "request_id": "bc476ba2c15e460edc0c3c89a6e6561a",
+      "message_ids": [
+        "<vendor-reply2-009@test.example.com>",
+        "<vendor-original-007@test.example.com>",
+        "<vendor-reply1-008@test.example.com>",
+        "<falcon-reply-002@test.example.com>",
+        "<cross-ref-014@test.example.com>"
+      ],
+      "sources": [
+        {
+          "chunk_id": 9,
+          "doc_id": "<vendor-reply2-009@test.example.com>",
+          "text": "",
+          "score": 0.7644814848899841,
+          "metadata": {
+            "to": "Frank Lee <frank@acme.com>, Grace Kim <grace@acme.com>",
+            "subject": "Re: Re: Vendor contract renewal - CloudStore Inc.",
+            "from": "Heidi Tanaka <heidi@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 10:00:00 +0000",
+            "bcc": "",
+            "message_id": "<vendor-reply2-009@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 7,
+          "doc_id": "<vendor-original-007@test.example.com>",
+          "text": "",
+          "score": 0.7503977417945862,
+          "metadata": {
+            "to": "Grace Kim <grace@acme.com>",
+            "subject": "Vendor contract renewal - CloudStore Inc.",
+            "from": "Frank Lee <frank@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Heidi Tanaka <heidi@acme.com>",
+            "processed": false,
+            "date": "Mon, 03 Feb 2025 09:00:00 +0000",
+            "bcc": "",
+            "message_id": "<vendor-original-007@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 8,
+          "doc_id": "<vendor-reply1-008@test.example.com>",
+          "text": "",
+          "score": 0.7424695491790771,
+          "metadata": {
+            "to": "Frank Lee <frank@acme.com>",
+            "subject": "Re: Vendor contract renewal - CloudStore Inc.",
+            "from": "Grace Kim <grace@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Heidi Tanaka <heidi@acme.com>",
+            "processed": false,
+            "date": "Tue, 04 Feb 2025 14:00:00 +0000",
+            "bcc": "",
+            "message_id": "<vendor-reply1-008@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "text": "",
+          "score": 0.6404609680175781,
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "from": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 14,
+          "doc_id": "<cross-ref-014@test.example.com>",
+          "text": "",
+          "score": 0.6260276436805725,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "API keys for Falcon - following up",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Dave Wilson <dave@acme.com>",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 16:00:00 +0000",
+            "bcc": "",
+            "message_id": "<cross-ref-014@test.example.com>"
+          }
+        }
+      ]
+    },
+    "evidence_uploads": [
+      {
+        "message_id": "<vendor-reply2-009@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<vendor-original-007@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<vendor-reply1-008@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<falcon-reply-002@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<cross-ref-014@test.example.com>",
+        "status": 200
+      }
+    ],
+    "complete_response": {
+      "answer": "Grace recommended negotiating CloudStore down to $40,000/year using DataVault's quote as leverage. She noted that although DataVault offers a lower price at $35,000/year, there are significant risks and downtime costs associated with migrating from the existing integrated system [Email 3].",
+      "sources": [
+        {
+          "chunk_id": 14,
+          "doc_id": "<cross-ref-014@test.example.com>",
+          "score": 0.6260276436805725,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "API keys for Falcon - following up",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Dave Wilson <dave@acme.com>",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 16:00:00 +0000",
+            "message_id": "<cross-ref-014@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 7,
+          "doc_id": "<vendor-original-007@test.example.com>",
+          "score": 0.7503977417945862,
+          "text": "",
+          "metadata": {
+            "to": "Grace Kim <grace@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Frank Lee <frank@acme.com>",
+            "subject": "Vendor contract renewal - CloudStore Inc.",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Heidi Tanaka <heidi@acme.com>",
+            "processed": false,
+            "date": "Mon, 03 Feb 2025 09:00:00 +0000",
+            "message_id": "<vendor-original-007@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 8,
+          "doc_id": "<vendor-reply1-008@test.example.com>",
+          "score": 0.7424695491790771,
+          "text": "",
+          "metadata": {
+            "to": "Frank Lee <frank@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Grace Kim <grace@acme.com>",
+            "subject": "Re: Vendor contract renewal - CloudStore Inc.",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Heidi Tanaka <heidi@acme.com>",
+            "processed": false,
+            "date": "Tue, 04 Feb 2025 14:00:00 +0000",
+            "message_id": "<vendor-reply1-008@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 9,
+          "doc_id": "<vendor-reply2-009@test.example.com>",
+          "score": 0.7644814848899841,
+          "text": "",
+          "metadata": {
+            "to": "Frank Lee <frank@acme.com>, Grace Kim <grace@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Heidi Tanaka <heidi@acme.com>",
+            "subject": "Re: Re: Vendor contract renewal - CloudStore Inc.",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 10:00:00 +0000",
+            "message_id": "<vendor-reply2-009@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "score": 0.6404609680175781,
+          "text": "",
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Bob Martinez <bob@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        }
+      ]
+    },
+    "session_debug": {
+      "session_id": "quality-test-session_thread_02",
+      "history_summary": "",
+      "tail": [
+        {
+          "role": "user",
+          "content": "What did Grace recommend about the CloudStore contract?"
+        },
+        {
+          "role": "assistant",
+          "content": "Grace recommended negotiating CloudStore down to $40,000/year using DataVault's quote as leverage. She noted that although DataVault offers a lower price at $35,000/year, there are significant risks and downtime costs associated with migrating from the existing integrated system [Email 1].\n\nEMAILS REFERENCED ABOVE:\n[Email 1] date=Tue, 04 Feb 2025 14:00:00 +0000 from=Grace Kim <grace@acme.com> to=Frank Lee <frank@acme.com> cc=Heidi Tanaka <heidi@acme.com> subject=Re: Vendor contract renewal - CloudStore Inc."
+        }
+      ]
+    },
+    "error": null,
+    "test_id": "thread_02",
+    "category": "thread",
+    "criteria": {
+      "must_contain_any": [
+        "negotiate",
+        "$40,000",
+        "40,000",
+        "DataVault",
+        "migration risk"
+      ],
+      "must_not_contain": [],
+      "must_cite_emails": true,
+      "expected_email_subjects_any": [
+        "Vendor contract renewal"
+      ],
+      "hallucination_keywords": []
+    }
+  },
+  {
+    "question": "What topics has Mark Johnson emailed me about?",
+    "session_id": "quality-test-session_broad_01",
+    "user_name": "Bob Martinez <bob@acme.com>",
+    "query_response": {
+      "status": "need_messages",
+      "request_id": "6dd142ff92f3ef693cc045ebd947de47",
+      "message_ids": [
+        "<alice-recent-016@test.example.com>",
+        "<falcon-launch-001@test.example.com>",
+        "<mark-topic2-011@test.example.com>",
+        "<falcon-reply-002@test.example.com>",
+        "<mark-topic3-012@test.example.com>"
+      ],
+      "sources": [
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "text": "",
+          "score": 0.6988153457641602,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "bcc": "",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "text": "",
+          "score": 0.6979693174362183,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Project Falcon launch date",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 11,
+          "doc_id": "<mark-topic2-011@test.example.com>",
+          "text": "",
+          "score": 0.695851743221283,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Office renovation schedule - Building 3",
+            "from": "Mark Johnson <mark@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 15:00:00 +0000",
+            "bcc": "",
+            "message_id": "<mark-topic2-011@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "text": "",
+          "score": 0.687605619430542,
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "from": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 12,
+          "doc_id": "<mark-topic3-012@test.example.com>",
+          "text": "",
+          "score": 0.6873354911804199,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Company offsite - April 5-6",
+            "from": "Mark Johnson <mark@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Mon, 10 Feb 2025 11:00:00 +0000",
+            "bcc": "",
+            "message_id": "<mark-topic3-012@test.example.com>"
+          }
+        }
+      ]
+    },
+    "evidence_uploads": [
+      {
+        "message_id": "<alice-recent-016@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<falcon-launch-001@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<mark-topic2-011@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<falcon-reply-002@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<mark-topic3-012@test.example.com>",
+        "status": 200
+      }
+    ],
+    "complete_response": {
+      "answer": "Mark Johnson has emailed you about:\n1. Office renovation schedule for Building 3 [Email 1]\n2. Company offsite happening April 5-6 at Lakeside Resort [Email 2]",
+      "sources": [
+        {
+          "chunk_id": 11,
+          "doc_id": "<mark-topic2-011@test.example.com>",
+          "score": 0.695851743221283,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Mark Johnson <mark@acme.com>",
+            "subject": "Office renovation schedule - Building 3",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 15:00:00 +0000",
+            "message_id": "<mark-topic2-011@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 12,
+          "doc_id": "<mark-topic3-012@test.example.com>",
+          "score": 0.6873354911804199,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Mark Johnson <mark@acme.com>",
+            "subject": "Company offsite - April 5-6",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Mon, 10 Feb 2025 11:00:00 +0000",
+            "message_id": "<mark-topic3-012@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "score": 0.6988153457641602,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "score": 0.6979693174362183,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "score": 0.687605619430542,
+          "text": "",
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Bob Martinez <bob@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        }
+      ]
+    },
+    "session_debug": {
+      "session_id": "quality-test-session_broad_01",
+      "history_summary": "",
+      "tail": [
+        {
+          "role": "user",
+          "content": "What topics has Mark Johnson emailed me about?"
+        },
+        {
+          "role": "assistant",
+          "content": "Mark Johnson has emailed you about:\n1. Office renovation schedule for Building 3 [Email 1]\n2. Company offsite happening April 5-6 at Lakeside Resort [Email 2]\n\nEMAILS REFERENCED ABOVE:\n[Email 1] date=Fri, 07 Feb 2025 15:00:00 +0000 from=Mark Johnson <mark@acme.com> to=Bob Martinez <bob@acme.com> subject=Office renovation schedule - Building 3\n[Email 2] date=Mon, 10 Feb 2025 11:00:00 +0000 from=Mark Johnson <mark@acme.com> to=Bob Martinez <bob@acme.com> subject=Company offsite - April 5-6"
+        }
+      ]
+    },
+    "error": null,
+    "test_id": "broad_01",
+    "category": "broad",
+    "criteria": {
+      "must_contain_any": [
+        "Lisa Wong",
+        "new hire",
+        "renovation",
+        "Building 3",
+        "offsite",
+        "April"
+      ],
+      "must_not_contain": [],
+      "must_cite_emails": true,
+      "expected_email_subjects_any": [
+        "New hire",
+        "Office renovation",
+        "Company offsite"
+      ],
+      "hallucination_keywords": []
+    }
+  },
+  {
+    "question": "What is the most recent email I got from Alice?",
+    "session_id": "quality-test-session_temporal_01",
+    "user_name": "Bob Martinez <bob@acme.com>",
+    "query_response": {
+      "status": "need_messages",
+      "request_id": "d2c8841d0a8201707377874545f2527d",
+      "message_ids": [
+        "<falcon-launch-001@test.example.com>",
+        "<falcon-reply-002@test.example.com>",
+        "<alice-recent-016@test.example.com>",
+        "<cross-ref-014@test.example.com>",
+        "<mark-topic1-010@test.example.com>"
+      ],
+      "sources": [
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "text": "",
+          "score": 0.7175086140632629,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Project Falcon launch date",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "text": "",
+          "score": 0.7125517129898071,
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "from": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "text": "",
+          "score": 0.6885209083557129,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "bcc": "",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 14,
+          "doc_id": "<cross-ref-014@test.example.com>",
+          "text": "",
+          "score": 0.6806851625442505,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "API keys for Falcon - following up",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Dave Wilson <dave@acme.com>",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 16:00:00 +0000",
+            "bcc": "",
+            "message_id": "<cross-ref-014@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 10,
+          "doc_id": "<mark-topic1-010@test.example.com>",
+          "text": "",
+          "score": 0.6710262298583984,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "New hire starting Monday - Lisa Wong",
+            "from": "Mark Johnson <mark@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 06 Feb 2025 09:00:00 +0000",
+            "bcc": "",
+            "message_id": "<mark-topic1-010@test.example.com>"
+          }
+        }
+      ]
+    },
+    "evidence_uploads": [
+      {
+        "message_id": "<falcon-launch-001@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<falcon-reply-002@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<alice-recent-016@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<cross-ref-014@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<mark-topic1-010@test.example.com>",
+        "status": 200
+      }
+    ],
+    "complete_response": {
+      "answer": "The most recent email you got from Alice is on February 13, 2025, updating the Falcon timeline. [Email 3]",
+      "sources": [
+        {
+          "chunk_id": 14,
+          "doc_id": "<cross-ref-014@test.example.com>",
+          "score": 0.6806851625442505,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "API keys for Falcon - following up",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Dave Wilson <dave@acme.com>",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 16:00:00 +0000",
+            "message_id": "<cross-ref-014@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 10,
+          "doc_id": "<mark-topic1-010@test.example.com>",
+          "score": 0.6710262298583984,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Mark Johnson <mark@acme.com>",
+            "subject": "New hire starting Monday - Lisa Wong",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 06 Feb 2025 09:00:00 +0000",
+            "message_id": "<mark-topic1-010@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "score": 0.6885209083557129,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "score": 0.7175086140632629,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "score": 0.7125517129898071,
+          "text": "",
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Bob Martinez <bob@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        }
+      ]
+    },
+    "session_debug": {
+      "session_id": "quality-test-session_temporal_01",
+      "history_summary": "",
+      "tail": [
+        {
+          "role": "user",
+          "content": "What is the most recent email I got from Alice?"
+        },
+        {
+          "role": "assistant",
+          "content": "The most recent email you got from Alice is on February 13, 2025, updating the Falcon timeline. [Email 1]\n\nEMAILS REFERENCED ABOVE:\n[Email 1] date=Thu, 13 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Updated Falcon timeline"
+        }
+      ]
+    },
+    "error": null,
+    "test_id": "temporal_01",
+    "category": "temporal",
+    "criteria": {
+      "must_contain_any": [
+        "March 17",
+        "Updated Falcon timeline",
+        "2-day delay",
+        "marketing"
+      ],
+      "must_not_contain": [],
+      "must_cite_emails": true,
+      "expected_email_subjects_any": [
+        "Updated Falcon timeline"
+      ],
+      "hallucination_keywords": []
+    }
+  },
+  {
+    "question": "What deadlines do I have coming up?",
+    "session_id": "quality-test-session_temporal_02",
+    "user_name": "Bob Martinez <bob@acme.com>",
+    "query_response": {
+      "status": "need_messages",
+      "request_id": "cabd78bff81e6e09062d581978c32843",
+      "message_ids": [
+        "<alice-recent-016@test.example.com>",
+        "<mark-topic2-011@test.example.com>",
+        "<falcon-launch-001@test.example.com>",
+        "<holiday-schedule-005@test.example.com>",
+        "<falcon-reply-002@test.example.com>"
+      ],
+      "sources": [
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "text": "",
+          "score": 0.7632768154144287,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "bcc": "",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 11,
+          "doc_id": "<mark-topic2-011@test.example.com>",
+          "text": "",
+          "score": 0.7323663234710693,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Office renovation schedule - Building 3",
+            "from": "Mark Johnson <mark@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 15:00:00 +0000",
+            "bcc": "",
+            "message_id": "<mark-topic2-011@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "text": "",
+          "score": 0.7279806137084961,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Project Falcon launch date",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 5,
+          "doc_id": "<holiday-schedule-005@test.example.com>",
+          "text": "",
+          "score": 0.7251429557800293,
+          "metadata": {
+            "to": "All Staff <allstaff@acme.com>",
+            "subject": "2025 Company Holiday Schedule",
+            "from": "HR Department <hr@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Fri, 03 Jan 2025 10:00:00 +0000",
+            "bcc": "Bob Martinez <bob@acme.com>",
+            "message_id": "<holiday-schedule-005@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "text": "",
+          "score": 0.7192970514297485,
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "from": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        }
+      ]
+    },
+    "evidence_uploads": [
+      {
+        "message_id": "<alice-recent-016@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<mark-topic2-011@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<falcon-launch-001@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<holiday-schedule-005@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<falcon-reply-002@test.example.com>",
+        "status": 200
+      }
+    ],
+    "complete_response": {
+      "answer": "The upcoming deadlines based on the retrieved emails are:\n\n- March 3-14: Office renovation for Building 3 requires your team's relocation to Building 1. ([Email 2])\n- March 10: QA team readiness for Project Falcon launch, which is now set for March 17 (originally March 15). ([Email 3], [Email 4])\n- March 12: Staging environment validation and a dry run for Project Falcon. ([Email 4], [Email 5])",
+      "sources": [
+        {
+          "chunk_id": 5,
+          "doc_id": "<holiday-schedule-005@test.example.com>",
+          "score": 0.7251429557800293,
+          "text": "",
+          "metadata": {
+            "to": "All Staff <allstaff@acme.com>",
+            "attachments": [],
+            "bcc": "Bob Martinez <bob@acme.com>",
+            "from": "HR Department <hr@acme.com>",
+            "subject": "2025 Company Holiday Schedule",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Fri, 03 Jan 2025 10:00:00 +0000",
+            "message_id": "<holiday-schedule-005@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 11,
+          "doc_id": "<mark-topic2-011@test.example.com>",
+          "score": 0.7323663234710693,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Mark Johnson <mark@acme.com>",
+            "subject": "Office renovation schedule - Building 3",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 15:00:00 +0000",
+            "message_id": "<mark-topic2-011@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "score": 0.7632768154144287,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "score": 0.7279806137084961,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "score": 0.7192970514297485,
+          "text": "",
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Bob Martinez <bob@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        }
+      ]
+    },
+    "session_debug": {
+      "session_id": "quality-test-session_temporal_02",
+      "history_summary": "",
+      "tail": [
+        {
+          "role": "user",
+          "content": "What deadlines do I have coming up?"
+        },
+        {
+          "role": "assistant",
+          "content": "The upcoming deadlines based on the retrieved emails are:\n\n- March 3-14: Office renovation for Building 3 requires your team's relocation to Building 1. ([Email 1])\n- March 10: QA team readiness for Project Falcon launch, which is now set for March 17 (originally March 15). ([Email 2], [Email 3])\n- March 12: Staging environment validation and a dry run for Project Falcon. ([Email 3], [Email 4])\n\nEMAILS REFERENCED ABOVE:\n[Email 1] date=Fri, 07 Feb 2025 15:00:00 +0000 from=Mark Johnson <mark@acme.com> to=Bob Martinez <bob@acme.com> subject=Office renovation schedule - Building 3\n[Email 2] date=Thu, 13 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Updated Falcon timeline\n[Email 3] date=Wed, 05 Feb 2025 09:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Project Falcon launch date\n[Email 4] date=Wed, 05 Feb 2025 14:30:00 +0000 from=Bob Martinez <bob@acme.com> to=Alice Chen <alice@acme.com> subject=Re: Project Falcon launch date"
+        }
+      ]
+    },
+    "error": null,
+    "test_id": "temporal_02",
+    "category": "temporal",
+    "criteria": {
+      "must_contain_any": [
+        "February 28",
+        "Feb 28",
+        "March 3",
+        "compliance",
+        "audit"
+      ],
+      "must_not_contain": [],
+      "must_cite_emails": true,
+      "expected_email_subjects_any": [
+        "Compliance audit",
+        "budget review"
+      ],
+      "hallucination_keywords": []
+    }
+  },
+  {
+    "question": "Did anyone send me a spreadsheet or financial report?",
+    "session_id": "quality-test-session_attachment_01",
+    "user_name": "Bob Martinez <bob@acme.com>",
+    "query_response": {
+      "status": "need_messages",
+      "request_id": "0ce6a1bb951658b2c08a013a72692ae3",
+      "message_ids": [
+        "<q1-report-006@test.example.com>",
+        "<deadline-013@test.example.com>",
+        "<mark-topic2-011@test.example.com>",
+        "<mark-topic3-012@test.example.com>",
+        "<vendor-reply2-009@test.example.com>"
+      ],
+      "sources": [
+        {
+          "chunk_id": 6,
+          "doc_id": "<q1-report-006@test.example.com>",
+          "text": "",
+          "score": 0.6239418387413025,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Q1 financial report attached",
+            "from": "Eve Park <eve@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 11:30:00 +0000",
+            "bcc": "",
+            "message_id": "<q1-report-006@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 13,
+          "doc_id": "<deadline-013@test.example.com>",
+          "text": "",
+          "score": 0.6204672455787659,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Compliance audit documents needed by Feb 28",
+            "from": "Nora Patel <nora@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 12 Feb 2025 09:00:00 +0000",
+            "bcc": "",
+            "message_id": "<deadline-013@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 11,
+          "doc_id": "<mark-topic2-011@test.example.com>",
+          "text": "",
+          "score": 0.6124780178070068,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Office renovation schedule - Building 3",
+            "from": "Mark Johnson <mark@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 15:00:00 +0000",
+            "bcc": "",
+            "message_id": "<mark-topic2-011@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 12,
+          "doc_id": "<mark-topic3-012@test.example.com>",
+          "text": "",
+          "score": 0.5755165815353394,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Company offsite - April 5-6",
+            "from": "Mark Johnson <mark@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Mon, 10 Feb 2025 11:00:00 +0000",
+            "bcc": "",
+            "message_id": "<mark-topic3-012@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 9,
+          "doc_id": "<vendor-reply2-009@test.example.com>",
+          "text": "",
+          "score": 0.5660933256149292,
+          "metadata": {
+            "to": "Frank Lee <frank@acme.com>, Grace Kim <grace@acme.com>",
+            "subject": "Re: Re: Vendor contract renewal - CloudStore Inc.",
+            "from": "Heidi Tanaka <heidi@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 10:00:00 +0000",
+            "bcc": "",
+            "message_id": "<vendor-reply2-009@test.example.com>"
+          }
+        }
+      ]
+    },
+    "evidence_uploads": [
+      {
+        "message_id": "<q1-report-006@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<deadline-013@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<mark-topic2-011@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<mark-topic3-012@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<vendor-reply2-009@test.example.com>",
+        "status": 200
+      }
+    ],
+    "complete_response": {
+      "answer": "Eve Park sent you a Q1 financial report on February 13, 2025 [Email 3].",
+      "sources": [
+        {
+          "chunk_id": 11,
+          "doc_id": "<mark-topic2-011@test.example.com>",
+          "score": 0.6124780178070068,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Mark Johnson <mark@acme.com>",
+            "subject": "Office renovation schedule - Building 3",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 15:00:00 +0000",
+            "message_id": "<mark-topic2-011@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 12,
+          "doc_id": "<mark-topic3-012@test.example.com>",
+          "score": 0.5755165815353394,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Mark Johnson <mark@acme.com>",
+            "subject": "Company offsite - April 5-6",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Mon, 10 Feb 2025 11:00:00 +0000",
+            "message_id": "<mark-topic3-012@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 6,
+          "doc_id": "<q1-report-006@test.example.com>",
+          "score": 0.6239418387413025,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Eve Park <eve@acme.com>",
+            "subject": "Q1 financial report attached",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 11:30:00 +0000",
+            "message_id": "<q1-report-006@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 9,
+          "doc_id": "<vendor-reply2-009@test.example.com>",
+          "score": 0.5660933256149292,
+          "text": "",
+          "metadata": {
+            "to": "Frank Lee <frank@acme.com>, Grace Kim <grace@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Heidi Tanaka <heidi@acme.com>",
+            "subject": "Re: Re: Vendor contract renewal - CloudStore Inc.",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 10:00:00 +0000",
+            "message_id": "<vendor-reply2-009@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 13,
+          "doc_id": "<deadline-013@test.example.com>",
+          "score": 0.6204672455787659,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Nora Patel <nora@acme.com>",
+            "subject": "Compliance audit documents needed by Feb 28",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 12 Feb 2025 09:00:00 +0000",
+            "message_id": "<deadline-013@test.example.com>"
+          }
+        }
+      ]
+    },
+    "session_debug": {
+      "session_id": "quality-test-session_attachment_01",
+      "history_summary": "",
+      "tail": [
+        {
+          "role": "user",
+          "content": "Did anyone send me a spreadsheet or financial report?"
+        },
+        {
+          "role": "assistant",
+          "content": "Eve Park sent you a Q1 financial report on February 13, 2025 [Email 1].\n\nEMAILS REFERENCED ABOVE:\n[Email 1] date=Thu, 13 Feb 2025 11:30:00 +0000 from=Eve Park <eve@acme.com> to=Bob Martinez <bob@acme.com> subject=Q1 financial report attached"
+        }
+      ]
+    },
+    "error": null,
+    "test_id": "attachment_01",
+    "category": "attachment",
+    "criteria": {
+      "must_contain_any": [
+        "Eve",
+        "Q1",
+        "financial",
+        "report",
+        "xlsx"
+      ],
+      "must_not_contain": [],
+      "must_cite_emails": true,
+      "expected_email_subjects_any": [
+        "Q1 financial report"
+      ],
+      "hallucination_keywords": []
+    }
+  },
+  {
+    "question": "What's the situation with the payment gateway API keys for Falcon?",
+    "session_id": "quality-test-session_crossref_01",
+    "user_name": "Bob Martinez <bob@acme.com>",
+    "query_response": {
+      "status": "need_messages",
+      "request_id": "70b47cc41dd75a5f4ee9d5216c558ce5",
+      "message_ids": [
+        "<cross-ref-014@test.example.com>",
+        "<falcon-reply-002@test.example.com>",
+        "<falcon-launch-001@test.example.com>",
+        "<alice-recent-016@test.example.com>",
+        "<processed-015@test.example.com>"
+      ],
+      "sources": [
+        {
+          "chunk_id": 14,
+          "doc_id": "<cross-ref-014@test.example.com>",
+          "text": "",
+          "score": 0.8488687872886658,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "API keys for Falcon - following up",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Dave Wilson <dave@acme.com>",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 16:00:00 +0000",
+            "bcc": "",
+            "message_id": "<cross-ref-014@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "text": "",
+          "score": 0.7440571784973145,
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "from": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "text": "",
+          "score": 0.6693130135536194,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Project Falcon launch date",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "text": "",
+          "score": 0.643369734287262,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "bcc": "",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 15,
+          "doc_id": "<processed-015@test.example.com>",
+          "text": "",
+          "score": 0.5797030925750732,
+          "metadata": {
+            "processed_at": "2026-02-20T21:58:34Z",
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Password reset completed",
+            "from": "IT Support <it@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": true,
+            "date": "Mon, 03 Feb 2025 12:00:00 +0000",
+            "bcc": "",
+            "message_id": "<processed-015@test.example.com>"
+          }
+        }
+      ]
+    },
+    "evidence_uploads": [
+      {
+        "message_id": "<cross-ref-014@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<falcon-reply-002@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<falcon-launch-001@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<alice-recent-016@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<processed-015@test.example.com>",
+        "status": 200
+      }
+    ],
+    "complete_response": {
+      "answer": "Alice requested API keys for Falcon's payment gateway integration and mentioned they are pending approval from the vendor. The latest update states that these keys must be available before March 10 to proceed with testing [Email 1]. Alice also inquired about an estimated timeline from Dave's team regarding when these API keys will be ready.",
+      "sources": [
+        {
+          "chunk_id": 14,
+          "doc_id": "<cross-ref-014@test.example.com>",
+          "score": 0.8488687872886658,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "API keys for Falcon - following up",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Dave Wilson <dave@acme.com>",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 16:00:00 +0000",
+            "message_id": "<cross-ref-014@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 15,
+          "doc_id": "<processed-015@test.example.com>",
+          "score": 0.5797030925750732,
+          "text": "",
+          "metadata": {
+            "processed_at": "2026-02-20T21:58:34Z",
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "IT Support <it@acme.com>",
+            "subject": "Password reset completed",
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": true,
+            "date": "Mon, 03 Feb 2025 12:00:00 +0000",
+            "message_id": "<processed-015@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "score": 0.643369734287262,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "score": 0.6693130135536194,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "score": 0.7440571784973145,
+          "text": "",
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Bob Martinez <bob@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        }
+      ]
+    },
+    "session_debug": {
+      "session_id": "quality-test-session_crossref_01",
+      "history_summary": "",
+      "tail": [
+        {
+          "role": "user",
+          "content": "What's the situation with the payment gateway API keys for Falcon?"
+        },
+        {
+          "role": "assistant",
+          "content": "Alice requested API keys for Falcon's payment gateway integration and mentioned they are pending approval from the vendor. The latest update states that these keys must be available before March 10 to proceed with testing [Email 1]. Alice also inquired about an estimated timeline from Dave's team regarding when these API keys will be ready.\n\nEMAILS REFERENCED ABOVE:\n[Email 1] date=Fri, 07 Feb 2025 16:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> cc=Dave Wilson <dave@acme.com> subject=API keys for Falcon - following up"
+        }
+      ]
+    },
+    "error": null,
+    "test_id": "crossref_01",
+    "category": "cross_reference",
+    "criteria": {
+      "must_contain_any": [
+        "API keys",
+        "pending",
+        "approval",
+        "Dave",
+        "vendor"
+      ],
+      "must_not_contain": [],
+      "must_cite_emails": true,
+      "expected_email_subjects_any": [
+        "API keys for Falcon"
+      ],
+      "hallucination_keywords": []
+    }
+  },
+  {
+    "question": "Has anyone emailed me about the Mars colonization project?",
+    "session_id": "quality-test-session_negative_01",
+    "user_name": "Bob Martinez <bob@acme.com>",
+    "query_response": {
+      "status": "need_messages",
+      "request_id": "0eea3ed7d5b6167e3639351a30660a5b",
+      "message_ids": [
+        "<falcon-launch-001@test.example.com>",
+        "<falcon-reply-002@test.example.com>",
+        "<cross-ref-014@test.example.com>",
+        "<alice-recent-016@test.example.com>",
+        "<mark-topic3-012@test.example.com>"
+      ],
+      "sources": [
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "text": "",
+          "score": 0.6273536682128906,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Project Falcon launch date",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "text": "",
+          "score": 0.5988321900367737,
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "from": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 14,
+          "doc_id": "<cross-ref-014@test.example.com>",
+          "text": "",
+          "score": 0.5853978991508484,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "API keys for Falcon - following up",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Dave Wilson <dave@acme.com>",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 16:00:00 +0000",
+            "bcc": "",
+            "message_id": "<cross-ref-014@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "text": "",
+          "score": 0.5687946677207947,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "bcc": "",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 12,
+          "doc_id": "<mark-topic3-012@test.example.com>",
+          "text": "",
+          "score": 0.5399643182754517,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Company offsite - April 5-6",
+            "from": "Mark Johnson <mark@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Mon, 10 Feb 2025 11:00:00 +0000",
+            "bcc": "",
+            "message_id": "<mark-topic3-012@test.example.com>"
+          }
+        }
+      ]
+    },
+    "evidence_uploads": [
+      {
+        "message_id": "<falcon-launch-001@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<falcon-reply-002@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<cross-ref-014@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<alice-recent-016@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<mark-topic3-012@test.example.com>",
+        "status": 200
+      }
+    ],
+    "complete_response": {
+      "answer": "None of the retrieved emails mention a Mars colonization project. The most recent emails discuss Project Falcon and company offsite plans.",
+      "sources": [
+        {
+          "chunk_id": 14,
+          "doc_id": "<cross-ref-014@test.example.com>",
+          "score": 0.5853978991508484,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "API keys for Falcon - following up",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Dave Wilson <dave@acme.com>",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 16:00:00 +0000",
+            "message_id": "<cross-ref-014@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 12,
+          "doc_id": "<mark-topic3-012@test.example.com>",
+          "score": 0.5399643182754517,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Mark Johnson <mark@acme.com>",
+            "subject": "Company offsite - April 5-6",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Mon, 10 Feb 2025 11:00:00 +0000",
+            "message_id": "<mark-topic3-012@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "score": 0.5687946677207947,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "score": 0.6273536682128906,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "score": 0.5988321900367737,
+          "text": "",
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Bob Martinez <bob@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        }
+      ]
+    },
+    "session_debug": {
+      "session_id": "quality-test-session_negative_01",
+      "history_summary": "",
+      "tail": [
+        {
+          "role": "user",
+          "content": "Has anyone emailed me about the Mars colonization project?"
+        },
+        {
+          "role": "assistant",
+          "content": "None of the retrieved emails mention a Mars colonization project. The most recent emails discuss Project Falcon and company offsite plans."
+        }
+      ]
+    },
+    "error": null,
+    "test_id": "negative_01",
+    "category": "negative",
+    "criteria": {
+      "must_contain_any": [
+        "no ",
+        "not ",
+        "don't",
+        "doesn't",
+        "no relevant",
+        "no emails",
+        "not found",
+        "couldn't find"
+      ],
+      "must_not_contain": [],
+      "must_cite_emails": false,
+      "expected_email_subjects_any": [],
+      "hallucination_keywords": [
+        "Mars colonization",
+        "Mars project"
+      ]
+    }
+  },
+  {
+    "question": "Tell me about Alice's emails regarding Project Falcon.",
+    "session_id": "quality-test-session_multiturn",
+    "user_name": "Bob Martinez <bob@acme.com>",
+    "query_response": {
+      "status": "need_messages",
+      "request_id": "f0f10e9519f019754068a6ca16877397",
+      "message_ids": [
+        "<falcon-launch-001@test.example.com>",
+        "<alice-recent-016@test.example.com>",
+        "<falcon-reply-002@test.example.com>",
+        "<cross-ref-014@test.example.com>",
+        "<mark-topic2-011@test.example.com>"
+      ],
+      "sources": [
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "text": "",
+          "score": 0.7539608478546143,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Project Falcon launch date",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "text": "",
+          "score": 0.7354891300201416,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "bcc": "",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "text": "",
+          "score": 0.7284530401229858,
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "from": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 14,
+          "doc_id": "<cross-ref-014@test.example.com>",
+          "text": "",
+          "score": 0.7178410291671753,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "API keys for Falcon - following up",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Dave Wilson <dave@acme.com>",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 16:00:00 +0000",
+            "bcc": "",
+            "message_id": "<cross-ref-014@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 11,
+          "doc_id": "<mark-topic2-011@test.example.com>",
+          "text": "",
+          "score": 0.6231245994567871,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Office renovation schedule - Building 3",
+            "from": "Mark Johnson <mark@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 15:00:00 +0000",
+            "bcc": "",
+            "message_id": "<mark-topic2-011@test.example.com>"
+          }
+        }
+      ]
+    },
+    "evidence_uploads": [
+      {
+        "message_id": "<falcon-launch-001@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<alice-recent-016@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<falcon-reply-002@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<cross-ref-014@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<mark-topic2-011@test.example.com>",
+        "status": 200
+      }
+    ],
+    "complete_response": {
+      "answer": "Alice sent four emails related to Project Falcon. The earliest one on February 5th confirmed the launch date for March 15 and requested that QA be ready by March 10. [Email 4]\n\nIn her email on February 7th, Alice followed up about API keys needed for payment gateway integration before March 10. She asked Dave's team to provide an estimated time of arrival (ETA) since they are pending approval from a vendor. [Email 2]\n\nThen, on the same day, Alice responded to your request for information about the payment gateway API keys by summarizing that the keys were still awaiting approval and needed before March 10th. [Email 5]\n\nLastly, her most recent email on February 13th updated the Falcon launch timeline due to a delay requested by the marketing team; the new launch date is set for March 17 instead of March 15. Additionally, she provided revised deadlines for QA readiness (March 12) and dry runs (March 14). [Email 3]",
+      "sources": [
+        {
+          "chunk_id": 11,
+          "doc_id": "<mark-topic2-011@test.example.com>",
+          "score": 0.6231245994567871,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Mark Johnson <mark@acme.com>",
+            "subject": "Office renovation schedule - Building 3",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 15:00:00 +0000",
+            "message_id": "<mark-topic2-011@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 14,
+          "doc_id": "<cross-ref-014@test.example.com>",
+          "score": 0.7178410291671753,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "API keys for Falcon - following up",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Dave Wilson <dave@acme.com>",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 16:00:00 +0000",
+            "message_id": "<cross-ref-014@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "score": 0.7354891300201416,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "score": 0.7539608478546143,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "score": 0.7284530401229858,
+          "text": "",
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Bob Martinez <bob@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        }
+      ]
+    },
+    "session_debug": {
+      "session_id": "quality-test-session_multiturn",
+      "history_summary": "",
+      "tail": [
+        {
+          "role": "user",
+          "content": "Tell me about Alice's emails regarding Project Falcon."
+        },
+        {
+          "role": "assistant",
+          "content": "Alice sent four emails related to Project Falcon. The earliest one on February 5th confirmed the launch date for March 15 and requested that QA be ready by March 10. [Email 1]\n\nIn her email on February 7th, Alice followed up about API keys needed for payment gateway integration before March 10. She asked Dave's team to provide an estimated time of arrival (ETA) since they are pending approval from a vendor. [Email 2]\n\nThen, on the same day, Alice responded to your request for information about the payment gateway API keys by summarizing that the keys were still awaiting approval and needed before March 10th. [Email 3]\n\nLastly, her most recent email on February 13th updated the Falcon launch timeline due to a delay requested by the marketing team; the new launch date is set for March 17 instead of March 15. Additionally, she provided revised deadlines for QA readiness (March 12) and dry runs (March 14). [Email 4]\n\nEMAILS REFERENCED ABOVE:\n[Email 1] date=Wed, 05 Feb 2025 09:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Project Falcon launch date\n[Email 2] date=Fri, 07 Feb 2025 16:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> cc=Dave Wilson <dave@acme.com> subject=API keys for Falcon - following up\n[Email 3] date=Wed, 05 Feb 2025 14:30:00 +0000 from=Bob Martinez <bob@acme.com> to=Alice Chen <alice@acme.com> subject=Re: Project Falcon launch date\n[Email 4] date=Thu, 13 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Updated Falcon timeline"
+        }
+      ]
+    },
+    "error": null,
+    "test_id": "multiturn_01",
+    "category": "multi_turn",
+    "criteria": {
+      "must_contain_any": [
+        "Falcon",
+        "launch",
+        "Alice"
+      ],
+      "must_not_contain": [],
+      "must_cite_emails": true,
+      "expected_email_subjects_any": [
+        "Falcon"
+      ],
+      "hallucination_keywords": []
+    }
+  },
+  {
+    "question": "What did she say about the deadline change?",
+    "session_id": "quality-test-session_multiturn",
+    "user_name": "Bob Martinez <bob@acme.com>",
+    "query_response": {
+      "status": "need_messages",
+      "request_id": "9200ebd4763f23881d48bdf0a2a62a5d",
+      "message_ids": [
+        "<alice-recent-016@test.example.com>",
+        "<falcon-launch-001@test.example.com>",
+        "<falcon-reply-002@test.example.com>",
+        "<cross-ref-014@test.example.com>",
+        "<mark-topic1-010@test.example.com>"
+      ],
+      "sources": [
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "text": "",
+          "score": 0.815687894821167,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "bcc": "",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "text": "",
+          "score": 0.7916978597640991,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Project Falcon launch date",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "text": "",
+          "score": 0.7676004767417908,
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "from": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 14,
+          "doc_id": "<cross-ref-014@test.example.com>",
+          "text": "",
+          "score": 0.7268166542053223,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "API keys for Falcon - following up",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Dave Wilson <dave@acme.com>",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 16:00:00 +0000",
+            "bcc": "",
+            "message_id": "<cross-ref-014@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 10,
+          "doc_id": "<mark-topic1-010@test.example.com>",
+          "text": "",
+          "score": 0.601180374622345,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "New hire starting Monday - Lisa Wong",
+            "from": "Mark Johnson <mark@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 06 Feb 2025 09:00:00 +0000",
+            "bcc": "",
+            "message_id": "<mark-topic1-010@test.example.com>"
+          }
+        }
+      ]
+    },
+    "evidence_uploads": [
+      {
+        "message_id": "<alice-recent-016@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<falcon-launch-001@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<falcon-reply-002@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<cross-ref-014@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<mark-topic1-010@test.example.com>",
+        "status": 200
+      }
+    ],
+    "complete_response": {
+      "answer": "Alice updated the Falcon launch timeline due to a marketing team request for a 2-day delay. The new launch date is March 17 instead of March 15. All other deadlines were adjusted accordingly: QA ready by March 12 (originally March 10) and dry run on March 14 (previously March 12). [Email 3]",
+      "sources": [
+        {
+          "chunk_id": 14,
+          "doc_id": "<cross-ref-014@test.example.com>",
+          "score": 0.7268166542053223,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "API keys for Falcon - following up",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Dave Wilson <dave@acme.com>",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 16:00:00 +0000",
+            "message_id": "<cross-ref-014@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 10,
+          "doc_id": "<mark-topic1-010@test.example.com>",
+          "score": 0.601180374622345,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Mark Johnson <mark@acme.com>",
+            "subject": "New hire starting Monday - Lisa Wong",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 06 Feb 2025 09:00:00 +0000",
+            "message_id": "<mark-topic1-010@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "score": 0.815687894821167,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "score": 0.7916978597640991,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 2,
+          "doc_id": "<falcon-reply-002@test.example.com>",
+          "score": 0.7676004767417908,
+          "text": "",
+          "metadata": {
+            "to": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Bob Martinez <bob@acme.com>",
+            "subject": "Re: Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 14:30:00 +0000",
+            "message_id": "<falcon-reply-002@test.example.com>"
+          }
+        }
+      ]
+    },
+    "session_debug": {
+      "session_id": "quality-test-session_multiturn",
+      "history_summary": "",
+      "tail": [
+        {
+          "role": "user",
+          "content": "Tell me about Alice's emails regarding Project Falcon."
+        },
+        {
+          "role": "assistant",
+          "content": "Alice sent four emails related to Project Falcon. The earliest one on February 5th confirmed the launch date for March 15 and requested that QA be ready by March 10. [Email 1]\n\nIn her email on February 7th, Alice followed up about API keys needed for payment gateway integration before March 10. She asked Dave's team to provide an estimated time of arrival (ETA) since they are pending approval from a vendor. [Email 2]\n\nThen, on the same day, Alice responded to your request for information about the payment gateway API keys by summarizing that the keys were still awaiting approval and needed before March 10th. [Email 3]\n\nLastly, her most recent email on February 13th updated the Falcon launch timeline due to a delay requested by the marketing team; the new launch date is set for March 17 instead of March 15. Additionally, she provided revised deadlines for QA readiness (March 12) and dry runs (March 14). [Email 4]\n\nEMAILS REFERENCED ABOVE:\n[Email 1] date=Wed, 05 Feb 2025 09:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Project Falcon launch date\n[Email 2] date=Fri, 07 Feb 2025 16:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> cc=Dave Wilson <dave@acme.com> subject=API keys for Falcon - following up\n[Email 3] date=Wed, 05 Feb 2025 14:30:00 +0000 from=Bob Martinez <bob@acme.com> to=Alice Chen <alice@acme.com> subject=Re: Project Falcon launch date\n[Email 4] date=Thu, 13 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Updated Falcon timeline"
+        },
+        {
+          "role": "user",
+          "content": "What did she say about the deadline change?"
+        },
+        {
+          "role": "assistant",
+          "content": "Alice updated the Falcon launch timeline due to a marketing team request for a 2-day delay. The new launch date is March 17 instead of March 15. All other deadlines were adjusted accordingly: QA ready by March 12 (originally March 10) and dry run on March 14 (previously March 12). [Email 1]\n\nEMAILS REFERENCED ABOVE:\n[Email 1] date=Thu, 13 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Updated Falcon timeline"
+        }
+      ]
+    },
+    "error": null,
+    "test_id": "multiturn_02",
+    "category": "multi_turn",
+    "criteria": {
+      "must_contain_any": [
+        "March 17",
+        "2-day delay",
+        "marketing",
+        "March 15"
+      ],
+      "must_not_contain": [],
+      "must_cite_emails": true,
+      "expected_email_subjects_any": [
+        "Updated Falcon timeline"
+      ],
+      "hallucination_keywords": []
+    }
+  },
+  {
+    "question": "And who needs to be informed about this change?",
+    "session_id": "quality-test-session_multiturn",
+    "user_name": "Bob Martinez <bob@acme.com>",
+    "query_response": {
+      "status": "need_messages",
+      "request_id": "a550006bd6984c050b17749a4e05b240",
+      "message_ids": [
+        "<alice-recent-016@test.example.com>",
+        "<processed-015@test.example.com>",
+        "<mark-topic2-011@test.example.com>",
+        "<server-down-004@test.example.com>",
+        "<falcon-launch-001@test.example.com>"
+      ],
+      "sources": [
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "text": "",
+          "score": 0.5513801574707031,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "bcc": "",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 15,
+          "doc_id": "<processed-015@test.example.com>",
+          "text": "",
+          "score": 0.5345170497894287,
+          "metadata": {
+            "processed_at": "2026-02-20T21:58:34Z",
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Password reset completed",
+            "from": "IT Support <it@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": true,
+            "date": "Mon, 03 Feb 2025 12:00:00 +0000",
+            "bcc": "",
+            "message_id": "<processed-015@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 11,
+          "doc_id": "<mark-topic2-011@test.example.com>",
+          "text": "",
+          "score": 0.5302637219429016,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Office renovation schedule - Building 3",
+            "from": "Mark Johnson <mark@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 15:00:00 +0000",
+            "bcc": "",
+            "message_id": "<mark-topic2-011@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 4,
+          "doc_id": "<server-down-004@test.example.com>",
+          "text": "",
+          "score": 0.5056954026222229,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "URGENT: Production server down - immediate action needed",
+            "from": "Dave Wilson <dave@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Ops Team <ops@acme.com>",
+            "processed": false,
+            "date": "Tue, 11 Feb 2025 03:15:00 +0000",
+            "bcc": "",
+            "message_id": "<server-down-004@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "text": "",
+          "score": 0.5054537653923035,
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "subject": "Project Falcon launch date",
+            "from": "Alice Chen <alice@acme.com>",
+            "attachments": [],
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "bcc": "",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        }
+      ]
+    },
+    "evidence_uploads": [
+      {
+        "message_id": "<alice-recent-016@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<processed-015@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<mark-topic2-011@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<server-down-004@test.example.com>",
+        "status": 200
+      },
+      {
+        "message_id": "<falcon-launch-001@test.example.com>",
+        "status": 200
+      }
+    ],
+    "complete_response": {
+      "answer": "Alice updated the Falcon launch timeline due to a marketing team request for a 2-day delay. The new launch date is March 17 instead of March 15. All other deadlines were adjusted accordingly: QA ready by March 12 (originally March 10) and dry run on March 14 (previously March 12). [Email 3]\n\nYou should inform relevant stakeholders, such as the QA team and project managers, about this change to ensure they adjust their schedules accordingly.",
+      "sources": [
+        {
+          "chunk_id": 11,
+          "doc_id": "<mark-topic2-011@test.example.com>",
+          "score": 0.5302637219429016,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Mark Johnson <mark@acme.com>",
+            "subject": "Office renovation schedule - Building 3",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "",
+            "processed": false,
+            "date": "Fri, 07 Feb 2025 15:00:00 +0000",
+            "message_id": "<mark-topic2-011@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 15,
+          "doc_id": "<processed-015@test.example.com>",
+          "score": 0.5345170497894287,
+          "text": "",
+          "metadata": {
+            "processed_at": "2026-02-20T21:58:34Z",
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "IT Support <it@acme.com>",
+            "subject": "Password reset completed",
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": true,
+            "date": "Mon, 03 Feb 2025 12:00:00 +0000",
+            "message_id": "<processed-015@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 16,
+          "doc_id": "<alice-recent-016@test.example.com>",
+          "score": 0.5513801574707031,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Updated Falcon timeline",
+            "ingested_at": "2026-02-20T21:58:34Z",
+            "cc": "",
+            "processed": false,
+            "date": "Thu, 13 Feb 2025 17:00:00 +0000",
+            "message_id": "<alice-recent-016@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 4,
+          "doc_id": "<server-down-004@test.example.com>",
+          "score": 0.5056954026222229,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Dave Wilson <dave@acme.com>",
+            "subject": "URGENT: Production server down - immediate action needed",
+            "ingested_at": "2026-02-20T21:58:33Z",
+            "cc": "Ops Team <ops@acme.com>",
+            "processed": false,
+            "date": "Tue, 11 Feb 2025 03:15:00 +0000",
+            "message_id": "<server-down-004@test.example.com>"
+          }
+        },
+        {
+          "chunk_id": 1,
+          "doc_id": "<falcon-launch-001@test.example.com>",
+          "score": 0.5054537653923035,
+          "text": "",
+          "metadata": {
+            "to": "Bob Martinez <bob@acme.com>",
+            "attachments": [],
+            "bcc": "",
+            "from": "Alice Chen <alice@acme.com>",
+            "subject": "Project Falcon launch date",
+            "ingested_at": "2026-02-20T21:58:32Z",
+            "cc": "",
+            "processed": false,
+            "date": "Wed, 05 Feb 2025 09:00:00 +0000",
+            "message_id": "<falcon-launch-001@test.example.com>"
+          }
+        }
+      ]
+    },
+    "session_debug": {
+      "session_id": "quality-test-session_multiturn",
+      "history_summary": "",
+      "tail": [
+        {
+          "role": "user",
+          "content": "Tell me about Alice's emails regarding Project Falcon."
+        },
+        {
+          "role": "assistant",
+          "content": "Alice sent four emails related to Project Falcon. The earliest one on February 5th confirmed the launch date for March 15 and requested that QA be ready by March 10. [Email 1]\n\nIn her email on February 7th, Alice followed up about API keys needed for payment gateway integration before March 10. She asked Dave's team to provide an estimated time of arrival (ETA) since they are pending approval from a vendor. [Email 2]\n\nThen, on the same day, Alice responded to your request for information about the payment gateway API keys by summarizing that the keys were still awaiting approval and needed before March 10th. [Email 3]\n\nLastly, her most recent email on February 13th updated the Falcon launch timeline due to a delay requested by the marketing team; the new launch date is set for March 17 instead of March 15. Additionally, she provided revised deadlines for QA readiness (March 12) and dry runs (March 14). [Email 4]\n\nEMAILS REFERENCED ABOVE:\n[Email 1] date=Wed, 05 Feb 2025 09:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Project Falcon launch date\n[Email 2] date=Fri, 07 Feb 2025 16:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> cc=Dave Wilson <dave@acme.com> subject=API keys for Falcon - following up\n[Email 3] date=Wed, 05 Feb 2025 14:30:00 +0000 from=Bob Martinez <bob@acme.com> to=Alice Chen <alice@acme.com> subject=Re: Project Falcon launch date\n[Email 4] date=Thu, 13 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Updated Falcon timeline"
+        },
+        {
+          "role": "user",
+          "content": "What did she say about the deadline change?"
+        },
+        {
+          "role": "assistant",
+          "content": "Alice updated the Falcon launch timeline due to a marketing team request for a 2-day delay. The new launch date is March 17 instead of March 15. All other deadlines were adjusted accordingly: QA ready by March 12 (originally March 10) and dry run on March 14 (previously March 12). [Email 1]\n\nEMAILS REFERENCED ABOVE:\n[Email 1] date=Thu, 13 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Updated Falcon timeline"
+        },
+        {
+          "role": "user",
+          "content": "And who needs to be informed about this change?"
+        },
+        {
+          "role": "assistant",
+          "content": "Alice updated the Falcon launch timeline due to a marketing team request for a 2-day delay. The new launch date is March 17 instead of March 15. All other deadlines were adjusted accordingly: QA ready by March 12 (originally March 10) and dry run on March 14 (previously March 12). [Email 1]\n\nYou should inform relevant stakeholders, such as the QA team and project managers, about this change to ensure they adjust their schedules accordingly.\n\nEMAILS REFERENCED ABOVE:\n[Email 1] date=Thu, 13 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Updated Falcon timeline"
+        }
+      ]
+    },
+    "error": null,
+    "test_id": "multiturn_03",
+    "category": "multi_turn",
+    "criteria": {
+      "must_contain_any": [
+        "QA",
+        "Bob"
+      ],
+      "must_not_contain": [],
+      "must_cite_emails": false,
+      "expected_email_subjects_any": [],
+      "hallucination_keywords": []
+    }
+  }
+]

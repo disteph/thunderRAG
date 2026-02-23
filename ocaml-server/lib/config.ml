@@ -147,6 +147,7 @@ let rag_include_unrehydrated_metadata = ref true
 let rag_query_rewrite             = ref true
 let pg_database                   = ref "thunderrag"
 let pg_connection_string          = ref "postgresql://localhost/thunderrag"
+let whoami                        = ref ""
 let rag_debug_ollama_embed        = ref false
 let rag_debug_ollama_chat         = ref false
 let rag_debug_retrieval           = ref false
@@ -197,10 +198,73 @@ let load_settings () : unit =
   (let explicit = ss "THUNDERRAG_PG_URL" [ "pg"; "connection_string" ] ~default:"" in
    pg_connection_string := if explicit <> "" then explicit
      else Printf.sprintf "postgresql://localhost/%s" !pg_database);
+  whoami                 := ss "THUNDERRAG_WHOAMI"      [ "whoami" ]                ~default:"";
   rag_debug_ollama_embed := sb "RAG_DEBUG_OLLAMA_EMBED" [ "debug"; "ollama_embed" ] ~default:false;
   rag_debug_ollama_chat  := sb "RAG_DEBUG_OLLAMA_CHAT"  [ "debug"; "ollama_chat" ]  ~default:false;
   rag_debug_retrieval    := sb "RAG_DEBUG_RETRIEVAL"    [ "debug"; "retrieval" ]    ~default:false;
   Printf.printf "[config] loaded from %s (db=%s)\n%!" (settings_path ()) !pg_database
+
+(* Serialize all current settings to JSON matching the settings.json structure. *)
+let current_settings_json () : Yojson.Safe.t =
+  `Assoc
+    [ ("whoami", `String !whoami)
+    ; ("ollama", `Assoc
+        [ ("base_url", `String !ollama_base_url)
+        ; ("num_ctx", `Int !ollama_num_ctx)
+        ; ("embed_model", `String !ollama_embed_model)
+        ; ("llm_model", `String !ollama_llm_model)
+        ; ("summarize_model", `String !ollama_summarize_model)
+        ; ("triage_model", `String !ollama_triage_model)
+        ; ("rewrite_model", `String !ollama_rewrite_model)
+        ])
+    ; ("pg", `Assoc
+        [ ("database", `String !pg_database)
+        ])
+    ; ("rag", `Assoc
+        [ ("chunk_size", `Int !rag_chunk_size)
+        ; ("chunk_overlap", `Int !rag_chunk_overlap)
+        ; ("max_evidence_chars_per_email", `Int !rag_max_evidence_chars_per_email)
+        ; ("new_content", `Assoc [ ("max_chars", `Int !rag_new_content_max_chars) ])
+        ; ("summarize", `Assoc [ ("max_input_chars", `Int !rag_summarize_max_input_chars) ])
+        ; ("quoted_context", `Assoc
+            [ ("summarize", `Bool !rag_quoted_context_summarize)
+            ; ("max_lines", `Int !rag_quoted_context_max_lines)
+            ; ("max_chars", `Int !rag_quoted_context_max_chars)
+            ; ("max_input_chars", `Int !rag_quoted_context_max_input_chars)
+            ])
+        ; ("attachments", `Assoc
+            [ ("summarize", `Bool !rag_attachment_summarize)
+            ; ("max_attachments", `Int !rag_attachment_max_attachments)
+            ; ("max_chars", `Int !rag_attachment_max_chars)
+            ; ("max_input_chars", `Int !rag_attachment_max_input_chars)
+            ; ("max_bytes", `Int !rag_attachment_max_bytes)
+            ; ("use_pdftotext", `Bool !rag_attachment_use_pdftotext)
+            ; ("use_pandoc", `Bool !rag_attachment_use_pandoc)
+            ])
+        ; ("query", `Assoc
+            [ ("include_unrehydrated_metadata", `Bool !rag_include_unrehydrated_metadata)
+            ; ("rewrite", `Bool !rag_query_rewrite)
+            ])
+        ])
+    ; ("debug", `Assoc
+        [ ("ollama_embed", `Bool !rag_debug_ollama_embed)
+        ; ("ollama_chat", `Bool !rag_debug_ollama_chat)
+        ; ("retrieval", `Bool !rag_debug_retrieval)
+        ])
+    ]
+
+(* Write a JSON value to settings.json, preserving pretty-printing. *)
+let write_settings_json (json : Yojson.Safe.t) : (unit, string) result =
+  let path = settings_path () in
+  try
+    ensure_dir (thunderrag_config_dir ());
+    let s = Yojson.Safe.pretty_to_string ~std:true json in
+    let oc = open_out path in
+    output_string oc s;
+    output_char oc '\n';
+    close_out oc;
+    Ok ()
+  with e -> Error (Printexc.to_string e)
 
 (* --- Prompts (hot-reloadable) --- *)
 
@@ -272,6 +336,19 @@ let load_prompts_json () : Yojson.Safe.t option =
   else (
     Printf.eprintf "[config] prompts file not found: %s\n%!" p;
     None)
+
+(* Write a JSON value to prompts.json, preserving pretty-printing. *)
+let write_prompts_json (json : Yojson.Safe.t) : (unit, string) result =
+  let path = prompts_path () in
+  try
+    ensure_dir (thunderrag_config_dir ());
+    let s = Yojson.Safe.pretty_to_string ~std:true json in
+    let oc = open_out path in
+    output_string oc s;
+    output_char oc '\n';
+    close_out oc;
+    Ok ()
+  with e -> Error (Printexc.to_string e)
 
 (* Look up a prompt string by key from prompts.json.  Returns the raw string
    (with {{…}} meta-variables still in place) or the provided default.

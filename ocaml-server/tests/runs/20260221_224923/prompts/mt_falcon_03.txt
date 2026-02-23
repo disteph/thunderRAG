@@ -1,0 +1,141 @@
+=== SYSTEM ===
+You are a helpful email assistant in an ongoing multi-turn chat. The user is: Bob Martinez <bob@acme.com>. Current date/time: 2026-02-21 22:57:30 (local); 2026-02-22T06:57:30Z (UTC).
+The conversation below includes previous user/assistant turns as context.
+The final user message is the question you must answer.
+Immediately before it, you may see a message containing emails retrieved from the user's archive under the heading EMAILS THAT MAY BE RELEVANT. Use these emails as evidence to answer the question.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+Do not invent email facts that are not in the provided emails.
+Do not greet, do not restate the question, and do not narrate your process.
+
+Each email's body may contain labelled sections:
+- NEW CONTENT: the message the sender actually wrote
+- QUOTED CONTEXT: previous thread history (older messages being replied to)
+- QUOTED CONTEXT (older, summarized): summarized older thread history
+- ATTACHMENTS (summaries): summaries of attached files
+Not all sections will be present in every email.
+
+Each email header may include triage metadata:
+- action=N/100: how much the email requires action or a response from the user (0 = purely informational, 100 = urgent action required)
+- importance=N/100: overall importance of the email to the user
+- reply_by=<date>: estimated deadline for a response, if any
+- processed=true: the user has already dealt with this email; no further action is needed regardless of the action score
+
+=== USER ===
+Tell me everything about Project Falcon.
+
+=== ASSISTANT ===
+Project Falcon is nearing its March 17 launch date. Key activities and updates include:
+
+- **UI Mockups**: Revised mockups incorporating all feedback have been completed by Patricia Owens, with features like estimated delivery time, CSV export for payment history, chart colors meeting WCAG AA standards, and a confirmation dialog for key regeneration [Email 1].
+  
+- **Marketing Metrics**: Early teaser results indicate strong performance: blog views doubled the average at 4,200; email open rates are above industry average at 34%; there were 180 webinar registrations (though the target is 300); and social impressions reached 28K [Email 2].
+
+- **Team Updates**: Lisa Wong has started her first week and asked questions regarding IDE preferences, staging DB access requirements, payment processing flow documentation, and on-call rotation schedules [Email 3]. She's using VS Code but observed others using IntelliJ; she needs VPN configuration for staging database access.
+
+- **1:1 Agenda**: Topics for the upcoming one-on-one meeting with Alice Chen include discussing the Falcon timeline, checking in on Lisa Wong’s progress, following up from a production incident postmortem, API keys status from a vendor, and travel arrangements for the DevOps Summit. There's also discussion about sprint 13 capacity [Email 4].
+
+EMAILS REFERENCED ABOVE:
+[Email 1] date=Fri, 14 Feb 2025 14:00:00 +0000 from=Patricia Owens <patricia@acme.com> to=Bob Martinez <bob@acme.com> cc=Alice Chen <alice@acme.com> subject=Re: Falcon UI mockups - Revised
+[Email 2] date=Fri, 14 Feb 2025 16:00:00 +0000 from=Grace Kim <grace@acme.com> to=Bob Martinez <bob@acme.com> subject=Falcon pre-launch campaign metrics
+[Email 3] date=Tue, 11 Feb 2025 09:00:00 +0000 from=Lisa Wong <lisa@acme.com> to=Bob Martinez <bob@acme.com> subject=First week questions
+[Email 4] date=Thu, 13 Feb 2025 08:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=1:1 agenda - Feb 14
+
+=== USER ===
+What's the current launch date and why did it change?
+
+=== ASSISTANT ===
+The launch date for Project Falcon is March 17, 2025. The original planned launch was on March 15, but a 2-day delay was requested by the marketing team to better align with the webinar schedule. This change was communicated and confirmed in [Email 1].
+
+EMAILS REFERENCED ABOVE:
+[Email 1] date=Thu, 13 Feb 2025 17:00:00 +0000 from=Alice Chen <alice@acme.com> to=Bob Martinez <bob@acme.com> subject=Updated Falcon timeline
+
+=== USER ===
+EMAILS THAT MAY BE RELEVANT:
+
+[Email 1] doc_id=falcon-qa-020@test.example.com date=Fri, 14 Feb 2025 10:00:00 +0000 from=Tony Russo <tony@acme.com> to=Alice Chen <alice@acme.com>, Bob Martinez <bob@acme.com> subject=Falcon QA status report - Week of Feb 10
+NEW CONTENT:
+Hi Alice, Bob,
+
+QA status for Project Falcon:
+
+Completed:
+- User auth flow (32/32 passing)
+- Payment processing (28/30 — 2 blocked on API keys)
+- Dashboard analytics (all green)
+
+Blocked:
+- Payment gateway integration tests (waiting for API keys)
+- Load testing (staging had issues earlier this week)
+
+Risk: If API keys not received by March 5, we won't hit March 12 QA deadline.
+
+Tony
+
+[Email 2] doc_id=security-scan-023@test.example.com date=Mon, 10 Feb 2025 14:00:00 +0000 from=Henry Liu <henry@acme.com> to=Bob Martinez <bob@acme.com> subject=Q1 Security scan results
+NEW CONTENT:
+Bob,
+
+Attached is the Q1 security scan report. Summary:
+
+- Critical: 1 (CVE-2025-1234 in log4j)
+- High: 3 (outdated TLS, weak password policy, exposed debug endpoint)
+- Medium: 7
+- Low: 12
+
+Critical CVE must be patched within 48 hours per policy.
+
+Henry
+
+[Email 3] doc_id=pr-review-038@test.example.com date=Thu, 13 Feb 2025 14:00:00 +0000 from=Lisa Wong <lisa@acme.com> to=Bob Martinez <bob@acme.com> subject=PR review request: Falcon order validation refactor
+NEW CONTENT:
+Hi Bob,
+
+Submitted PR #852 for the order validation refactor:
+- Extracted validation into OrderValidator class
+- Added unit tests (empty orders, negative quantities, currency mismatches)
+- Fixed bug: 0-quantity items were silently accepted
+
+First PR here — let me know if I'm missing conventions.
+https://github.acme.com/falcon/backend/pull/852
+
+Thanks,
+Lisa
+
+[Email 4] doc_id=cve-patched-025@test.example.com date=Tue, 11 Feb 2025 11:00:00 +0000 from=Bob Martinez <bob@acme.com> to=Henry Liu <henry@acme.com> cc=Dave Wilson <dave@acme.com> subject=Re: CRITICAL: CVE-2025-1234 in log4j - patch within 48h
+NEW CONTENT:
+Henry,
+
+Patched and deployed to production at 10:45 UTC. order-processing-service now on log4j 2.17.1.
+
+Scanned other services — no other vulnerable instances.
+Dave updating WAF rules as precaution.
+
+Bob
+
+[Email 5] doc_id=falcon-reply-002@test.example.com date=Wed, 05 Feb 2025 14:30:00 +0000 from=Bob Martinez <bob@acme.com> to=Alice Chen <alice@acme.com> subject=Re: Project Falcon launch date
+NEW CONTENT:
+Hi Alice,
+
+Got it. QA will be ready by March 10. I've also scheduled a dry run for March 12.
+The staging environment is already set up and passing basic smoke tests.
+
+One concern: we still need the API keys for the payment gateway integration.
+Can you check with Dave's team?
+
+Best,
+Bob
+
+QUOTED CONTEXT:
+> On Wed, 05 Feb 2025 at 09:00, Alice Chen wrote:
+> The launch date for Project Falcon is confirmed for March 15, 2025.
+> Please make sure the QA team is ready by March 10.
+
+=== USER ===
+What's the status of QA testing?
+
+Answer based on the retrieved emails above.
+Do not greet, do not offer to help, and do not ask for a follow-up question.
+Start immediately with the answer (no preamble).
+If the request involves ordering or selecting items by time/recency, use the dates in the EMAILS THAT MAY BE RELEVANT list to decide which emails are newest.
+When referencing an email from the above list of possibly relevant emails, cite it as [Email N].
+
