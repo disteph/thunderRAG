@@ -1104,15 +1104,38 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
       Printf.printf "Body:\n%s\n" body_text;
       flush stdout);
 
-  let index_text, _metadata_json =
+  let _index_text, _metadata_json =
     make_ingest_data ~doc_id ~headers ~raw ~body_text ~triage
   in
-  let chunks = chunk_text index_text in
+  let triage_line =
+    match triage with
+    | Some t ->
+        Printf.sprintf " | triage: action=%d/100 importance=%d/100 reply_by=%s"
+          t.action_score t.importance_score t.reply_by
+    | None -> ""
+  in
+  let preamble =
+    Printf.sprintf "From: %s | To: %s | Subject: %s | Date: %s%s"
+      from_ to_ subject date_ triage_line
+  in
+  let qs_text = match overflow_summary with
+    | Some s when String.trim s <> "" -> String.trim s
+    | _ -> ""
+  in
+  let sections =
+    List.filter (fun (_, t) -> String.trim t <> "")
+      [ ("quoted_context_old", qs_text)
+      ; ("quoted_context", quoted_capped)
+      ; ("attachments", attachments_section)
+      ; ("new_content", new_body_capped)
+      ]
+  in
+  let sectioned_chunks = chunk_sections ~preamble sections in
   let embedded_chunks =
-    chunks
-    |> List.mapi (fun i ch ->
+    sectioned_chunks
+    |> List.map (fun (i, section, ch) ->
            match ollama_embed ~client ~sw ~task:Search_document ~label:"ingest" ~stats:stats_embed_ingest ~text:ch () with
-           | Ok v -> (i, ch, l2_normalize v)
+           | Ok v -> (i, section, ch, l2_normalize v)
            | Error msg -> raise (Failure ("ollama_embed failed: " ^ msg)))
   in
   let attachments = extract_attachment_filenames raw in

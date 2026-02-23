@@ -96,6 +96,8 @@ let schema_statements =
   ; {|CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON email_chunks(doc_id)|}
   (* Migration: drop redundant message_id column (identical to doc_id) *)
   ; {|ALTER TABLE emails DROP COLUMN IF EXISTS message_id|}
+  (* Migration: add section column to email_chunks *)
+  ; {|ALTER TABLE email_chunks ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT ''|}
   ]
 
 let init_schema_with (module C : Caqti_eio.CONNECTION) =
@@ -181,22 +183,22 @@ let upsert_email
   result
 
 let insert_chunks ~(doc_id : string) ?(on_done : (float -> unit) option)
-    (chunks : (int * string * float list) list) : (unit, string) result =
+    (chunks : (int * string * string * float list) list) : (unit, string) result =
   let t0 = Unix.gettimeofday () in
   let doc_id = normalize_doc_id doc_id in
   let sql = {|
-    INSERT INTO email_chunks (doc_id, chunk_index, chunk_text, embedding)
-    VALUES ($1, $2, $3, $4::vector)
+    INSERT INTO email_chunks (doc_id, chunk_index, section, chunk_text, embedding)
+    VALUES ($1, $2, $3, $4, $5::vector)
   |} in
   let open Caqti_type in
-  let req = Caqti_request.Infix.(t4 string int string string ->. unit) ~oneshot:true sql in
+  let req = Caqti_request.Infix.(t2 (t3 string int string) (t2 string string) ->. unit) ~oneshot:true sql in
   let result =
     use (fun (module C : Caqti_eio.CONNECTION) ->
       let rec run = function
         | [] -> Ok ()
-        | (idx, text, emb) :: rest ->
+        | (idx, section, text, emb) :: rest ->
             let vec_str = float_list_to_pgvector emb in
-            (match C.exec req (doc_id, idx, text, vec_str) with
+            (match C.exec req ((doc_id, idx, section), (text, vec_str)) with
              | Ok () -> run rest
              | Error _ as e -> e)
       in

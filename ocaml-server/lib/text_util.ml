@@ -318,6 +318,23 @@ let chunk_text ?(chunk_size = !(Config.rag_chunk_size)) ?(overlap = !(Config.rag
   in
   if cleaned = "" then [] else loop 0 []
 
+(* Chunk multiple named sections, prepending a metadata preamble and section label
+   to each chunk.  Returns (global_chunk_index, section_name, full_chunk_text) triples.
+   Section boundaries always align with chunk boundaries. *)
+let chunk_sections ?(chunk_size = !(Config.rag_chunk_size)) ?(overlap = !(Config.rag_chunk_overlap))
+    ~(preamble : string) (sections : (string * string) list) : (int * string * string) list =
+  let idx = ref 0 in
+  sections
+  |> List.map (fun (section_name, section_text) ->
+       let prefix = preamble ^ "\n[Section: " ^ section_name ^ "]\n" in
+       let effective_size = max 200 (chunk_size - String.length prefix) in
+       let raw_chunks = chunk_text ~chunk_size:effective_size ~overlap section_text in
+       raw_chunks |> List.map (fun ch ->
+         let i = !idx in
+         incr idx;
+         (i, section_name, prefix ^ ch)))
+  |> List.flatten
+
 (* Parse RFC2822 date string to ISO 8601 for PostgreSQL TIMESTAMPTZ.
    Input: "Wed, 05 Feb 2025 09:00:00 +0000" or "05 Feb 2025 09:00:00 +0000"
    Output: "2025-02-05T09:00:00+00:00" or the original string if unparseable. *)
