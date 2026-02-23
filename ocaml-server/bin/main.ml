@@ -159,6 +159,8 @@ let embed_task_prefix (task : embed_task) : string option =
   else
     None
 
+let embed_dim_probed = ref false
+
 let ollama_embed ~client ~sw ?(task : embed_task option) ?(label = "") ?(stats : call_stats option) ~(text : string) () : (float list, string) result =
   let t0 = Unix.gettimeofday () in
   let prompt =
@@ -207,6 +209,13 @@ let ollama_embed ~client ~sw ?(task : embed_task option) ?(label = "") ?(stats :
   let tag = if label = "" then "embed" else "embed." ^ label in
   Printf.eprintf "[timer] %s: %.3fs\n%!" tag dt;
   (match stats with Some s -> record s dt | None -> ());
+  (match result with
+   | Ok vec when not !embed_dim_probed ->
+       let dim = List.length vec in
+       rag_vector_dimension := dim;
+       embed_dim_probed := true;
+       Printf.printf "[config] embed model=%s vector_dimension=%d (auto-detected)\n%!" !ollama_embed_model dim
+   | _ -> ());
   result
 
 let ollama_chat ~client ~sw ?(label = "") ?(stats : call_stats option) ?(model = "") ~(messages : Yojson.Safe.t list) () : (string, string) result =
@@ -218,6 +227,7 @@ let ollama_chat ~client ~sw ?(label = "") ?(stats : call_stats option) ?(model =
       [ ("model", `String effective_model)
       ; ("messages", `List messages)
       ; ("stream", `Bool false)
+      ; ("options", `Assoc [ ("num_ctx", `Int !ollama_num_ctx) ])
       ]
   in
   if !rag_debug_ollama_chat then
@@ -447,11 +457,10 @@ let triage_email ~client ~sw ~(whoami : string)
   in
   let user_msg =
     Printf.sprintf
-      "RECIPIENT INFO:\n%s\n\n\
-       EMAIL HEADERS:\n\
+      "EMAIL HEADERS:\n\
        From: %s\nTo: %s\nCc: %s\nBcc: %s\nSubject: %s\nDate: %s\n\n\
        BODY:\n%s"
-      whoami from_ to_ cc_ bcc_ subject date_ body_excerpt
+      from_ to_ cc_ bcc_ subject date_ body_excerpt
   in
   let messages : Yojson.Safe.t list =
     [ `Assoc [ ("role", `String "system"); ("content", `String system) ]
@@ -1119,9 +1128,14 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
           t.action_score t.importance_score t.reply_by
     | None -> ""
   in
+  let truncate_field s max_len =
+    if String.length s <= max_len then s
+    else String.sub s 0 max_len ^ "..."
+  in
   let preamble =
     Printf.sprintf "From: %s | To: %s | Subject: %s | Date: %s%s"
-      from_ to_ subject date_ triage_line
+      (truncate_field from_ 80) (truncate_field to_ 120)
+      (truncate_field subject 120) date_ triage_line
   in
   let qs_text = match overflow_summary with
     | Some s when String.trim s <> "" -> String.trim s
@@ -3320,6 +3334,12 @@ let handler ~client ~sw ~clock _socket request body =
               ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
               ~headers:json_headers ())
   | `POST, "/admin/reset" ->
+      (* Probe embed dimension before recreating tables so vector column matches *)
+      (match ollama_embed ~client ~sw ~label:"probe" ~text:"dimension probe" () with
+       | Ok _ -> ()
+       | Error msg ->
+           Printf.eprintf "WARNING: could not probe embed model before reset: %s — using dimension %d\n%!"
+             msg !rag_vector_dimension);
       (match Rag_lib.Pg.reset_all () with
        | Ok () ->
            Cohttp_eio.Server.respond_string ~status:`OK
@@ -3332,11 +3352,9 @@ let handler ~client ~sw ~clock _socket request body =
   | `POST, "/admin/reload" ->
       (try
          load_settings ();
+         embed_dim_probed := false;
          (match ollama_embed ~client ~sw ~label:"probe" ~text:"dimension probe" () with
-          | Ok vec ->
-              let dim = List.length vec in
-              rag_vector_dimension := dim;
-              Printf.printf "[config] embed model=%s vector_dimension=%d (auto-detected)\n%!" !ollama_embed_model dim
+          | Ok _ -> ()
           | Error msg ->
               Printf.eprintf "WARNING: could not probe embed model %s: %s — keeping dimension %d\n%!"
                 !ollama_embed_model msg !rag_vector_dimension);
@@ -3470,15 +3488,6 @@ let () =
     with Eio.Time.Timeout ->
       raise (Failure (Printf.sprintf "ollama request timed out after %.0fs" seconds)));
   let client = Cohttp_eio.Client.make ~https:None env#net in
-  (* Auto-detect embedding vector dimension from the configured model *)
-  (match ollama_embed ~client ~sw ~label:"probe" ~text:"dimension probe" () with
-   | Ok vec ->
-       let dim = List.length vec in
-       rag_vector_dimension := dim;
-       Printf.printf "[config] embed model=%s vector_dimension=%d (auto-detected)\n%!" !ollama_embed_model dim
-   | Error msg ->
-       Printf.eprintf "WARNING: could not probe embed model %s: %s — using default dimension %d\n%!"
-         !ollama_embed_model msg !rag_vector_dimension);
   (* Initialise PostgreSQL connection pool and schema *)
   let pg_stdenv : Caqti_eio.stdenv = object
     method net = (env#net :> [`Generic] Eio.Net.ty Eio.Std.r)

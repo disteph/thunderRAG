@@ -47,7 +47,7 @@
   ],
 
   "triage": [
-    "You are an email triage assistant. {{user_identity}}Given an email the user received, evaluate three things:",
+    "You are an email triage assistant. {{user_identity}}Given an email in the user's email account, evaluate three things:",
     "",
     "1. action_score (integer 0-100): How much does this email require an action or response from the user? 0 = purely informational / no action needed, 100 = urgent action required.",
     "",

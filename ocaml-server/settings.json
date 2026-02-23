@@ -1,6 +1,7 @@
 {
   "ollama": {
     "base_url": "http://127.0.0.1:11434",
+    "num_ctx": 8192,
     "embed_model": "mxbai-embed-large",
     "llm_model": "qwen2.5:14b",
     "summarize_model": "qwen2.5:3b",

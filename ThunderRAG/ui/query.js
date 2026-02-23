@@ -270,20 +270,40 @@ function setAssistantMessage(bubble, answer, sources, retrievalInfo) {
   details.appendChild(summary);
 
   if (retrievalQueries.length > 0 || retrievalSql) {
-    const infoSpan = document.createElement("div");
-    infoSpan.className = "retrieval-info";
-    const parts = [];
+    /* -- query blocks: one per embedded query -- */
     if (retrievalQueries.length > 0) {
-      parts.push(retrievalQueries.map(q => `\u201c${q}\u201d`).join(" + "));
+      for (const q of retrievalQueries) {
+        const qBlock = document.createElement("div");
+        qBlock.className = "retrieval-block retrieval-query";
+        qBlock.textContent = `\u201c${q}\u201d`;
+        details.appendChild(qBlock);
+      }
     }
+
+    /* -- parse SQL segments, deduplicate WHERE and ORDER BY -- */
     if (retrievalSql) {
-      parts.push(retrievalSql.replace(/\s+/g, " ").trim());
+      const segments = retrievalSql.split("|").map(s => s.trim()).filter(Boolean);
+      const whereClauses = new Set();
+      const orderClauses = new Set();
+      for (const seg of segments) {
+        const whereMatch = seg.match(/WHERE\s+(.+?)(?:\s+ORDER\s+BY\s|$)/i);
+        const orderMatch = seg.match(/ORDER\s+BY\s+(.+?)(?:\s+LIMIT\s|$)/i);
+        if (whereMatch) whereClauses.add(whereMatch[1].trim());
+        if (orderMatch) orderClauses.add(orderMatch[1].trim());
+      }
+      for (const w of whereClauses) {
+        const wBlock = document.createElement("div");
+        wBlock.className = "retrieval-block retrieval-where";
+        wBlock.textContent = `WHERE ${w}`;
+        details.appendChild(wBlock);
+      }
+      for (const o of orderClauses) {
+        const oBlock = document.createElement("div");
+        oBlock.className = "retrieval-block retrieval-order";
+        oBlock.textContent = `ORDER BY ${o}`;
+        details.appendChild(oBlock);
+      }
     }
-    infoSpan.textContent = parts.join(" \u2014 ");
-    infoSpan.title = (retrievalQueries.length > 0
-      ? "Embedded queries:\n" + retrievalQueries.map((q, i) => `  ${i + 1}. ${q}`).join("\n") + "\n"
-      : "") + (retrievalSql ? "SQL clauses: " + retrievalSql : "");
-    details.appendChild(infoSpan);
   }
 
   const sourcesContainer = document.createElement("div");

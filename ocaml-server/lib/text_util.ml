@@ -308,13 +308,14 @@ let l2_normalize (vec : float list) : float list =
 let chunk_text ?(chunk_size = !(Config.rag_chunk_size)) ?(overlap = !(Config.rag_chunk_overlap)) (text : string) : string list =
   let cleaned = String.trim text in
   let n = String.length cleaned in
+  let step = max 1 (chunk_size - overlap) in
   let rec loop start acc =
     if start >= n then List.rev acc
     else
       let end_ = min n (start + chunk_size) in
       let chunk = String.sub cleaned start (end_ - start) |> String.trim in
       let acc = if chunk = "" then acc else chunk :: acc in
-      if end_ >= n then List.rev acc else loop (max 0 (end_ - overlap)) acc
+      if end_ >= n then List.rev acc else loop (start + step) acc
   in
   if cleaned = "" then [] else loop 0 []
 
