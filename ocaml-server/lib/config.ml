@@ -120,11 +120,12 @@ let env_bool (name : string) (fallback : bool) : bool =
 
 let ollama_timeout_seconds    = ref 300.0
 let ollama_base_url           = ref "http://127.0.0.1:11434"
-let ollama_embed_model        = ref "nomic-embed-text"
+let ollama_embed_model        = ref "mxbai-embed-large"
 let ollama_llm_model          = ref "llama3"
 let ollama_summarize_model    = ref "llama3"
 let ollama_triage_model       = ref "llama3"
 let ollama_rewrite_model      = ref "llama3"
+let rag_vector_dimension      = ref 1024
 let rag_chunk_size            = ref 1500
 let rag_chunk_overlap         = ref 200
 let rag_max_evidence_chars_per_email = ref 8000
@@ -162,7 +163,7 @@ let load_settings () : unit =
      | Some s -> (try float_of_string (String.trim s) with _ -> default)
      | None -> default);
   ollama_base_url       := ss "OLLAMA_BASE_URL"       [ "ollama"; "base_url" ]       ~default:"http://127.0.0.1:11434";
-  ollama_embed_model    := ss "OLLAMA_EMBED_MODEL"    [ "ollama"; "embed_model" ]    ~default:"nomic-embed-text";
+  ollama_embed_model    := ss "OLLAMA_EMBED_MODEL"    [ "ollama"; "embed_model" ]    ~default:"mxbai-embed-large";
   ollama_llm_model      := ss "OLLAMA_LLM_MODEL"      [ "ollama"; "llm_model" ]      ~default:"llama3";
   let llm = !ollama_llm_model in
   let model_or_llm env path =

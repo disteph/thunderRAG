@@ -1,7 +1,7 @@
 {
   "ollama": {
     "base_url": "http://127.0.0.1:11434",
-    "embed_model": "nomic-embed-text",
+    "embed_model": "mxbai-embed-large",
     "llm_model": "qwen2.5:14b",
     "summarize_model": "qwen2.5:3b",
     "triage_model": "qwen2.5:14b",

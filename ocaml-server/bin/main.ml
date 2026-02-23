@@ -147,10 +147,15 @@ let embed_task_prefix (task : embed_task) : string option =
   let is_nomic    = contains_substring ~sub:"nomic" model_lower in
   let is_e5       = contains_substring ~sub:"e5"    model_lower in
   let is_arctic   = contains_substring ~sub:"snowflake-arctic-embed" model_lower in
+  let is_mxbai    = contains_substring ~sub:"mxbai" model_lower in
   if is_nomic || is_e5 || is_arctic then
     match task with
     | Search_document -> Some "search_document: "
     | Search_query    -> Some "search_query: "
+  else if is_mxbai then
+    match task with
+    | Search_document -> None
+    | Search_query    -> Some "Represent this sentence for searching relevant passages: "
   else
     None
 
@@ -3327,6 +3332,14 @@ let handler ~client ~sw ~clock _socket request body =
   | `POST, "/admin/reload" ->
       (try
          load_settings ();
+         (match ollama_embed ~client ~sw ~label:"probe" ~text:"dimension probe" () with
+          | Ok vec ->
+              let dim = List.length vec in
+              rag_vector_dimension := dim;
+              Printf.printf "[config] embed model=%s vector_dimension=%d (auto-detected)\n%!" !ollama_embed_model dim
+          | Error msg ->
+              Printf.eprintf "WARNING: could not probe embed model %s: %s — keeping dimension %d\n%!"
+                !ollama_embed_model msg !rag_vector_dimension);
          Cohttp_eio.Server.respond_string ~status:`OK
            ~body:{|{"ok":true}|} ~headers:json_headers ()
        with ex ->
@@ -3456,6 +3469,16 @@ let () =
     try Eio.Time.with_timeout_exn env#clock seconds fn
     with Eio.Time.Timeout ->
       raise (Failure (Printf.sprintf "ollama request timed out after %.0fs" seconds)));
+  let client = Cohttp_eio.Client.make ~https:None env#net in
+  (* Auto-detect embedding vector dimension from the configured model *)
+  (match ollama_embed ~client ~sw ~label:"probe" ~text:"dimension probe" () with
+   | Ok vec ->
+       let dim = List.length vec in
+       rag_vector_dimension := dim;
+       Printf.printf "[config] embed model=%s vector_dimension=%d (auto-detected)\n%!" !ollama_embed_model dim
+   | Error msg ->
+       Printf.eprintf "WARNING: could not probe embed model %s: %s — using default dimension %d\n%!"
+         !ollama_embed_model msg !rag_vector_dimension);
   (* Initialise PostgreSQL connection pool and schema *)
   let pg_stdenv : Caqti_eio.stdenv = object
     method net = (env#net :> [`Generic] Eio.Net.ty Eio.Std.r)
@@ -3480,6 +3503,5 @@ let () =
       exit 1
   in
   Printf.printf "Listening on port %d\n%!" !port;
-  let client = Cohttp_eio.Client.make ~https:None env#net in
   let server = Cohttp_eio.Server.make ~callback:(handler ~client ~sw ~clock:env#clock) () in
   Cohttp_eio.Server.run socket server ~on_error:log_warning

@@ -67,7 +67,7 @@ let use_ret (f : connection -> ('a, Caqti_error.t) result)
 
 (* ---------- schema ---------- *)
 
-let schema_statements =
+let schema_statements () =
   [ {|CREATE TABLE IF NOT EXISTS emails (
        doc_id        TEXT PRIMARY KEY,
        embed_model   TEXT NOT NULL DEFAULT '',
@@ -86,18 +86,17 @@ let schema_statements =
        processed_at  TIMESTAMPTZ,
        ingested_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
      )|}
-  ; {|CREATE TABLE IF NOT EXISTS email_chunks (
+  ; Printf.sprintf {|CREATE TABLE IF NOT EXISTS email_chunks (
        id          SERIAL PRIMARY KEY,
        doc_id      TEXT NOT NULL REFERENCES emails(doc_id) ON DELETE CASCADE,
        chunk_index INT NOT NULL,
+       section     TEXT NOT NULL DEFAULT '',
        chunk_text  TEXT NOT NULL,
-       embedding   vector(768) NOT NULL
-     )|}
+       embedding   vector(%d) NOT NULL
+     )|} !rag_vector_dimension
   ; {|CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON email_chunks(doc_id)|}
   (* Migration: drop redundant message_id column (identical to doc_id) *)
   ; {|ALTER TABLE emails DROP COLUMN IF EXISTS message_id|}
-  (* Migration: add section column to email_chunks *)
-  ; {|ALTER TABLE email_chunks ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT ''|}
   ]
 
 let init_schema_with (module C : Caqti_eio.CONNECTION) =
@@ -109,7 +108,7 @@ let init_schema_with (module C : Caqti_eio.CONNECTION) =
          | Ok () -> run rest
          | Error _ as e -> e)
   in
-  run schema_statements
+  run (schema_statements ())
 
 let init_schema () : (unit, string) result =
   use (fun (module C : Caqti_eio.CONNECTION) -> init_schema_with (module C))
