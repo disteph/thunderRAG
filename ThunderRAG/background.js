@@ -535,16 +535,23 @@ browser.menus.onClicked.addListener(async (info) => {
 async function handleIngestSelected() {
   const tabs = await browser.mailTabs.query({ active: true, currentWindow: true });
   if (!tabs.length) return;
-  const selected = await browser.mailTabs.getSelectedMessages(tabs[0].id);
-  if (!selected?.messages?.length) return;
+  let page = await browser.mailTabs.getSelectedMessages(tabs[0].id);
+  if (!page?.messages?.length) return;
+
+  // Collect all pages (getSelectedMessages returns max 100 per page).
+  const allMessages = [...page.messages];
+  while (page.id) {
+    page = await browser.messages.continueList(page.id);
+    if (page?.messages?.length) allMessages.push(...page.messages);
+  }
 
   const serverBase = await getServerBase();
   const endpoint = `${serverBase}/ingest`;
   const whoami = await getWhoAmI();
-  debugLog(`[ingestSelected] endpoint=${endpoint} whoami=${whoami ? whoami.slice(0, 60) : "(empty)"} count=${selected.messages.length}`);
+  debugLog(`[ingestSelected] endpoint=${endpoint} whoami=${whoami ? whoami.slice(0, 60) : "(empty)"} count=${allMessages.length}`);
   let ok = 0, fail = 0;
 
-  for (const msg of selected.messages) {
+  for (const msg of allMessages) {
     try {
       const headerMessageId = msg.headerMessageId || "";
       if (!headerMessageId) { fail++; continue; }
@@ -568,7 +575,7 @@ async function handleIngestSelected() {
     }
   }
 
-  debugLog(`[ingestSelected] done: ${ok} ok, ${fail} failed out of ${selected.messages.length}`);
+  debugLog(`[ingestSelected] done: ${ok} ok, ${fail} failed out of ${allMessages.length}`);
 
   // Refresh the ingestion status cache for the affected messages.
   refreshIngestStatusForFolder();
@@ -577,11 +584,17 @@ async function handleIngestSelected() {
 async function handleDeingest() {
   const tabs = await browser.mailTabs.query({ active: true, currentWindow: true });
   if (!tabs.length) return;
-  const selected = await browser.mailTabs.getSelectedMessages(tabs[0].id);
-  if (!selected?.messages?.length) return;
+  let page = await browser.mailTabs.getSelectedMessages(tabs[0].id);
+  if (!page?.messages?.length) return;
+
+  const allMessages = [...page.messages];
+  while (page.id) {
+    page = await browser.messages.continueList(page.id);
+    if (page?.messages?.length) allMessages.push(...page.messages);
+  }
 
   let ok = 0, fail = 0;
-  for (const msg of selected.messages) {
+  for (const msg of allMessages) {
     try {
       const headerMessageId = msg.headerMessageId || "";
       if (!headerMessageId) { fail++; continue; }
@@ -600,21 +613,27 @@ async function handleDeingest() {
     }
   }
 
-  console.log(`[ThunderRAG] de-ingest: ${ok} ok, ${fail} failed out of ${selected.messages.length}`);
+  console.log(`[ThunderRAG] de-ingest: ${ok} ok, ${fail} failed out of ${allMessages.length}`);
   refreshIngestStatusForFolder();
 }
 
 async function handleMarkProcessed(processed) {
   const tabs = await browser.mailTabs.query({ active: true, currentWindow: true });
   if (!tabs.length) return;
-  const selected = await browser.mailTabs.getSelectedMessages(tabs[0].id);
-  if (!selected?.messages?.length) return;
+  let page = await browser.mailTabs.getSelectedMessages(tabs[0].id);
+  if (!page?.messages?.length) return;
+
+  const allMessages = [...page.messages];
+  while (page.id) {
+    page = await browser.messages.continueList(page.id);
+    if (page?.messages?.length) allMessages.push(...page.messages);
+  }
 
   const serverBase = await getServerBase();
   const path = processed ? "/admin/mark_processed" : "/admin/mark_unprocessed";
   let ok = 0, fail = 0;
 
-  for (const msg of selected.messages) {
+  for (const msg of allMessages) {
     try {
       const headerMessageId = msg.headerMessageId || "";
       if (!headerMessageId) { fail++; continue; }
@@ -633,7 +652,7 @@ async function handleMarkProcessed(processed) {
   }
 
   const label = processed ? "processed" : "unprocessed";
-  console.log(`[ThunderRAG] mark ${label}: ${ok} ok, ${fail} failed out of ${selected.messages.length}`);
+  console.log(`[ThunderRAG] mark ${label}: ${ok} ok, ${fail} failed out of ${allMessages.length}`);
   refreshIngestStatusForFolder();
 }
 

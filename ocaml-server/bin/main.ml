@@ -1904,9 +1904,13 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
   else
     let has_context = String.trim history_summary <> "" || tail <> [] in
     let user_identity =
-      if String.trim user_name <> ""
-      then Printf.sprintf "The user (the email account owner) is: %s.\n" user_name
-      else ""
+      let name_part = String.trim user_name in
+      let email_part = String.trim !whoami in
+      match (name_part <> "", email_part <> "") with
+      | true, true  -> Printf.sprintf "The user (the email account owner) is: %s (email: %s).\n" name_part email_part
+      | true, false -> Printf.sprintf "The user (the email account owner) is: %s.\n" name_part
+      | false, true -> Printf.sprintf "The user (the email account owner) email is: %s.\n" email_part
+      | false, false -> ""
     in
     let rewrite_field =
       if has_context then
@@ -2202,9 +2206,13 @@ let select_relevant_sources ~client ~sw ~(resolved_question : string)
   in
   let table_str = String.concat "\n" table_lines in
   let user_identity =
-    if String.trim user_name <> ""
-    then Printf.sprintf "The user (the email account owner) is: %s.\n" user_name
-    else ""
+    let name_part = String.trim user_name in
+    let email_part = String.trim !whoami in
+    match (name_part <> "", email_part <> "") with
+    | true, true  -> Printf.sprintf "The user (the email account owner) is: %s (email: %s).\n" name_part email_part
+    | true, false -> Printf.sprintf "The user (the email account owner) is: %s.\n" name_part
+    | false, true -> Printf.sprintf "The user (the email account owner) email is: %s.\n" email_part
+    | false, false -> ""
   in
   let system =
     get_prompt "select_evidence"
@@ -2821,9 +2829,13 @@ let handler ~client ~sw ~clock _socket request body =
 
 
                 let user_identity_str =
-                  if String.trim session_user_name <> ""
-                  then Printf.sprintf "The user is: %s. " session_user_name
-                  else ""
+                  let name_part = String.trim session_user_name in
+                  let email_part = String.trim !whoami in
+                  match (name_part <> "", email_part <> "") with
+                  | true, true  -> Printf.sprintf "The user is: %s (email: %s). " name_part email_part
+                  | true, false -> Printf.sprintf "The user is: %s. " name_part
+                  | false, true -> Printf.sprintf "The user email is: %s. " email_part
+                  | false, false -> ""
                 in
                 let system_prompt =
                   get_prompt "chat"

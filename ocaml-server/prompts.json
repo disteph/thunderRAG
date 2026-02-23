@@ -97,7 +97,7 @@
     "The query runs against the emails table with these columns:",
     "  doc_id TEXT, sender TEXT, recipient TEXT, cc TEXT, bcc TEXT, subject TEXT, email_date TIMESTAMPTZ, attachments TEXT[] (array of filenames), action_score INT, importance_score INT, reply_by TIMESTAMPTZ (deadline date), processed BOOLEAN, ingested_at TIMESTAMPTZ, cosine_distance FLOAT (0 = perfect match, 1 = unrelated)",
     "The base query already orders by cosine_distance ASC (most similar first).",
-    "- \"filter\": A SQL WHERE-clause fragment to narrow results. Use only the columns listed above. Do NOT prefix columns with a table alias. Examples: \"sender ILIKE '%alice%'\", \"email_date >= '2025-02-01'\", \"processed = FALSE\", \"subject ILIKE '%falcon%'\". Combine multiple conditions with AND/OR as appropriate.",
+    "- \"filter\": A SQL WHERE-clause fragment to narrow results. Use only the columns listed above. Do NOT prefix columns with a table alias. IMPORTANT: sender, recipient, cc, and bcc store the FULL email header value, which may be just a name (\"Mark Mitchell\"), just an email (\"mark@example.com\"), or both (\"Mark Mitchell <mark@example.com>\"). Always use loose ILIKE patterns with '%' on both sides, matching on the person's name (e.g. \"sender ILIKE '%mark mitchell%'\") or known email address. NEVER guess email address formats — if you only know the name, match on the name only. Examples: \"sender ILIKE '%alice%'\", \"email_date >= '2025-02-01'\", \"processed = FALSE\", \"subject ILIKE '%falcon%'\". Combine multiple conditions with AND/OR as appropriate.",
     "- \"score_expr\": A SQL expression that produces a numeric score for reranking. Higher = better. You may combine cosine_distance with other columns. Example: \"(1.0 - cosine_distance) + CASE WHEN email_date >= '2025-02-01' THEN 0.2 ELSE 0 END\". If no reranking is needed, omit this field or set it to null.",
     "",
     "Current date/time: {{datetime_local}}.",
@@ -113,8 +113,9 @@
     "The conversation below includes previous user/assistant turns as context.",
     "The final user message is the question you must answer.",
     "Immediately before it, you may see a message containing emails retrieved from the user's archive under the heading EMAILS THAT MAY BE RELEVANT. Use these emails as evidence to answer the question.",
-    "When referencing an email from the above list of possibly relevant emails, cite it as [Email N].",
+    "When referencing an email, cite it as [Email N] with exactly one number per bracket. NEVER use ranges like [Emails 2-4] or [Email 2, 3] — write [Email 2], [Email 3], [Email 4] separately.",
     "Do not invent email facts that are not in the provided emails.",
+    "If NO emails are provided under EMAILS THAT MAY BE RELEVANT, or if the section is absent, say honestly that no matching emails were found in the archive. NEVER fabricate [Email N] references or invent email content when no emails were retrieved.",
     "Do not greet, do not restate the question, and do not narrate your process.",
     "",
     "{{email_body_sections}}",
@@ -131,7 +132,7 @@
     "Do not greet, do not offer to help, and do not ask for a follow-up question.",
     "Start immediately with the answer (no preamble).",
     "If the request involves ordering or selecting items by time/recency, use the dates in the EMAILS THAT MAY BE RELEVANT list to decide which emails are newest.",
-    "When referencing an email from the above list of possibly relevant emails, cite it as [Email N]."
+    "When referencing an email, cite it as [Email N] with exactly one number per bracket. NEVER use ranges like [Emails 2-4] or [Email 2, 3] — write [Email 2], [Email 3], [Email 4] separately."
   ],
 
   "conversation_summary": [
