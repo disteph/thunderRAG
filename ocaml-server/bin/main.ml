@@ -2177,8 +2177,8 @@ let select_relevant_sources ~client ~sw ~(resolved_question : string)
              else None)
          in
          let selected = if selected = [] then all_doc_ids else selected in
-         Printf.printf "[select_evidence] %d/%d emails selected for rehydration\n%!"
-           (List.length selected) n;
+         Printf.printf "[select_evidence] %d/%d emails selected for rehydration: %s\n%!"
+           (List.length selected) n (String.concat ", " selected);
          selected
        with _ ->
          Printf.eprintf "[select_evidence.error] failed to parse response: %s, selecting all\n%!"
@@ -2518,7 +2518,7 @@ let handler ~client ~sw ~clock _socket request body =
                             let tbl = Hashtbl.create 32 in
                             List.iter (fun (k, v) -> Hashtbl.replace tbl k v) cached_kv;
                             let override_keys =
-                              [ "from"; "to"; "cc"; "bcc"; "subject"; "date"; "attachments" ]
+                              [ "from"; "to"; "cc"; "bcc"; "subject"; "attachments" ]
                             in
                             List.iter
                               (fun (k, v) ->
