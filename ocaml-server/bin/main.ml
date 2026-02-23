@@ -2072,25 +2072,86 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
                Buffer.add_string buf (String.sub s !i (String.length s - !i));
              Buffer.contents buf
            in
-           let validated_filter =
-             match get_str "filter" with
-             | None -> None
-             | Some f ->
-                 match Rag_lib.Sql_validate.validate_filter f with
-                 | Ok validated ->
-                     let expanded = expand_virtual_cols validated in
-                     Printf.printf "[retrieval.rewrite] filter=%s\n%!" expanded; Some expanded
-                 | Error err -> Printf.eprintf "[retrieval.rewrite.warning] rejected filter %S: %s\n%!" f err; None
-           in
-           let validated_score =
-             match get_str "score_expr" with
-             | None -> None
-             | Some s ->
-                 match Rag_lib.Sql_validate.validate_score s with
-                 | Ok validated ->
-                     let expanded = expand_virtual_cols validated in
-                     Printf.printf "[retrieval.rewrite] score_expr=%s\n%!" expanded; Some expanded
-                 | Error err -> Printf.eprintf "[retrieval.rewrite.warning] rejected score_expr %S: %s\n%!" s err; None
+           (* Validate filter & score_expr, retrying with LLM on errors *)
+           let validated_filter, validated_score =
+             let max_retries = 3 in
+             let try_one kind raw validate_fn =
+               match raw with
+               | None -> (None, None)   (* validated_result, error *)
+               | Some f ->
+                   match validate_fn f with
+                   | Ok v -> (Some (expand_virtual_cols v), None)
+                   | Error e -> (None, Some (Printf.sprintf "%s %S: %s" kind f e))
+             in
+             let strip_fences s =
+               if starts_with "```" s then
+                 let lines = String.split_on_char '\n' s in
+                 let lines = match lines with _ :: rest -> rest | [] -> [] in
+                 let lines = List.rev lines in
+                 let lines = match lines with
+                   | l :: rest when starts_with "```" (String.trim l) -> List.rev rest
+                   | _ -> List.rev lines in
+                 String.concat "\n" lines
+               else s
+             in
+             let rec try_fix attempt raw_filter raw_score conv last_resp =
+               let vf, fe = try_one "filter" raw_filter Rag_lib.Sql_validate.validate_filter in
+               let vs, se = try_one "score_expr" raw_score Rag_lib.Sql_validate.validate_score in
+               let errors = List.filter_map Fun.id [fe; se] in
+               if errors = [] then (
+                 (match vf with Some f -> Printf.printf "[retrieval.rewrite] filter=%s\n%!" f | None -> ());
+                 (match vs with Some s -> Printf.printf "[retrieval.rewrite] score_expr=%s\n%!" s | None -> ());
+                 (vf, vs))
+               else if attempt >= max_retries then (
+                 Printf.eprintf "[retrieval.rewrite.warning] giving up on SQL fix after %d attempts\n%!" max_retries;
+                 List.iter (fun e -> Printf.eprintf "[retrieval.rewrite.warning] %s\n%!" e) errors;
+                 (vf, vs))
+               else
+                 let error_msg = String.concat "; " errors in
+                 Printf.printf "[retrieval.rewrite] SQL validation failed (attempt %d/%d), asking LLM to fix: %s\n%!"
+                   (attempt + 1) max_retries error_msg;
+                 let fix_prompt =
+                   "Your SQL fragments had validation errors:\n" ^ error_msg
+                   ^ "\n\nPlease output ONLY a corrected JSON object with the fixed \"filter\" and/or \"score_expr\" fields."
+                   ^ " Use only these allowed columns: doc_id, sender, recipient, cc, bcc, subject, email_date,"
+                   ^ " attachments, action_score, importance_score, reply_by, processed, ingested_at, cosine_distance."
+                   ^ " Output raw JSON only, no markdown fencing."
+                 in
+                 let fix_messages = conv @ [
+                   `Assoc [("role", `String "assistant"); ("content", `String last_resp)];
+                   `Assoc [("role", `String "user"); ("content", `String fix_prompt)];
+                 ] in
+                 match ollama_chat ~client ~sw ~label:"rewrite-fix"
+                   ~stats:stats_chat_rewrite ~model:!ollama_rewrite_model
+                   ~messages:fix_messages () with
+                 | Error e ->
+                     Printf.eprintf "[retrieval.rewrite.warning] LLM fix call failed: %s\n%!" e;
+                     (vf, vs)
+                 | Ok fix_resp ->
+                     (match llm_log with Some log ->
+                       log := !log @ [make_llm_call_entry
+                         ~label:(Printf.sprintf "rewrite-fix-%d" (attempt + 1))
+                         ~model:!ollama_rewrite_model ~messages:fix_messages ~response:fix_resp]
+                     | None -> ());
+                     let fix_resp = String.trim fix_resp |> strip_fences |> String.trim in
+                     (try
+                       let fix_json = Yojson.Safe.from_string fix_resp in
+                       let get_fix_str key = match fix_json with
+                         | `Assoc kv -> (match List.assoc_opt key kv with
+                             | Some (`String s) when String.trim s <> "" -> Some (String.trim s)
+                             | _ -> None)
+                         | _ -> None
+                       in
+                       let new_filter = match get_fix_str "filter", fe with
+                         | Some f, Some _ -> Some f  | _, None -> raw_filter  | None, Some _ -> None in
+                       let new_score = match get_fix_str "score_expr", se with
+                         | Some s, Some _ -> Some s  | _, None -> raw_score  | None, Some _ -> None in
+                       try_fix (attempt + 1) new_filter new_score fix_messages fix_resp
+                     with _ ->
+                       Printf.eprintf "[retrieval.rewrite.warning] failed to parse LLM fix response\n%!";
+                       (vf, vs))
+             in
+             try_fix 0 (get_str "filter") (get_str "score_expr") messages raw_resp
            in
            (!queries, resolved, no_retrieval, validated_filter, validated_score)
          with _ ->
@@ -3108,7 +3169,16 @@ let handler ~client ~sw ~clock _socket request body =
                 ?filter:rewrite_filter ?score_expr:rewrite_score () with
               | Error msg ->
                   Printf.eprintf "[retrieval.pg.error] %s\n%!" msg;
-                  []
+                  if rewrite_filter <> None || rewrite_score <> None then (
+                    Printf.eprintf "[retrieval.pg.fallback] retrying without filter/score_expr\n%!";
+                    match Rag_lib.Pg.query_knn ~embedding:emb ~top_k () with
+                    | Error msg2 ->
+                        Printf.eprintf "[retrieval.pg.error] fallback also failed: %s\n%!" msg2;
+                        []
+                    | Ok (sources, sql) ->
+                        retrieval_sqls := sql :: !retrieval_sqls;
+                        sources)
+                  else []
               | Ok (sources, sql) ->
                   retrieval_sqls := sql :: !retrieval_sqls;
                   sources)

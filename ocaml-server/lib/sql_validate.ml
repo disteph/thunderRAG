@@ -181,7 +181,11 @@ let template_node_types ~(wrapper : string) : SS.t =
   | Ok tree ->
       match Yojson.Safe.from_string tree with
       | exception _ -> SS.empty
-      | json -> collect_node_types SS.empty json
+      | json ->
+          let raw = collect_node_types SS.empty json in
+          (* Never exempt security-critical node types — these must always
+             be validated even if they happen to appear in the wrapper template. *)
+          SS.diff raw (SS.of_list ["ColumnRef"; "FuncCall"; "TypeCast"])
 
 (* ---------- public API ---------- *)
 
