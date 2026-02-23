@@ -2928,8 +2928,8 @@ let handler ~client ~sw ~clock _socket request body =
                     else
                       base
                       @ [ `Assoc
-                            [ ("role", `String "user")
-                            ; ("content", `String history_summary)
+                            [ ("role", `String "system")
+                            ; ("content", `String ("Summary of earlier conversation:\n" ^ history_summary))
                             ]
                         ]
                   in
@@ -2993,8 +2993,8 @@ let handler ~client ~sw ~clock _socket request body =
                       effective_question ^ "\n\n" ^ question_suffix
                     in
                     with_tail
-                    @ [ `Assoc [ ("role", `String "user"); ("content", `String evidence_content) ]
-                      ; `Assoc [ ("role", `String "user"); ("content", `String question_content) ]
+                    @ [ `Assoc [ ("role", `String "user")
+                               ; ("content", `String (evidence_content ^ "\n\n" ^ question_content)) ]
                       ]
                 in
 
@@ -3186,6 +3186,30 @@ let handler ~client ~sw ~clock _socket request body =
 
         let all_sources =
           List.concat (List.map embed_and_retrieve queries)
+        in
+        (* If filter was used but yielded 0 results, retry without filter (keep score_expr) *)
+        let all_sources =
+          if all_sources = [] && rewrite_filter <> None then (
+            Printf.printf "[retrieval.fallback] filter returned 0 results, retrying without filter\n%!";
+            retrieval_sqls := [];
+            retrieval_queries := [];
+            let embed_and_retrieve_unfiltered (query_text : string) : Yojson.Safe.t list =
+              match ollama_embed ~client ~sw ~task:Search_query ~label:"query" ~stats:stats_embed_query ~text:query_text () with
+              | Error msg ->
+                  Printf.eprintf "[retrieval.embed.error] %s\n%!" msg; []
+              | Ok v ->
+                  let emb = l2_normalize v in
+                  retrieval_queries := query_text :: !retrieval_queries;
+                  (match Rag_lib.Pg.query_knn ~embedding:emb ~top_k
+                    ?score_expr:rewrite_score () with
+                  | Error msg ->
+                      Printf.eprintf "[retrieval.pg.error] %s\n%!" msg; []
+                  | Ok (sources, sql) ->
+                      retrieval_sqls := sql :: !retrieval_sqls;
+                      sources)
+            in
+            List.concat (List.map embed_and_retrieve_unfiltered queries))
+          else all_sources
         in
         let retrieval_sql =
           match List.rev !retrieval_sqls with
