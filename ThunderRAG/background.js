@@ -136,6 +136,36 @@ browser.runtime.onMessage.addListener(async (msg) => {
       return data;
     }
 
+    if (msg.type === "validateMessageIds") {
+      const ids = Array.isArray(msg.ids) ? msg.ids : [];
+      const results = {};
+      for (const id of ids) {
+        try {
+          const hmid = (id || "").trim();
+          if (!hmid) { results[id] = { exists: false, folder: "", folderType: "" }; continue; }
+          const result = await browser.messages.query({ headerMessageId: hmid });
+          let found = result?.messages?.[0];
+          if (!found && hmid.startsWith("<") && hmid.endsWith(">")) {
+            const result2 = await browser.messages.query({ headerMessageId: hmid.slice(1, -1) });
+            found = result2?.messages?.[0];
+          }
+          if (!found) {
+            results[id] = { exists: false, folder: "", folderType: "" };
+          } else {
+            results[id] = {
+              exists: true,
+              folder: found.folder?.path || "",
+              folderType: found.folder?.type || "",
+              junk: found.junk === true,
+            };
+          }
+        } catch (_) {
+          results[id] = { exists: false, folder: "", folderType: "" };
+        }
+      }
+      return results;
+    }
+
     if (msg.type === "ingestMessageByHeaderMessageId") {
       const headerMessageId = (msg.headerMessageId || "").trim();
       let endpoint = msg.endpoint;
@@ -780,6 +810,38 @@ function startIngestStatusPoller() {
   // Initial poll after 3 seconds.
   setTimeout(refreshIngestStatusForFolder, 3000);
 }
+
+/*
+  Proactive cleanup: automatically de-ingest emails that are permanently
+  deleted or moved to Trash / Junk.
+*/
+function proactiveDelete(headerMessageId, reason) {
+  if (!headerMessageId) return;
+  getServerBase().then(serverBase => {
+    fetch(`${serverBase}/admin/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: headerMessageId }),
+    })
+      .then(() => console.log(`[ThunderRAG] proactive delete (${reason}): ${headerMessageId}`))
+      .catch(() => {});
+  }).catch(() => {});
+}
+
+browser.messages.onDeleted.addListener((messages) => {
+  for (const msg of (messages?.messages || [])) {
+    proactiveDelete(msg.headerMessageId, "permanently deleted");
+  }
+});
+
+browser.messages.onMoved.addListener((_originalMessages, movedMessages) => {
+  for (const msg of (movedMessages?.messages || [])) {
+    const ft = msg.folder?.type || "";
+    if (ft === "trash" || ft === "junk") {
+      proactiveDelete(msg.headerMessageId, `moved to ${ft}`);
+    }
+  }
+});
 
 startup().then(() => {
   startIngestQueuePoller();

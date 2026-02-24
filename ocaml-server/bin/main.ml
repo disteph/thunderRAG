@@ -756,8 +756,8 @@ type pending_query =
           - select_relevant_sources (deciding which emails to rehydrate)
           CAVEAT: the rewrite LLM can fail and produce garbage (e.g. "...").
           The no-evidence path uses p.question as a safe fallback. *)
-  ; message_ids : string list
-  ; sources_json : Yojson.Safe.t
+  ; mutable message_ids : string list
+  ; mutable sources_json : Yojson.Safe.t
   ; evidence_by_id : (string, string) Hashtbl.t
   ; llm_calls : Yojson.Safe.t list
       (** Accumulated log of EVERY LLM call made during this request.
@@ -2679,7 +2679,7 @@ let handler ~client ~sw ~clock _socket request body =
   *)
   | `POST, "/query/complete" ->
       let raw = read_all body in
-      let session_id, request_id, chat_model_override, summarize_model_override =
+      let session_id, request_id, chat_model_override, summarize_model_override, stale_ids =
         try
           let json = Yojson.Safe.from_string raw in
           match json with
@@ -2704,9 +2704,15 @@ let handler ~client ~sw ~clock _socket request body =
                 | Some (`String s) -> String.trim s
                 | _ -> ""
               in
-              (sid, rid, cm, sm)
-          | _ -> ("", "", "", "")
-        with _ -> ("", "", "", "")
+              let stale =
+                match List.assoc_opt "stale_ids" kv with
+                | Some (`List xs) ->
+                    xs |> List.filter_map (function `String s -> Some (String.trim s) | _ -> None)
+                | _ -> []
+              in
+              (sid, rid, cm, sm, stale)
+          | _ -> ("", "", "", "", [])
+        with _ -> ("", "", "", "", [])
       in
       if String.trim session_id = "" || String.trim request_id = "" then
         Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id/request_id\n" ()
@@ -2720,6 +2726,26 @@ let handler ~client ~sw ~clock _socket request body =
             if p.session_id <> session_id then
               Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"request_id/session_id mismatch\n" ()
             else (
+              (* Remove stale IDs (deleted/junk in Thunderbird) from the
+                 pending query so they don't block evidence checks or
+                 appear in the final prompt. *)
+              if stale_ids <> [] then (
+                let stale_set = Hashtbl.create 16 in
+                List.iter (fun id -> Hashtbl.replace stale_set id true) stale_ids;
+                Eio.Mutex.use_rw ~protect:true p.mu (fun () ->
+                  p.message_ids <- p.message_ids |> List.filter (fun mid -> not (Hashtbl.mem stale_set mid));
+                  p.sources_json <- (match p.sources_json with
+                    | `List ys ->
+                        `List (ys |> List.filter (fun v ->
+                          match v with
+                          | `Assoc kv ->
+                              let did = match List.assoc_opt "doc_id" kv with
+                                | Some (`String s) -> String.trim s | _ -> ""
+                              in
+                              not (Hashtbl.mem stale_set did)
+                          | _ -> true))
+                    | x -> x));
+                Printf.printf "[query.complete] removed %d stale IDs\n%!" (List.length stale_ids));
               let missing =
                 Eio.Mutex.use_rw ~protect:true p.mu (fun () ->
                   p.message_ids

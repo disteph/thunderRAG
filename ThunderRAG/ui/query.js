@@ -221,6 +221,8 @@ function renderSourcesInto(container, sources) {
     if (from) metaLines.push(`From: ${from}`);
     if (to_) metaLines.push(`To: ${to_}`);
     if (cc) metaLines.push(`Cc: ${cc}`);
+    const folder = String(s?.folder || "").trim();
+    if (folder) metaLines.push(`Folder: ${folder}`);
     if (typeof score === "number") metaLines.push(`Score: ${score.toFixed(4)}`);
     if (typeof actionScore === "number" || typeof importanceScore === "number") {
       const parts = [];
@@ -604,13 +606,61 @@ async function onAsk() {
         }
       }
 
-      setTypingDots(assistant.bubble, "Fetching emails\u2026");
+      setTypingDots(assistant.bubble, "Validating emails\u2026");
 
       if (!requestId) {
         throw new Error("Server did not return request_id");
       }
 
-      if (messageIds.length > 0) {
+      // Lazy validation: check which retrieved emails still exist in TB
+      // and are not in Trash/Junk.  Stale entries are deleted from the
+      // server DB so they won't pollute future queries.
+      const allDocIds = srcs.map(s => String(s?.doc_id || "")).filter(Boolean);
+      let validation = {};
+      try {
+        validation = await browser.runtime.sendMessage({
+          type: "validateMessageIds",
+          ids: allDocIds,
+        }) || {};
+      } catch (_) {}
+
+      const staleIds = [];
+      const folderByDocId = {};
+      for (const [id, info] of Object.entries(validation)) {
+        if (!info.exists || info.folderType === "trash" || info.folderType === "junk" || info.junk) {
+          staleIds.push(id);
+        } else {
+          folderByDocId[id] = info.folder || "";
+        }
+      }
+
+      // Delete stale entries from server DB
+      if (staleIds.length > 0) {
+        for (const id of staleIds) {
+          try {
+            await fetch(`${base}/admin/delete`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id }),
+            });
+          } catch (_) {}
+        }
+      }
+
+      // Attach folder info to sources for UI display; mark stale
+      const staleSet = new Set(staleIds);
+      for (const s of srcs) {
+        const did = String(s?.doc_id || "");
+        if (folderByDocId[did]) s.folder = folderByDocId[did];
+        if (staleSet.has(did)) s.stale = true;
+      }
+
+      // Filter stale IDs from the evidence upload list
+      const validMessageIds = messageIds.filter(id => !staleSet.has(id));
+
+      setTypingDots(assistant.bubble, "Fetching emails\u2026");
+
+      if (validMessageIds.length > 0) {
 
         async function postEvidence(headerMessageId, raw) {
           const enc = new TextEncoder();
@@ -632,10 +682,10 @@ async function onAsk() {
           }
         }
 
-        for (let i = 0; i < messageIds.length; i++) {
-          const mid = String(messageIds[i] || "").trim();
+        for (let i = 0; i < validMessageIds.length; i++) {
+          const mid = String(validMessageIds[i] || "").trim();
           if (!mid) continue;
-          setTypingPhase(assistant.bubble, `Fetching emails (${i + 1}/${messageIds.length})\u2026`);
+          setTypingPhase(assistant.bubble, `Fetching emails (${i + 1}/${validMessageIds.length})\u2026`);
           const got = await browser.runtime.sendMessage({
             type: "getRawMessageByHeaderMessageId",
             headerMessageId: mid,
@@ -652,6 +702,7 @@ async function onAsk() {
         request_id: requestId,
         chat_model: chatModel,
         summarize_model: summarizeModel,
+        stale_ids: staleIds,
       });
       stopProgressPolling();
 
