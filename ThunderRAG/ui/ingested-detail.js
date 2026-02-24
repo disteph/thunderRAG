@@ -116,11 +116,13 @@ function renderMetadataHtml(data, entry) {
     if (typeof md.importance_score === "number") {
       html += `<div class="meta-key">importance score</div><div>${md.importance_score}/100</div>`;
     }
-    if (md.reply_by && typeof md.reply_by === "string" && md.reply_by !== "none") {
-      html += `<div class="meta-key">reply by</div><div>${esc(md.reply_by)}</div>`;
+    {
+      const rb = (md.reply_by && typeof md.reply_by === "string" && md.reply_by !== "none")
+        ? esc(md.reply_by) : "None";
+      html += `<div class="meta-key">reply by</div><div>${rb}</div>`;
     }
-    if (typeof md.processed === "boolean") {
-      const processedText = md.processed
+    {
+      const processedText = (md.processed === true)
         ? (md.processed_at ? `Processed on ${esc(md.processed_at)}` : "Processed")
         : "Not processed";
       html += `<div class="meta-key">processed</div><div>${processedText}</div>`;

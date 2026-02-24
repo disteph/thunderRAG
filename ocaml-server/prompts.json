@@ -23,7 +23,7 @@
     "Subject: <subject line>",
     "Date: <date>",
     "Attachments: <filenames, if any>",
-    "TRIAGE: action_required=N/100 importance=N/100 reply_by=<date or none>",
+    "TRIAGE: action_required=N/100 importance=N/100 reply_by=<date or none> processed=<true or false>",
     "",
     "QUOTED CONTEXT (older, summarized):",
     "<LLM-summarized older thread history, if the thread is long>",
@@ -123,10 +123,10 @@
     "{{email_body_sections}}",
     "",
     "Each email header may include triage metadata:",
-    "- action=N/100: how much the email requires action or a response from the user (0 = purely informational, 100 = urgent action required)",
+    "- action_required=N/100: how likely it is that an action or a reply is required from the user (0 = purely informational / no action needed, 100 = urgent action or reply required)",
     "- importance=N/100: overall importance of the email to the user",
-    "- reply_by=<date>: estimated deadline for a response, if any",
-    "- processed=true: the user has already dealt with this email; no further action is needed regardless of the action score"
+    "- reply_by=<date or none>: estimated deadline for a response. 'none' means no deadline or no action needed.",
+    "- processed=<true or false>: whether the user has already dealt with this email. processed=true means no further action is needed regardless of the action score. processed=false means the email has not been handled yet."
   ],
 
   "chat_question_suffix": [
@@ -190,7 +190,7 @@
     "- Sender/recipient relevance",
     "- Date relevance (e.g. if the user asks about recent emails)",
     "- Whether the question could be answered from headers alone (e.g. \"who emailed me about X?\" may only need headers)",
-    "- Triage metadata (action_score, importance_score) if the question is about urgency or priorities",
+    "- Triage metadata (action_required, importance, reply_by, processed) if the question is about urgency, priorities, deadlines, or pending tasks",
     "",
     "Output ONLY a JSON array of the 1-based row numbers of relevant emails.",
     "Example: [1, 3, 5]",

@@ -9,7 +9,7 @@
   High-level flows
   - Ingestion:
     - Accept raw emails (RFC822), extract text (text/plain or HTML->text), build a "text_for_index" payload,
-      embed chunks via Ollama /api/embeddings, and store embeddings + metadata in PostgreSQL/pgvector.
+      embed chunks via Ollama /api/embed, and store embeddings + metadata in PostgreSQL/pgvector.
   - Query (2-phase):
     1) POST /query
        - Runs kNN vector retrieval via PostgreSQL/pgvector.
@@ -23,8 +23,8 @@
   Key environment variables
   - OLLAMA_BASE_URL, OLLAMA_EMBED_MODEL, OLLAMA_LLM_MODEL
   - RAG_MAX_EVIDENCE_SOURCES, RAG_MAX_EVIDENCE_CHARS_PER_EMAIL
-  - RAG_DEBUG_OLLAMA_EMBED=1: print Ollama /api/embeddings request JSON (ingestion + query-time)
-  - RAG_DEBUG_RETRIEVAL=1: print retrieval payloads (/api/embeddings + /query_embedded) and response summary
+  - RAG_DEBUG_OLLAMA_EMBED=1: print Ollama /api/embed request JSON (ingestion + query-time)
+  - RAG_DEBUG_RETRIEVAL=1: print retrieval payloads (/api/embed + /query_embedded) and response summary
   - RAG_DEBUG_OLLAMA_CHAT=1: print Ollama /api/chat request JSON (final generation prompt)
 *)
 
@@ -161,6 +161,12 @@ let embed_task_prefix (task : embed_task) : string option =
 
 let embed_dim_probed = ref false
 
+(* Sentinel prefix for truncation errors so callers can distinguish them. *)
+let truncation_error_prefix = "TRUNCATED: "
+let is_truncation_error (msg : string) : bool =
+  let n = String.length truncation_error_prefix in
+  String.length msg >= n && String.sub msg 0 n = truncation_error_prefix
+
 let ollama_embed ~client ~sw ?(task : embed_task option) ?(label = "") ?(stats : call_stats option) ~(text : string) () : (float list, string) result =
   let t0 = Unix.gettimeofday () in
   let prompt =
@@ -171,37 +177,60 @@ let ollama_embed ~client ~sw ?(task : embed_task option) ?(label = "") ?(stats :
         | Some prefix -> prefix ^ text
         | None -> text
   in
-  let uri = Uri.of_string (!ollama_base_url ^ "/api/embeddings") in
+  (* Use /api/embed (not the deprecated /api/embeddings) with truncate=false
+     so that Ollama returns an error instead of silently truncating. *)
+  let uri = Uri.of_string (!ollama_base_url ^ "/api/embed") in
   let body_obj : Yojson.Safe.t =
-    `Assoc [ ("model", `String !ollama_embed_model); ("prompt", `String prompt) ]
+    `Assoc [ ("model", `String !ollama_embed_model)
+           ; ("input", `String prompt)
+           ; ("truncate", `Bool false) ]
   in
   if !rag_debug_ollama_embed then
     Printf.printf "\n[ollama.embed.request]\n%s\n%!" (Yojson.Safe.pretty_to_string body_obj);
   let body_json = Yojson.Safe.to_string body_obj in
   let call () = post_json_uri ~client ~sw ~uri ~body_json in
   let resp, resp_body = !global_with_timeout !ollama_timeout_seconds call in
+  let is_truncation_response =
+    (* Ollama returns HTTP 400 with an error message mentioning context length *)
+    not (is_ok_status (Http.Response.status resp)) &&
+    (contains_substring ~sub:"context length" (String.lowercase_ascii resp_body) ||
+     contains_substring ~sub:"too long" (String.lowercase_ascii resp_body) ||
+     contains_substring ~sub:"exceeds" (String.lowercase_ascii resp_body) ||
+     contains_substring ~sub:"truncat" (String.lowercase_ascii resp_body))
+  in
   let result =
-    if not (is_ok_status (Http.Response.status resp)) then Error resp_body
+    if is_truncation_response then (
+      let chars = String.length prompt in
+      Printf.eprintf "[embed.truncated] label=%s chars=%d body=%s\n%!" label chars
+        (if String.length resp_body > 200 then String.sub resp_body 0 200 ^ "..." else resp_body);
+      Error (truncation_error_prefix ^ resp_body))
+    else if not (is_ok_status (Http.Response.status resp)) then Error resp_body
     else
       try
         let json = Yojson.Safe.from_string resp_body in
+        let parse_vec xs =
+          xs |> List.filter_map (function
+            | `Float f -> Some f
+            | `Int i -> Some (float_of_int i)
+            | `Intlit s -> (try Some (float_of_string s) with _ -> None)
+            | `String s -> (try Some (float_of_string s) with _ -> None)
+            | _ -> None)
+        in
         match json with
         | `Assoc kv -> (
-            match List.assoc_opt "embedding" kv with
-            | Some (`List xs) ->
-                let vec =
-                  xs
-                  |> List.filter_map (function
-                       | `Float f -> Some f
-                       | `Int i -> Some (float_of_int i)
-                       | `Intlit s -> (try Some (float_of_string s) with
-                          | _ -> None)
-                       | `String s -> (try Some (float_of_string s) with
-                          | _ -> None)
-                       | _ -> None)
-                in
+            (* /api/embed returns {"embeddings": [[...]]} *)
+            match List.assoc_opt "embeddings" kv with
+            | Some (`List (`List xs :: _)) ->
+                let vec = parse_vec xs in
                 if vec = [] then Error "empty embedding" else Ok vec
-            | _ -> Error "missing embedding")
+            | Some (`List []) -> Error "empty embeddings array"
+            (* Fallback: also accept legacy {"embedding": [...]} format *)
+            | _ -> (
+                match List.assoc_opt "embedding" kv with
+                | Some (`List xs) ->
+                    let vec = parse_vec xs in
+                    if vec = [] then Error "empty embedding" else Ok vec
+                | _ -> Error "missing embedding/embeddings field"))
         | _ -> Error "bad embedding response"
       with ex -> Error (Printexc.to_string ex)
   in
@@ -324,7 +353,12 @@ let strip_summary_preamble (s : string) : string =
   String.concat "\n" (drop lines)
 
 let summarize_to_fit ~client ~sw ~system_prompt ~max_input_chars ~max_chars
-    ~label ?(llm_log : Yojson.Safe.t list ref option) (text : string) : string =
+    ~label ?(summarize_model : string option) ?(llm_log : Yojson.Safe.t list ref option) (text : string) : string =
+  let effective_summarize_model =
+    match summarize_model with
+    | Some m when String.trim m <> "" -> m
+    | _ -> !ollama_summarize_model
+  in
   let clean = String.trim text in
   if String.length clean <= max_chars then clean
   else
@@ -352,12 +386,12 @@ let summarize_to_fit ~client ~sw ~system_prompt ~max_input_chars ~max_chars
         ; `Assoc [ ("role", `String "user"); ("content", `String chunk) ]
         ]
       in
-      match ollama_chat ~client ~sw ~label:("summarize." ^ label) ~stats:stats_chat_summarize ~model:!ollama_summarize_model ~messages () with
+      match ollama_chat ~client ~sw ~label:("summarize." ^ label) ~stats:stats_chat_summarize ~model:effective_summarize_model ~messages () with
       | Ok s ->
           if !rag_debug_ollama_chat then Printf.printf "\n[%s.summary.response]\n%s\n%!" label s;
           (match llm_log with Some log ->
             log := !log @ [make_llm_call_entry ~label:("summarize:" ^ label)
-              ~model:!ollama_summarize_model ~messages ~response:s]
+              ~model:effective_summarize_model ~messages ~response:s]
           | None -> ());
           let s = strip_summary_preamble s |> String.trim in
           if s = "" then (
@@ -367,7 +401,7 @@ let summarize_to_fit ~client ~sw ~system_prompt ~max_input_chars ~max_chars
       | Error err ->
           (match llm_log with Some log ->
             log := !log @ [make_llm_call_entry ~label:("summarize:" ^ label)
-              ~model:!ollama_summarize_model ~messages ~response:("ERROR: " ^ err)]
+              ~model:effective_summarize_model ~messages ~response:("ERROR: " ^ err)]
           | None -> ());
           let err = String.trim err in
           let err = if err = "" then "unknown error" else err in
@@ -870,10 +904,10 @@ let renumber_cited_sources ~(answer : string) ~(sources_json : Yojson.Safe.t) : 
       let triage_parts = ref [] in
       (match action, importance with
        | Some a, Some imp ->
-           triage_parts := !triage_parts @ [ Printf.sprintf "action=%d/100 importance=%d/100" a imp ];
-           if reply_by <> "" && reply_by <> "none" then
-             triage_parts := !triage_parts @ [ Printf.sprintf "reply_by=%s" reply_by ]
+           triage_parts := !triage_parts @ [ Printf.sprintf "action_required=%d/100 importance=%d/100" a imp ]
        | _ -> ());
+      let rb_display = if reply_by = "" || reply_by = "none" then "none" else reply_by in
+      triage_parts := !triage_parts @ [ Printf.sprintf "reply_by=%s" rb_display ];
       triage_parts := !triage_parts @ [ Printf.sprintf "processed=%b" (processed = Some true) ];
       let parts =
         [ Printf.sprintf "[Email %d]" (new_i + 1)
@@ -1017,8 +1051,9 @@ let make_ingest_data ~doc_id ~(headers : (string, string) Hashtbl.t) ~(raw : str
   let triage_line =
     match triage with
     | Some t ->
-        Printf.sprintf "\nTRIAGE: action_required=%d/100 importance=%d/100 reply_by=%s"
-          t.action_score t.importance_score t.reply_by
+        let rb = if t.reply_by = "" || t.reply_by = "none" then "none" else t.reply_by in
+        Printf.sprintf "\nTRIAGE: action_required=%d/100 importance=%d/100 reply_by=%s processed=false"
+          t.action_score t.importance_score rb
     | None -> ""
   in
   let text_for_index =
@@ -1064,7 +1099,7 @@ let ingest_text_of_raw ~(doc_id : string) ~(raw : string) : (string * Yojson.Saf
   Full ingestion pipeline for a single raw RFC822 message:
   - extract normalized body text
   - build a single index string including selected headers
-  - chunk + embed each chunk (Ollama /api/embeddings)
+  - chunk + embed each chunk (Ollama /api/embed)
   - store email metadata + chunk embeddings in PostgreSQL via Pg module
 *)
 let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
@@ -1197,6 +1232,10 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
     |> List.map (fun (i, section, ch) ->
            match ollama_embed ~client ~sw ~task:Search_document ~label:"ingest" ~stats:stats_embed_ingest ~text:ch () with
            | Ok v -> (i, section, ch, l2_normalize v)
+           | Error msg when is_truncation_error msg ->
+               Printf.eprintf "[ingest.truncated] doc_id=%s chunk=%d section=%s chars=%d — refusing to ingest with truncated embedding\n%!"
+                 ndoc i section (String.length ch);
+               raise (Failure (Printf.sprintf "embedding truncated for chunk %d (%d chars) of %s — increase embed model context or reduce chunk_size" i (String.length ch) ndoc))
            | Error msg -> raise (Failure ("ollama_embed failed: " ^ msg)))
   in
   let attachments = extract_attachment_filenames raw in
@@ -1928,7 +1967,8 @@ let handle_bulk_ingest ~client ~sw ~clock (body : string) : (Http.Response.t * s
 *)
 let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
     ~(history_summary : string) ~(tail : chat_message list)
-    ~(user_name : string) ?(llm_log : Yojson.Safe.t list ref option)
+    ~(user_name : string) ?(rewrite_model : string option)
+    ?(llm_log : Yojson.Safe.t list ref option)
     () : string list * string * bool * string option * string option =
   if not !rag_query_rewrite then ([question], question, false, None, None)
   else
@@ -1974,13 +2014,18 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
       in
       base @ summary @ turns @ final
     in
-    match ollama_chat ~client ~sw ~label:"rewrite" ~stats:stats_chat_rewrite ~model:!ollama_rewrite_model ~messages () with
+    let effective_rewrite_model =
+      match rewrite_model with
+      | Some m when String.trim m <> "" -> m
+      | _ -> !ollama_rewrite_model
+    in
+    match ollama_chat ~client ~sw ~label:"rewrite" ~stats:stats_chat_rewrite ~model:effective_rewrite_model ~messages () with
     | Ok raw_resp ->
         if !rag_debug_ollama_chat then
           Printf.printf "\n[retrieval.rewrite.response]\n%s\n%!" raw_resp;
         (match llm_log with Some log ->
           log := !log @ [make_llm_call_entry ~label:"rewrite"
-            ~model:!ollama_rewrite_model ~messages ~response:raw_resp]
+            ~model:effective_rewrite_model ~messages ~response:raw_resp]
         | None -> ());
         let raw_resp = String.trim raw_resp in
         let raw_resp =
@@ -2152,7 +2197,7 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
                    `Assoc [("role", `String "user"); ("content", `String fix_prompt)];
                  ] in
                  match ollama_chat ~client ~sw ~label:"rewrite-fix"
-                   ~stats:stats_chat_rewrite ~model:!ollama_rewrite_model
+                   ~stats:stats_chat_rewrite ~model:effective_rewrite_model
                    ~messages:fix_messages () with
                  | Error e ->
                      Printf.eprintf "[retrieval.rewrite.warning] LLM fix call failed: %s\n%!" e;
@@ -2161,7 +2206,7 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
                      (match llm_log with Some log ->
                        log := !log @ [make_llm_call_entry
                          ~label:(Printf.sprintf "rewrite-fix-%d" (attempt + 1))
-                         ~model:!ollama_rewrite_model ~messages:fix_messages ~response:fix_resp]
+                         ~model:effective_rewrite_model ~messages:fix_messages ~response:fix_resp]
                      | None -> ());
                      let fix_resp = String.trim fix_resp |> strip_fences |> String.trim in
                      (try
@@ -2227,7 +2272,8 @@ let merge_multi_query_sources (all_sources : Yojson.Safe.t list) (top_k : int) :
    ask the LLM which emails actually need their full body content loaded.
    Returns the filtered list of doc_ids.  Falls back to all doc_ids on error. *)
 let select_relevant_sources ~client ~sw ~(resolved_question : string)
-    ~(user_name : string) ?(llm_log : Yojson.Safe.t list ref option)
+    ~(user_name : string) ?(rewrite_model : string option)
+    ?(llm_log : Yojson.Safe.t list ref option)
     (sources_json : Yojson.Safe.t) : string list =
   let all_doc_ids =
     match sources_json with
@@ -2278,10 +2324,11 @@ let select_relevant_sources ~client ~sw ~(resolved_question : string)
                   ; Printf.sprintf "date=%s" (ms "date")
                   ]
                 @ (match mi "action_score", mi "importance_score" with
-                   | Some a, Some imp -> [Printf.sprintf "action=%s/100 importance=%s/100" a imp]
+                   | Some a, Some imp -> [Printf.sprintf "action_required=%s/100 importance=%s/100" a imp]
                    | _ -> [])
                 @ (let rb = ms "reply_by" in
-                   if String.trim rb <> "" && rb <> "none" then [Printf.sprintf "reply_by=%s" rb] else [])
+                   let rb_display = if String.trim rb = "" || rb = "none" then "none" else rb in
+                   [Printf.sprintf "reply_by=%s" rb_display])
                 @ (let atts = match List.assoc_opt "attachments" md with
                      | Some (`List xs) -> xs |> List.filter_map (function `String s -> Some s | _ -> None)
                      | _ -> []
@@ -2315,26 +2362,31 @@ let select_relevant_sources ~client ~sw ~(resolved_question : string)
       ]
   in
   let user_msg =
-    Printf.sprintf "Question: %s\n\nEmails:\n%s\n\nOutput ONLY a JSON array of relevant row numbers, e.g. [1, 3, 5]. No explanation."
-      resolved_question table_str
+    Printf.sprintf "Question: %s\n\nOutput ONLY a JSON array of relevant row numbers, e.g. [1, 3, 5]. No explanation."
+      resolved_question
   in
   let messages : Yojson.Safe.t list =
     [ `Assoc [ ("role", `String "system"); ("content", `String system) ]
     ; `Assoc [ ("role", `String "user"); ("content", `String user_msg) ]
     ]
   in
-  match ollama_chat ~client ~sw ~label:"select_evidence" ~stats:stats_chat_select ~model:!ollama_rewrite_model ~messages () with
+  let effective_sel_model =
+    match rewrite_model with
+    | Some m when String.trim m <> "" -> m
+    | _ -> !ollama_rewrite_model
+  in
+  match ollama_chat ~client ~sw ~label:"select_evidence" ~stats:stats_chat_select ~model:effective_sel_model ~messages () with
   | Error err ->
       (match llm_log with Some log ->
         log := !log @ [make_llm_call_entry ~label:"select_evidence"
-          ~model:!ollama_rewrite_model ~messages ~response:("ERROR: " ^ err)]
+          ~model:effective_sel_model ~messages ~response:("ERROR: " ^ err)]
       | None -> ());
       Printf.eprintf "[select_evidence.error] %s, selecting all\n%!" (truncate_chars err ~max_chars:200);
       all_doc_ids
   | Ok raw_resp ->
       (match llm_log with Some log ->
         log := !log @ [make_llm_call_entry ~label:"select_evidence"
-          ~model:!ollama_rewrite_model ~messages ~response:raw_resp]
+          ~model:effective_sel_model ~messages ~response:raw_resp]
       | None -> ());
       let raw_resp = String.trim raw_resp in
       let raw_resp =
@@ -2476,6 +2528,8 @@ let handler ~client ~sw ~clock _socket request body =
              ; ("embed_models", `List (List.map (fun s -> `String s) embed_models))
              ; ("all_models", `List (List.map (fun s -> `String s) all_models))
              ; ("default_chat_model", `String !ollama_llm_model)
+             ; ("default_summarize_model", `String !ollama_summarize_model)
+             ; ("default_rewrite_model", `String !ollama_rewrite_model)
              ]
            |> Yojson.Safe.to_string
          in
@@ -2625,7 +2679,7 @@ let handler ~client ~sw ~clock _socket request body =
   *)
   | `POST, "/query/complete" ->
       let raw = read_all body in
-      let session_id, request_id, chat_model_override =
+      let session_id, request_id, chat_model_override, summarize_model_override =
         try
           let json = Yojson.Safe.from_string raw in
           match json with
@@ -2645,9 +2699,14 @@ let handler ~client ~sw ~clock _socket request body =
                 | Some (`String s) -> String.trim s
                 | _ -> ""
               in
-              (sid, rid, cm)
-          | _ -> ("", "", "")
-        with _ -> ("", "", "")
+              let sm =
+                match List.assoc_opt "summarize_model" kv with
+                | Some (`String s) -> String.trim s
+                | _ -> ""
+              in
+              (sid, rid, cm, sm)
+          | _ -> ("", "", "", "")
+        with _ -> ("", "", "", "")
       in
       if String.trim session_id = "" || String.trim request_id = "" then
         Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id/request_id\n" ()
@@ -2685,6 +2744,9 @@ let handler ~client ~sw ~clock _socket request body =
                 (* Mutable ref into p.llm_calls — used to accumulate LLM call
                    logs from summarize_to_fit and the final chat call. *)
                 let p_llm_log = ref p.llm_calls in
+                let summarize_model_opt =
+                  if String.trim summarize_model_override <> "" then Some summarize_model_override else None
+                in
 
                 (* --- Evidence extraction & budget-aware compression ---
                    Pass 1: extract raw email bodies + metadata (no LLM calls).
@@ -2733,7 +2795,13 @@ let handler ~client ~sw ~clock _socket request body =
                               in
                               List.iter
                                 (fun (k, v) ->
-                                  if List.mem k override_keys then Hashtbl.replace tbl k v)
+                                  if List.mem k override_keys then
+                                    let dominated = match v with
+                                      | `String s -> String.trim s = ""
+                                      | `List [] -> true
+                                      | _ -> false
+                                    in
+                                    if not dominated then Hashtbl.replace tbl k v)
                                 fresh_kv;
                               `Assoc (Hashtbl.to_seq tbl |> List.of_seq)
                           | _ -> cached_md
@@ -2813,7 +2881,7 @@ let handler ~client ~sw ~clock _socket request body =
                         ~system_prompt:(get_prompt "compress_new_content_evidence" ~default:"Compress email body for Q&A evidence. Preserve all facts. Third person. Do not invent." ~vars:[])
                         ~max_input_chars:!rag_summarize_max_input_chars
                         ~max_chars:new_content_budget
-                        ~label:"evidence" ~llm_log:p_llm_log
+                        ~label:"evidence" ?summarize_model:summarize_model_opt ~llm_log:p_llm_log
                         new_body
                     in
                     let quoted_section =
@@ -2824,7 +2892,7 @@ let handler ~client ~sw ~clock _socket request body =
                             ~system_prompt:(get_prompt "compress_quoted_context_evidence" ~default:"Compress quoted thread context for Q&A evidence. Preserve facts. Third person. Do not invent." ~vars:[])
                             ~max_input_chars:!rag_summarize_max_input_chars
                             ~max_chars:quoted_budget
-                            ~label:"evidence-quoted" ~llm_log:p_llm_log
+                            ~label:"evidence-quoted" ?summarize_model:summarize_model_opt ~llm_log:p_llm_log
                             quoted_raw
                         in
                         "\n\nQUOTED CONTEXT:\n" ^ quoted_capped
@@ -2838,7 +2906,7 @@ let handler ~client ~sw ~clock _socket request body =
                             ~system_prompt:(get_prompt "compress_attachment" ~default:"Summarize an email attachment. Preserve key facts. Output plain text only." ~vars:[("{{filename}}", fn); ("{{max_chars}}", string_of_int att_budget)])
                             ~max_input_chars:!rag_summarize_max_input_chars
                             ~max_chars:att_budget
-                            ~label:(Printf.sprintf "evidence-att[%s]" fn) ~llm_log:p_llm_log
+                            ~label:(Printf.sprintf "evidence-att[%s]" fn) ?summarize_model:summarize_model_opt ~llm_log:p_llm_log
                             text
                           in
                           Printf.sprintf "ATTACHMENT [%s]:\n%s" fn capped) atts
@@ -2848,6 +2916,24 @@ let handler ~client ~sw ~clock _socket request body =
                     let body = "NEW CONTENT:\n" ^ new_body_capped ^ quoted_section ^ att_section in
                     Hashtbl.replace evidence_by_doc mid (body, md))
                     raw_entries);
+
+                (* Build retrieval score lookup from sources_json *)
+                let score_by_doc : (string, float) Hashtbl.t = Hashtbl.create 32 in
+                (match p.sources_json with
+                | `List ys ->
+                    List.iter (function
+                      | `Assoc kv ->
+                          let doc_id = match List.assoc_opt "doc_id" kv with
+                            | Some (`String s) -> s | _ -> ""
+                          in
+                          let score = match List.assoc_opt "score" kv with
+                            | Some (`Float f) -> f
+                            | Some (`Int n) -> Float.of_int n
+                            | _ -> 0.0
+                          in
+                          if String.trim doc_id <> "" then Hashtbl.replace score_by_doc doc_id score
+                      | _ -> ()) ys
+                | _ -> ());
 
                 (* Helper: extract a flat tuple from metadata JSON for prompt building *)
                 let entry_of_md mid text md rehydrated =
@@ -2894,17 +2980,20 @@ let handler ~client ~sw ~clock _socket request body =
                     let parts = ref [] in
                     (match action, importance with
                      | Some a, Some imp ->
-                         parts := !parts @ [ Printf.sprintf "action=%d/100 importance=%d/100" a imp ];
-                         if reply_by <> "" && reply_by <> "none" then
-                           parts := !parts @ [ Printf.sprintf "reply_by=%s" reply_by ]
+                         parts := !parts @ [ Printf.sprintf "action_required=%d/100 importance=%d/100" a imp ]
                      | _ -> ());
+                    let rb_display = if reply_by = "" || reply_by = "none" then "none" else reply_by in
+                    parts := !parts @ [ Printf.sprintf "reply_by=%s" rb_display ];
                     parts := !parts @ [ Printf.sprintf "processed=%b" (processed = Some true) ];
                     String.concat " " !parts
+                  in
+                  let score = match Hashtbl.find_opt score_by_doc mid with
+                    | Some f -> f | None -> 0.0
                   in
                   (mid, text, md,
                    md_str "date", md_str "from", md_str "to",
                    md_str "cc", md_str "bcc", md_str "subject",
-                   md_attachments, triage_str, rehydrated)
+                   md_attachments, triage_str, rehydrated, score)
                 in
 
                 (* Build rehydrated entries from uploaded evidence *)
@@ -2941,11 +3030,12 @@ let handler ~client ~sw ~clock _socket request body =
                   | _ -> []
                 in
 
-                (* Merge and sort all entries by date (oldest first) *)
+                (* Merge and sort all entries by retrieval score (best first),
+                   matching the ordering used in the select_evidence prompt *)
                 let all_entries =
                   (rehydrated_entries @ unrehydrated_entries)
-                  |> List.sort (fun (_, _, _, d1, _, _, _, _, _, _, _, _) (_, _, _, d2, _, _, _, _, _, _, _, _) ->
-                       String.compare d1 d2)
+                  |> List.sort (fun (_, _, _, _, _, _, _, _, _, _, _, _, s1) (_, _, _, _, _, _, _, _, _, _, _, _, s2) ->
+                       compare s2 s1)
                 in
 
                 (* Determine which entries go into the LLM prompt:
@@ -2953,7 +3043,7 @@ let handler ~client ~sw ~clock _socket request body =
                 let include_unrehydrated = !rag_include_unrehydrated_metadata in
                 let prompt_entries =
                   if include_unrehydrated then all_entries
-                  else all_entries |> List.filter (fun (_, _, _, _, _, _, _, _, _, _, _, rh) -> rh)
+                  else all_entries |> List.filter (fun (_, _, _, _, _, _, _, _, _, _, _, rh, _) -> rh)
                 in
 
                 (* Build sources_json for the UI response: all entries with flags *)
@@ -2969,7 +3059,7 @@ let handler ~client ~sw ~clock _socket request body =
                       | _ -> ()) ys
                 | _ -> ());
                 let sources_json =
-                  `List (all_entries |> List.map (fun (mid, text, md, _, _, _, _, _, _, _, _, rh) ->
+                  `List (all_entries |> List.map (fun (mid, text, md, _, _, _, _, _, _, _, _, rh, _) ->
                     let base_kv =
                       match Hashtbl.find_opt orig_by_id mid with
                       | Some (`Assoc kv) -> kv
@@ -2986,10 +3076,11 @@ let handler ~client ~sw ~clock _socket request body =
                 let evidence_msg =
                   let lines =
                     prompt_entries
-                    |> List.mapi (fun i (mid, text, _md, date_, from_, to_, cc_, bcc_, subject, atts, triage, rh) ->
+                    |> List.mapi (fun i (mid, text, _md, date_, from_, to_, cc_, bcc_, subject, atts, triage, rh, score) ->
                            let hdr_parts =
                              [ Printf.sprintf "[Email %d]" (i + 1)
                              ; Printf.sprintf "doc_id=%s" mid
+                             ; Printf.sprintf "score=%.4f" score
                              ; Printf.sprintf "date=%s" date_
                              ; Printf.sprintf "from=%s" from_
                              ]
@@ -3189,7 +3280,7 @@ let handler ~client ~sw ~clock _socket request body =
   *)
   | `POST, "/query" ->
       let query_body = read_all body in
-      let session_id, question, top_k, mode, user_name =
+      let session_id, question, top_k, mode, user_name, rewrite_model_override =
         try
           let json = Yojson.Safe.from_string query_body in
           let assoc =
@@ -3223,8 +3314,13 @@ let handler ~client ~sw ~clock _socket request body =
             | Some (`String s) -> String.trim s
             | _ -> ""
           in
-          (session_id, question, top_k, mode, user_name)
-        with _ -> ("", "", 8, "assistive", "")
+          let rm =
+            match get "rewrite_model" with
+            | Some (`String s) -> String.trim s
+            | _ -> ""
+          in
+          (session_id, question, top_k, mode, user_name, rm)
+        with _ -> ("", "", 8, "assistive", "", "")
       in
       if String.trim session_id = "" || String.trim question = "" then
         Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id/question\n" ()
@@ -3243,10 +3339,14 @@ let handler ~client ~sw ~clock _socket request body =
            harness can inspect all prompts, not just the final chat prompt. *)
         let llm_log : Yojson.Safe.t list ref = ref [] in
 
+        let rewrite_model_opt =
+          if String.trim rewrite_model_override <> "" then Some rewrite_model_override else None
+        in
         set_progress session_id "Generating query";
         let queries, resolved_question, no_retrieval, rewrite_filter, rewrite_score =
           rewrite_queries_for_retrieval ~client ~sw ~question
             ~history_summary ~tail ~user_name:(s.user_name)
+            ?rewrite_model:rewrite_model_opt
             ~llm_log ()
         in
 
@@ -3281,8 +3381,13 @@ let handler ~client ~sw ~clock _socket request body =
         set_progress session_id "Searching archive";
         let retrieval_sqls = ref [] in
         let retrieval_queries = ref [] in
+        let retrieval_warnings = ref [] in
         let embed_and_retrieve (query_text : string) : Yojson.Safe.t list =
           match ollama_embed ~client ~sw ~task:Search_query ~label:"query" ~stats:stats_embed_query ~text:query_text () with
+          | Error msg when is_truncation_error msg ->
+              Printf.eprintf "[retrieval.embed.truncated] query truncated (%d chars): %s\n%!" (String.length query_text) msg;
+              retrieval_warnings := (Printf.sprintf "Query embedding was truncated (%d chars exceeds model context). Results may be degraded." (String.length query_text)) :: !retrieval_warnings;
+              []
           | Error msg ->
               Printf.eprintf "[retrieval.embed.error] %s\n%!" msg;
               []
@@ -3327,6 +3432,10 @@ let handler ~client ~sw ~clock _socket request body =
             retrieval_queries := [];
             let embed_and_retrieve_unfiltered (query_text : string) : Yojson.Safe.t list =
               match ollama_embed ~client ~sw ~task:Search_query ~label:"query" ~stats:stats_embed_query ~text:query_text () with
+              | Error msg when is_truncation_error msg ->
+                  Printf.eprintf "[retrieval.embed.truncated] query truncated (%d chars): %s\n%!" (String.length query_text) msg;
+                  retrieval_warnings := (Printf.sprintf "Query embedding was truncated (%d chars exceeds model context). Results may be degraded." (String.length query_text)) :: !retrieval_warnings;
+                  []
               | Error msg ->
                   Printf.eprintf "[retrieval.embed.error] %s\n%!" msg; []
               | Ok v ->
@@ -3391,7 +3500,7 @@ let handler ~client ~sw ~clock _socket request body =
           set_progress session_id "Selecting emails";
           let message_ids =
             select_relevant_sources ~client ~sw ~resolved_question
-              ~user_name:(s.user_name) ~llm_log sources_json
+              ~user_name:(s.user_name) ?rewrite_model:rewrite_model_opt ~llm_log sources_json
           in
 
           let request_id = fresh_request_id session_id question in
@@ -3427,15 +3536,20 @@ let handler ~client ~sw ~clock _socket request body =
             | _ -> sources_json
           in
 
+          let warnings_json =
+            match !retrieval_warnings with
+            | [] -> []
+            | ws -> [ ("warnings", `List (List.rev_map (fun s -> `String s) ws)) ]
+          in
           let body =
             `Assoc
-              [ ("status", `String "need_messages")
+              ([ ("status", `String "need_messages")
               ; ("request_id", `String request_id)
               ; ("message_ids", `List (List.map (fun s -> `String s) message_ids))
               ; ("sources", annotated_sources)
               ; ("retrieval_sql", `String retrieval_sql)
               ; ("retrieval_queries", retrieval_queries_json)
-              ]
+              ] @ warnings_json)
             |> Yojson.Safe.to_string
           in
           Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ())))

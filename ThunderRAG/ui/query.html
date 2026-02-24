@@ -71,6 +71,16 @@
         color: #b00020;
         white-space: pre-wrap;
       }
+      .retrieval-warning {
+        background: #fff3cd;
+        color: #856404;
+        border: 1px solid #ffc107;
+        border-radius: 6px;
+        padding: 6px 10px;
+        margin-bottom: 8px;
+        font-size: 12px;
+        line-height: 1.4;
+      }
 
       .topbar {
         position: sticky;
@@ -340,9 +350,23 @@
             <input id="topK" type="number" min="1" max="50" value="20" />
           </div>
 
-          <div class="field" style="min-width: 180px;">
+          <div class="field" style="min-width: 160px;">
             <label for="chatModel">Chat model</label>
             <select id="chatModel">
+              <option value="">(loading…)</option>
+            </select>
+          </div>
+
+          <div class="field" style="min-width: 160px;">
+            <label for="rewriteModel">Query generation model</label>
+            <select id="rewriteModel">
+              <option value="">(loading…)</option>
+            </select>
+          </div>
+
+          <div class="field" style="min-width: 160px;">
+            <label for="summarizeModel">Summarization model</label>
+            <select id="summarizeModel">
               <option value="">(loading…)</option>
             </select>
           </div>

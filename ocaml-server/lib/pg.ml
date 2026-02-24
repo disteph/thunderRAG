@@ -412,7 +412,7 @@ let query_knn ~(embedding : float list) ~(top_k : int)
   let vec = float_list_to_pgvector embedding in
   let order_clause =
     match score_expr with
-    | Some expr -> Printf.sprintf "(%s) DESC" expr
+    | Some expr -> Printf.sprintf "(%s) DESC NULLS LAST" expr
     | None -> "ec.embedding <=> $1::vector ASC"
   in
   let where_clause =

@@ -226,11 +226,12 @@ function renderSourcesInto(container, sources) {
       const parts = [];
       if (typeof actionScore === "number") parts.push(`action=${actionScore}/100`);
       if (typeof importanceScore === "number") parts.push(`importance=${importanceScore}/100`);
-      if (replyBy && replyBy !== "none") parts.push(`reply_by=${replyBy}`);
       metaLines.push(parts.join("  "));
     }
+    const replyByDisplay = (replyBy && replyBy !== "none") ? replyBy : "None";
+    metaLines.push(`Reply by: ${replyByDisplay}`);
     const isProcessed = md?.processed === true;
-    if (isProcessed) metaLines.push("✔ Processed");
+    metaLines.push(isProcessed ? "✔ Processed" : "✗ Not processed");
     if (attachments.length > 0) metaLines.push(`Attachments: ${attachments.join(", ")}`);
     meta.textContent = metaLines.join("\n");
 
@@ -562,6 +563,10 @@ async function onAsk() {
       user_name = (d.ragWhoAmI || "").trim();
     } catch (_e) { /* ignore */ }
 
+    const chatModel = ($("chatModel").value || "").trim();
+    const summarizeModel = ($("summarizeModel").value || "").trim();
+    const rewriteModel = ($("rewriteModel").value || "").trim();
+
     startProgressPolling();
     const res = await fetchJson(`${base}/query`, {
       session_id,
@@ -569,6 +574,7 @@ async function onAsk() {
       top_k: topK,
       mode,
       user_name,
+      rewrite_model: rewriteModel,
     });
     stopProgressPolling();
 
@@ -584,6 +590,20 @@ async function onAsk() {
         queries: Array.isArray(res?.retrieval_queries) ? res.retrieval_queries : [],
       };
       setAssistantMessage(assistant.bubble, "", srcs, retrievalInfo);
+
+      const serverWarnings = Array.isArray(res?.warnings) ? res.warnings : [];
+      if (serverWarnings.length > 0) {
+        const warnEl = document.createElement("div");
+        warnEl.className = "retrieval-warning";
+        warnEl.textContent = "\u26A0 " + serverWarnings.join(" | ");
+        const rag = assistant.bubble.__rag;
+        if (rag && rag.answerEl) {
+          rag.answerEl.parentElement.insertBefore(warnEl, rag.answerEl);
+        } else {
+          assistant.bubble.prepend(warnEl);
+        }
+      }
+
       setTypingDots(assistant.bubble, "Fetching emails\u2026");
 
       if (!requestId) {
@@ -626,14 +646,12 @@ async function onAsk() {
       }
       setTypingDots(assistant.bubble, "Compressing emails\u2026");
 
-      const chatModel = $("chatModel").value || "";
-      localStorage.setItem("rag.chatModel", chatModel);
-
       startProgressPolling();
       const final = await fetchJson(`${base}/query/complete`, {
         session_id,
         request_id: requestId,
         chat_model: chatModel,
+        summarize_model: summarizeModel,
       });
       stopProgressPolling();
 
@@ -658,47 +676,56 @@ async function onAsk() {
 
 /*
   Fetch the list of available Ollama models from the OCaml server and populate
-  the chatModel <select> dropdown.  Selects either the previously-saved model
-  (from localStorage) or the server's default_chat_model.
+  all model <select> dropdowns.  Selects either the previously-saved model
+  (from localStorage) or the server's default for each dropdown.
 */
+function populateSelect(sel, models, defaultModel, storageKey) {
+  const savedModel = localStorage.getItem(storageKey) || "";
+  sel.innerHTML = "";
+  if (models.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "(no models found)";
+    sel.appendChild(opt);
+    return;
+  }
+  for (const m of models) {
+    const opt = document.createElement("option");
+    opt.value = m;
+    opt.textContent = m;
+    sel.appendChild(opt);
+  }
+  if (savedModel && models.includes(savedModel)) {
+    sel.value = savedModel;
+  } else if (defaultModel && models.includes(defaultModel)) {
+    sel.value = defaultModel;
+  } else {
+    sel.value = models[0];
+  }
+}
+
 async function fetchModels() {
   const base = await getServerBase();
-  const sel = $("chatModel");
+  const selectors = [
+    { el: $("chatModel"),       key: "rag.chatModel",       defaultKey: "default_chat_model" },
+    { el: $("summarizeModel"),  key: "rag.summarizeModel",  defaultKey: "default_summarize_model" },
+    { el: $("rewriteModel"),    key: "rag.rewriteModel",    defaultKey: "default_rewrite_model" },
+  ];
   try {
     const resp = await fetch(`${base}/admin/models`);
     const data = await resp.json();
     const models = Array.isArray(data?.models) ? data.models : [];
-    const defaultModel = String(data?.default_chat_model || "");
-    const savedModel = localStorage.getItem("rag.chatModel") || "";
-
-    sel.innerHTML = "";
-    if (models.length === 0) {
-      const opt = document.createElement("option");
-      opt.value = "";
-      opt.textContent = "(no models found)";
-      sel.appendChild(opt);
-      return;
-    }
-    for (const m of models) {
-      const opt = document.createElement("option");
-      opt.value = m;
-      opt.textContent = m;
-      sel.appendChild(opt);
-    }
-    // Select saved model if still available, else default, else first.
-    if (savedModel && models.includes(savedModel)) {
-      sel.value = savedModel;
-    } else if (defaultModel && models.includes(defaultModel)) {
-      sel.value = defaultModel;
-    } else {
-      sel.value = models[0];
+    for (const s of selectors) {
+      populateSelect(s.el, models, String(data?.[s.defaultKey] || ""), s.key);
     }
   } catch (e) {
-    sel.innerHTML = "";
-    const opt = document.createElement("option");
-    opt.value = "";
-    opt.textContent = "(error loading models)";
-    sel.appendChild(opt);
+    for (const s of selectors) {
+      s.el.innerHTML = "";
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "(error loading models)";
+      s.el.appendChild(opt);
+    }
   }
 }
 
@@ -736,10 +763,12 @@ function init() {
     onAsk();
   });
 
-  // Persist selected model.
-  $("chatModel").addEventListener("change", () => {
-    localStorage.setItem("rag.chatModel", $("chatModel").value);
-  });
+  // Persist selected models.
+  for (const [id, key] of [["chatModel", "rag.chatModel"], ["summarizeModel", "rag.summarizeModel"], ["rewriteModel", "rag.rewriteModel"]]) {
+    $(id).addEventListener("change", () => {
+      localStorage.setItem(key, $(id).value);
+    });
+  }
 
   // Re-fetch models if the server URL changes in options.
   browser.storage.onChanged.addListener((changes, area) => {
@@ -748,13 +777,10 @@ function init() {
     }
   });
 
-  // Fetch models on startup.
-  fetchModels();
-
-  // Auto-focus the question textarea.
-  // Thunderbird sidebar/popup panels may not be ready at script load time.
-  // Strategy: try immediately, then on visibilitychange, window focus, and
-  // a slow polling fallback that also calls window.focus() first.
+  // ── Auto-focus the question textarea ──
+  // Thunderbird tabs may not hand keyboard focus to web content immediately.
+  // Strategy: poll aggressively for the first few seconds, re-focus after
+  // async init, and as a last resort capture the first user interaction.
   const q = $("question");
 
   function tryFocus() {
@@ -762,24 +788,32 @@ function init() {
     q.focus();
   }
 
+  // 1. Fetch models (populates <select> → can steal focus), then re-focus.
+  fetchModels().then(() => { tryFocus(); });
+
+  // 2. Poll every 200 ms for up to 5 seconds.
   tryFocus();
-  requestAnimationFrame(tryFocus);
-  setTimeout(tryFocus, 0);
-  setTimeout(tryFocus, 150);
-  setTimeout(tryFocus, 500);
-  setTimeout(tryFocus, 1000);
-
-  document.addEventListener("visibilitychange", function onVis() {
-    if (!document.hidden) {
-      tryFocus();
-      document.removeEventListener("visibilitychange", onVis);
-    }
-  });
-
-  window.addEventListener("focus", function onWinFocus() {
+  let focusAttempts = 0;
+  const focusTimer = setInterval(() => {
     tryFocus();
-    window.removeEventListener("focus", onWinFocus);
-  });
+    focusAttempts++;
+    if (focusAttempts >= 25 || document.activeElement === q) {
+      clearInterval(focusTimer);
+    }
+  }, 200);
+
+  // 3. Re-focus when the window/tab gains focus.
+  window.addEventListener("focus", tryFocus);
+
+  // 4. Ultimate fallback: capture first keydown anywhere and redirect to
+  //    textarea so the user can just start typing without clicking.
+  function onFirstKey(e) {
+    const active = document.activeElement;
+    if (active && (active.tagName === "TEXTAREA" || active.tagName === "INPUT" || active.tagName === "SELECT")) return;
+    q.focus();
+    document.removeEventListener("keydown", onFirstKey, true);
+  }
+  document.addEventListener("keydown", onFirstKey, true);
 }
 
 init();
