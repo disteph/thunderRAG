@@ -176,8 +176,31 @@ function renderSourcesInto(container, sources) {
     left.appendChild(title);
 
     const right = document.createElement("div");
-    right.className = "muted";
-    right.textContent = date;
+    right.className = "source-header-right";
+    const dateSpan = document.createElement("span");
+    dateSpan.className = "muted";
+    dateSpan.textContent = date;
+    right.appendChild(dateSpan);
+
+    if (docId) {
+      const tankBtn = document.createElement("span");
+      tankBtn.className = "source-tank-icon";
+      tankBtn.textContent = "\uD83D\uDEE2\uFE0F";
+      tankBtn.title = "Show ingested data";
+      tankBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        try {
+          const serverBase = await getServerBase();
+          const msgs = [{ id: docId, from, subject, date }];
+          const url = browser.runtime.getURL("ui/ingested-detail.html")
+            + `?msgs=${encodeURIComponent(JSON.stringify(msgs))}&endpoint=${encodeURIComponent(serverBase)}`;
+          browser.tabs.create({ url });
+        } catch (err) {
+          $("error").textContent = String(err?.message || err);
+        }
+      });
+      right.appendChild(tankBtn);
+    }
 
     header.appendChild(left);
     header.appendChild(right);
@@ -206,6 +229,8 @@ function renderSourcesInto(container, sources) {
       if (replyBy && replyBy !== "none") parts.push(`reply_by=${replyBy}`);
       metaLines.push(parts.join("  "));
     }
+    const isProcessed = md?.processed === true;
+    if (isProcessed) metaLines.push("✔ Processed");
     if (attachments.length > 0) metaLines.push(`Attachments: ${attachments.join(", ")}`);
     meta.textContent = metaLines.join("\n");
 
@@ -430,19 +455,36 @@ function hideSourcesProgress(bubble) {
   s.summaryProgress.style.display = "none";
 }
 
-function setTypingDots(bubble) {
+function setTypingDots(bubble, phaseText) {
   /*
-    Replace the answer area with an animated typing indicator while we wait for /query/complete.
+    Replace the answer area with an animated typing indicator + phase label.
+    phaseText is optional — shown next to the dots when provided.
+    Works both before and after __rag is set up.
   */
-  const s = bubble && bubble.__rag;
-  if (!s) return;
-  s.answerEl.textContent = "";
+  const target = (bubble && bubble.__rag) ? bubble.__rag.answerEl : bubble;
+  if (!target) return;
+  target.textContent = "";
   const t = document.createElement("span");
   t.className = "typing";
   t.appendChild(document.createElement("span")).className = "dot";
   t.appendChild(document.createElement("span")).className = "dot";
   t.appendChild(document.createElement("span")).className = "dot";
-  s.answerEl.appendChild(t);
+  const label = document.createElement("span");
+  label.className = "typing-phase";
+  label.textContent = phaseText || "";
+  t.appendChild(label);
+  target.appendChild(t);
+}
+
+function setTypingPhase(bubble, phaseText) {
+  /*
+    Update the phase label on an existing typing indicator without recreating it.
+    Works both before and after __rag is set up.
+  */
+  const target = (bubble && bubble.__rag) ? bubble.__rag.answerEl : bubble;
+  if (!target) return;
+  const label = target.querySelector(".typing-phase");
+  if (label) label.textContent = phaseText || "";
 }
 
 /* Guards against concurrent queries — only one query can be in flight at a time. */
@@ -476,8 +518,7 @@ async function onAsk() {
 
   const base = await getServerBase();
 
-  const mode = String($("mode").value || "assistive");
-  localStorage.setItem("rag.mode", mode);
+  const mode = "assistive";
 
   const question = ($("question").value || "").trim();
   const topK = parseInt($("topK").value || "8", 10);
@@ -488,18 +529,40 @@ async function onAsk() {
 
   $("question").value = "";
   appendMessage("user", question);
-  const assistant = appendMessage("assistant", "...");
+  const assistant = appendMessage("assistant", "");
   inFlight = true;
   $("askBtn").disabled = true;
-  $("status").textContent = "Querying...";
+
+  /* Poll /query/progress every 500ms to update the phase label.
+     Defined outside try so catch/finally can call stopProgressPolling. */
+  const session_id = getSessionId();
+  let progressTimer = null;
+  setTypingDots(assistant.bubble, "Building vector DB query\u2026");
+
+  function startProgressPolling() {
+    progressTimer = setInterval(async () => {
+      try {
+        const r = await fetch(`${base}/query/progress?session_id=${encodeURIComponent(session_id)}`);
+        if (r.ok) {
+          const d = await r.json();
+          const phase = String(d?.phase || "");
+          if (phase) setTypingPhase(assistant.bubble, phase + "\u2026");
+        }
+      } catch (_) { /* ignore polling errors */ }
+    }, 500);
+  }
+  function stopProgressPolling() {
+    if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+  }
 
   try {
-    const session_id = getSessionId();
     let user_name = "";
     try {
       const d = await browser.storage.local.get("ragWhoAmI");
       user_name = (d.ragWhoAmI || "").trim();
     } catch (_e) { /* ignore */ }
+
+    startProgressPolling();
     const res = await fetchJson(`${base}/query`, {
       session_id,
       question,
@@ -507,6 +570,7 @@ async function onAsk() {
       mode,
       user_name,
     });
+    stopProgressPolling();
 
     const srcs = Array.isArray(res?.sources) ? res.sources : [];
 
@@ -520,13 +584,13 @@ async function onAsk() {
         queries: Array.isArray(res?.retrieval_queries) ? res.retrieval_queries : [],
       };
       setAssistantMessage(assistant.bubble, "", srcs, retrievalInfo);
+      setTypingDots(assistant.bubble, "Fetching emails\u2026");
 
       if (!requestId) {
         throw new Error("Server did not return request_id");
       }
 
       if (messageIds.length > 0) {
-        setSourcesProgress(assistant.bubble, 0, messageIds.length);
 
         async function postEvidence(headerMessageId, raw) {
           const enc = new TextEncoder();
@@ -551,44 +615,42 @@ async function onAsk() {
         for (let i = 0; i < messageIds.length; i++) {
           const mid = String(messageIds[i] || "").trim();
           if (!mid) continue;
-          $("status").textContent = `Fetching evidence ${i + 1}/${messageIds.length}...`;
+          setTypingPhase(assistant.bubble, `Fetching emails (${i + 1}/${messageIds.length})\u2026`);
           const got = await browser.runtime.sendMessage({
             type: "getRawMessageByHeaderMessageId",
             headerMessageId: mid,
           });
           const raw = got?.raw;
           await postEvidence(mid, raw);
-          setSourcesProgress(assistant.bubble, i + 1, messageIds.length);
         }
-
-        hideSourcesProgress(assistant.bubble);
       }
-      setTypingDots(assistant.bubble);
+      setTypingDots(assistant.bubble, "Compressing emails\u2026");
 
       const chatModel = $("chatModel").value || "";
       localStorage.setItem("rag.chatModel", chatModel);
 
+      startProgressPolling();
       const final = await fetchJson(`${base}/query/complete`, {
         session_id,
         request_id: requestId,
         chat_model: chatModel,
       });
+      stopProgressPolling();
 
       const answer = String(final?.answer || "");
       const sources = Array.isArray(final?.sources) ? final.sources : srcs;
       setAssistantMessage(assistant.bubble, answer, sources, retrievalInfo);
-      $("status").textContent = "";
       return;
     } else {
       const answer = res?.answer || "";
       setAssistantMessage(assistant.bubble, answer, srcs);
-      $("status").textContent = "";
     }
   } catch (e) {
-    $("status").textContent = "";
+    stopProgressPolling();
     $("error").textContent = String(e && e.message ? e.message : e);
     assistant.bubble.textContent = "(error)";
   } finally {
+    stopProgressPolling();
     inFlight = false;
     $("askBtn").disabled = false;
   }
@@ -653,9 +715,6 @@ async function loadDefaultTopK() {
 
 /* Initialize the UI: restore saved settings from localStorage and wire up event listeners. */
 function init() {
-  const savedMode = localStorage.getItem("rag.mode");
-  $("mode").value = savedMode === "grounded" ? "grounded" : "assistive";
-
   loadDefaultTopK();
 
   $("askBtn").addEventListener("click", onAsk);
@@ -691,6 +750,36 @@ function init() {
 
   // Fetch models on startup.
   fetchModels();
+
+  // Auto-focus the question textarea.
+  // Thunderbird sidebar/popup panels may not be ready at script load time.
+  // Strategy: try immediately, then on visibilitychange, window focus, and
+  // a slow polling fallback that also calls window.focus() first.
+  const q = $("question");
+
+  function tryFocus() {
+    try { window.focus(); } catch (_) {}
+    q.focus();
+  }
+
+  tryFocus();
+  requestAnimationFrame(tryFocus);
+  setTimeout(tryFocus, 0);
+  setTimeout(tryFocus, 150);
+  setTimeout(tryFocus, 500);
+  setTimeout(tryFocus, 1000);
+
+  document.addEventListener("visibilitychange", function onVis() {
+    if (!document.hidden) {
+      tryFocus();
+      document.removeEventListener("visibilitychange", onVis);
+    }
+  });
+
+  window.addEventListener("focus", function onWinFocus() {
+    tryFocus();
+    window.removeEventListener("focus", onWinFocus);
+  });
 }
 
 init();

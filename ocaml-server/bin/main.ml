@@ -598,6 +598,29 @@ let summarize_attachment ~client ~sw ~(filename : string) ~(text : string) : str
     let result = String.trim result in
     if result = "" then None else Some result
 
+(* Extract raw attachment texts without LLM summarization — for evidence budget computation. *)
+let extract_attachment_texts_raw ~(raw : string) : (string * string) list =
+  let parts = collect_mime_leaf_parts raw in
+  parts
+  |> List.filter_map (fun p ->
+         if not (is_attachment_part p.headers) then None
+         else
+           let filename =
+             match filename_of_part_headers p.headers with
+             | Some s -> s
+             | None -> "attachment"
+           in
+           let ct = header_or_empty p.headers "content-type" in
+           match decode_part_body p.headers p.body with
+           | None -> None
+           | Some decoded -> (
+               match attachment_text_of_part ~filename ~content_type:ct ~decoded with
+               | None -> None
+               | Some text ->
+                   let text = String.trim text in
+                   if text = "" then None
+                   else Some (filename, text)))
+
 let attachment_summaries_of_raw ~client ~sw ~(raw : string) : Yojson.Safe.t list =
   let parts = collect_mime_leaf_parts raw in
   let items =
@@ -720,6 +743,13 @@ let session_tbl_mu : Eio.Mutex.t = Eio.Mutex.create ()
 
 let pending_tbl : (string, pending_query) Hashtbl.t = Hashtbl.create 64
 let pending_tbl_mu : Eio.Mutex.t = Eio.Mutex.create ()
+
+(* Progress tracking for the query UI — lightweight phase labels keyed by session_id. *)
+let progress_tbl : (string, string) Hashtbl.t = Hashtbl.create 64
+let set_progress (session_id : string) (phase : string) =
+  if String.trim session_id <> "" then Hashtbl.replace progress_tbl session_id phase
+let clear_progress (session_id : string) =
+  Hashtbl.remove progress_tbl session_id
 
 let fresh_request_id (session_id : string) (question : string) : string =
   Digest.to_hex
@@ -844,7 +874,7 @@ let renumber_cited_sources ~(answer : string) ~(sources_json : Yojson.Safe.t) : 
            if reply_by <> "" && reply_by <> "none" then
              triage_parts := !triage_parts @ [ Printf.sprintf "reply_by=%s" reply_by ]
        | _ -> ());
-      (match processed with Some true -> triage_parts := !triage_parts @ [ "processed=true" ] | _ -> ());
+      triage_parts := !triage_parts @ [ Printf.sprintf "processed=%b" (processed = Some true) ];
       let parts =
         [ Printf.sprintf "[Email %d]" (new_i + 1)
         ; Printf.sprintf "date=%s" date_
@@ -2257,8 +2287,8 @@ let select_relevant_sources ~client ~sw ~(resolved_question : string)
                      | _ -> []
                    in if atts <> [] then [Printf.sprintf "attachments=[%s]" (String.concat "; " atts)] else [])
                 @ (let p = match List.assoc_opt "processed" md with
-                     | Some (`Bool true) -> true | _ -> false
-                   in if p then ["processed=true"] else [])
+                     | Some (`Bool b) -> b | _ -> false
+                   in [Printf.sprintf "processed=%b" p])
               in
               ignore (s "doc_id");
               String.concat " " parts
@@ -2284,21 +2314,27 @@ let select_relevant_sources ~client ~sw ~(resolved_question : string)
         ("{{resolved_question}}", resolved_question);
       ]
   in
-  let messages : Yojson.Safe.t list =
-    [ `Assoc [ ("role", `String "system"); ("content", `String system) ] ]
+  let user_msg =
+    Printf.sprintf "Question: %s\n\nEmails:\n%s\n\nOutput ONLY a JSON array of relevant row numbers, e.g. [1, 3, 5]. No explanation."
+      resolved_question table_str
   in
-  match ollama_chat ~client ~sw ~label:"select_evidence" ~stats:stats_chat_select ~model:!ollama_summarize_model ~messages () with
+  let messages : Yojson.Safe.t list =
+    [ `Assoc [ ("role", `String "system"); ("content", `String system) ]
+    ; `Assoc [ ("role", `String "user"); ("content", `String user_msg) ]
+    ]
+  in
+  match ollama_chat ~client ~sw ~label:"select_evidence" ~stats:stats_chat_select ~model:!ollama_rewrite_model ~messages () with
   | Error err ->
       (match llm_log with Some log ->
         log := !log @ [make_llm_call_entry ~label:"select_evidence"
-          ~model:!ollama_summarize_model ~messages ~response:("ERROR: " ^ err)]
+          ~model:!ollama_rewrite_model ~messages ~response:("ERROR: " ^ err)]
       | None -> ());
       Printf.eprintf "[select_evidence.error] %s, selecting all\n%!" (truncate_chars err ~max_chars:200);
       all_doc_ids
   | Ok raw_resp ->
       (match llm_log with Some log ->
         log := !log @ [make_llm_call_entry ~label:"select_evidence"
-          ~model:!ollama_summarize_model ~messages ~response:raw_resp]
+          ~model:!ollama_rewrite_model ~messages ~response:raw_resp]
       | None -> ());
       let raw_resp = String.trim raw_resp in
       let raw_resp =
@@ -2650,6 +2686,10 @@ let handler ~client ~sw ~clock _socket request body =
                    logs from summarize_to_fit and the final chat call. *)
                 let p_llm_log = ref p.llm_calls in
 
+                (* --- Evidence extraction & budget-aware compression ---
+                   Pass 1: extract raw email bodies + metadata (no LLM calls).
+                   Pass 2: compress only if total raw evidence exceeds the token budget. *)
+                set_progress session_id "Extracting emails";
                 let cached_md_by_doc : (string, Yojson.Safe.t) Hashtbl.t = Hashtbl.create 32 in
                 (match p.sources_json with
                 | `List ys ->
@@ -2671,59 +2711,143 @@ let handler ~client ~sw ~clock _socket request body =
                       ys
                 | _ -> ());
 
+                (* Pass 1: extract raw bodies + attachments + metadata (no LLM calls) *)
+                let raw_entries : (string * string * string * (string * string) list * Yojson.Safe.t) list =
+                  Eio.Mutex.use_rw ~protect:true p.mu (fun () ->
+                    List.map
+                      (fun mid ->
+                        let raw = Hashtbl.find p.evidence_by_id mid in
+                        let _, md_from_raw = ingest_text_of_raw ~doc_id:mid ~raw in
+                        let cached_md =
+                          match Hashtbl.find_opt cached_md_by_doc mid with
+                          | Some m -> m
+                          | None -> `Assoc []
+                        in
+                        let md =
+                          match cached_md, md_from_raw with
+                          | `Assoc cached_kv, `Assoc fresh_kv ->
+                              let tbl = Hashtbl.create 32 in
+                              List.iter (fun (k, v) -> Hashtbl.replace tbl k v) cached_kv;
+                              let override_keys =
+                                [ "from"; "to"; "cc"; "bcc"; "subject"; "attachments" ]
+                              in
+                              List.iter
+                                (fun (k, v) ->
+                                  if List.mem k override_keys then Hashtbl.replace tbl k v)
+                                fresh_kv;
+                              `Assoc (Hashtbl.to_seq tbl |> List.of_seq)
+                          | _ -> cached_md
+                        in
+                        let parts = extract_body_parts raw in
+                        let new_body = String.trim parts.new_text |> sanitize_utf8 in
+                        let quoted_raw = String.trim parts.quoted_text |> sanitize_utf8 in
+                        let att_texts = extract_attachment_texts_raw ~raw in
+                        (mid, new_body, quoted_raw, att_texts, md))
+                      p.message_ids)
+                in
+
+                (* Compute evidence char budget from num_ctx.
+                   Conservative estimate: ~3 chars per token (accounts for
+                   structured content, headers, special chars).
+                   Reserve tokens for the model's response output. *)
+                let chars_per_token = 3 in
+                let response_reserve_tokens = 2000 in
+                let prompt_token_budget = !ollama_num_ctx - response_reserve_tokens in
+                let total_char_budget = prompt_token_budget * chars_per_token in
+                let overhead =
+                  4000  (* system prompt + safety margin *)
+                  + String.length (String.trim history_summary)
+                  + List.fold_left (fun acc m -> acc + String.length m.content + 50) 0 tail_snapshot
+                  + String.length p.resolved_question + 500  (* question + suffix + delimiter *)
+                  + List.length raw_entries * 200  (* per-email header overhead *)
+                in
+                let evidence_budget = max 2000 (total_char_budget - overhead) in
+
+                let total_raw_chars =
+                  List.fold_left (fun acc (_, nb, qr, atts, _) ->
+                    let att_chars = List.fold_left (fun a (fn, t) -> a + String.length fn + String.length t + 30) 0 atts in
+                    acc + String.length nb + String.length qr + att_chars + 30)
+                    0 raw_entries
+                in
+                let n_emails = List.length raw_entries in
+                let needs_compression = total_raw_chars > evidence_budget in
+
+                Printf.printf "[evidence.budget] num_ctx=%d total_budget=%d overhead=%d evidence_budget=%d raw_total=%d emails=%d compress=%b\n%!"
+                  !ollama_num_ctx total_char_budget overhead evidence_budget total_raw_chars n_emails needs_compression;
+
                 let evidence_by_doc : (string, (string * Yojson.Safe.t)) Hashtbl.t = Hashtbl.create 32 in
-                Eio.Mutex.use_rw ~protect:true p.mu (fun () ->
-                  List.iter
-                    (fun mid ->
-                      let raw = Hashtbl.find p.evidence_by_id mid in
-                      let _, md_from_raw = ingest_text_of_raw ~doc_id:mid ~raw in
-                      let cached_md =
-                        match Hashtbl.find_opt cached_md_by_doc mid with
-                        | Some m -> m
-                        | None -> `Assoc []
-                      in
-                      let md =
-                        match cached_md, md_from_raw with
-                        | `Assoc cached_kv, `Assoc fresh_kv ->
-                            let tbl = Hashtbl.create 32 in
-                            List.iter (fun (k, v) -> Hashtbl.replace tbl k v) cached_kv;
-                            let override_keys =
-                              [ "from"; "to"; "cc"; "bcc"; "subject"; "attachments" ]
-                            in
-                            List.iter
-                              (fun (k, v) ->
-                                if List.mem k override_keys then Hashtbl.replace tbl k v)
-                              fresh_kv;
-                            `Assoc (Hashtbl.to_seq tbl |> List.of_seq)
-                        | _ -> cached_md
-                      in
-                      let parts = extract_body_parts raw in
-                      let new_body = String.trim parts.new_text |> sanitize_utf8 in
-                      let new_body_capped =
-                        summarize_to_fit ~client ~sw
-                          ~system_prompt:(get_prompt "compress_new_content_evidence" ~default:"Compress email body for Q&A evidence. Preserve all facts. Third person. Do not invent." ~vars:[])
-                          ~max_input_chars:!rag_summarize_max_input_chars
-                          ~max_chars:!rag_max_evidence_chars_per_email
-                          ~label:"evidence" ~llm_log:p_llm_log
-                          new_body
-                      in
-                      let quoted_raw = String.trim parts.quoted_text |> sanitize_utf8 in
-                      let quoted_section =
-                        if String.trim quoted_raw = "" then ""
-                        else
-                          let quoted_capped =
-                            summarize_to_fit ~client ~sw
-                              ~system_prompt:(get_prompt "compress_quoted_context_evidence" ~default:"Compress quoted thread context for Q&A evidence. Preserve facts. Third person. Do not invent." ~vars:[])
-                              ~max_input_chars:!rag_summarize_max_input_chars
-                              ~max_chars:(!rag_max_evidence_chars_per_email / 2)
-                              ~label:"evidence-quoted" ~llm_log:p_llm_log
-                              quoted_raw
+                let format_attachments_section (atts : (string * string) list) : string =
+                  if atts = [] then ""
+                  else
+                    let lines = List.map (fun (fn, text) ->
+                      Printf.sprintf "ATTACHMENT [%s]:\n%s" fn text) atts
+                    in
+                    "\n\nATTACHMENTS:\n" ^ String.concat "\n\n" lines
+                in
+
+                if not needs_compression then (
+                  (* All raw emails fit — skip compression entirely *)
+                  set_progress session_id "Preparing emails";
+                  List.iter (fun (mid, new_body, quoted_raw, atts, md) ->
+                    let quoted_section =
+                      if String.trim quoted_raw = "" then ""
+                      else "\n\nQUOTED CONTEXT:\n" ^ quoted_raw
+                    in
+                    let att_section = format_attachments_section atts in
+                    let body = "NEW CONTENT:\n" ^ new_body ^ quoted_section ^ att_section in
+                    Hashtbl.replace evidence_by_doc mid (body, md))
+                    raw_entries)
+                else (
+                  (* Compress each email to fit within budget *)
+                  let per_email_budget = max 500 (evidence_budget / (max 1 n_emails)) in
+                  let new_content_budget = per_email_budget * 2 / 3 in
+                  let quoted_budget = per_email_budget / 3 in
+                  Printf.printf "[evidence.compress] per_email=%d new_content=%d quoted=%d\n%!"
+                    per_email_budget new_content_budget quoted_budget;
+                  let ei = ref 0 in
+                  List.iter (fun (mid, new_body, quoted_raw, atts, md) ->
+                    incr ei;
+                    set_progress session_id (Printf.sprintf "Compressing emails (%d/%d)" !ei n_emails);
+                    let new_body_capped =
+                      summarize_to_fit ~client ~sw
+                        ~system_prompt:(get_prompt "compress_new_content_evidence" ~default:"Compress email body for Q&A evidence. Preserve all facts. Third person. Do not invent." ~vars:[])
+                        ~max_input_chars:!rag_summarize_max_input_chars
+                        ~max_chars:new_content_budget
+                        ~label:"evidence" ~llm_log:p_llm_log
+                        new_body
+                    in
+                    let quoted_section =
+                      if String.trim quoted_raw = "" then ""
+                      else
+                        let quoted_capped =
+                          summarize_to_fit ~client ~sw
+                            ~system_prompt:(get_prompt "compress_quoted_context_evidence" ~default:"Compress quoted thread context for Q&A evidence. Preserve facts. Third person. Do not invent." ~vars:[])
+                            ~max_input_chars:!rag_summarize_max_input_chars
+                            ~max_chars:quoted_budget
+                            ~label:"evidence-quoted" ~llm_log:p_llm_log
+                            quoted_raw
+                        in
+                        "\n\nQUOTED CONTEXT:\n" ^ quoted_capped
+                    in
+                    let att_budget = max 200 (per_email_budget / 6) in
+                    let att_section =
+                      if atts = [] then ""
+                      else
+                        let compressed_atts = List.map (fun (fn, text) ->
+                          let capped = summarize_to_fit ~client ~sw
+                            ~system_prompt:(get_prompt "compress_attachment" ~default:"Summarize an email attachment. Preserve key facts. Output plain text only." ~vars:[("{{filename}}", fn); ("{{max_chars}}", string_of_int att_budget)])
+                            ~max_input_chars:!rag_summarize_max_input_chars
+                            ~max_chars:att_budget
+                            ~label:(Printf.sprintf "evidence-att[%s]" fn) ~llm_log:p_llm_log
+                            text
                           in
-                          "\n\nQUOTED CONTEXT:\n" ^ quoted_capped
-                      in
-                      let body = "NEW CONTENT:\n" ^ new_body_capped ^ quoted_section in
-                      Hashtbl.replace evidence_by_doc mid (body, md))
-                    p.message_ids);
+                          Printf.sprintf "ATTACHMENT [%s]:\n%s" fn capped) atts
+                        in
+                        "\n\nATTACHMENTS:\n" ^ String.concat "\n\n" compressed_atts
+                    in
+                    let body = "NEW CONTENT:\n" ^ new_body_capped ^ quoted_section ^ att_section in
+                    Hashtbl.replace evidence_by_doc mid (body, md))
+                    raw_entries);
 
                 (* Helper: extract a flat tuple from metadata JSON for prompt building *)
                 let entry_of_md mid text md rehydrated =
@@ -2774,9 +2898,7 @@ let handler ~client ~sw ~clock _socket request body =
                          if reply_by <> "" && reply_by <> "none" then
                            parts := !parts @ [ Printf.sprintf "reply_by=%s" reply_by ]
                      | _ -> ());
-                    (match processed with
-                     | Some true -> parts := !parts @ [ "processed=true" ]
-                     | _ -> ());
+                    parts := !parts @ [ Printf.sprintf "processed=%b" (processed = Some true) ];
                     String.concat " " !parts
                   in
                   (mid, text, md,
@@ -2994,10 +3116,11 @@ let handler ~client ~sw ~clock _socket request body =
                     in
                     with_tail
                     @ [ `Assoc [ ("role", `String "user")
-                               ; ("content", `String (evidence_content ^ "\n\n" ^ question_content)) ]
+                               ; ("content", `String (evidence_content ^ "\n\n────────────────\nUSER QUESTION:\n" ^ question_content)) ]
                       ]
                 in
 
+                set_progress session_id "Generating answer";
                 let answer =
                   let effective_chat_model =
                     if String.trim chat_model_override <> "" then chat_model_override
@@ -3037,6 +3160,7 @@ let handler ~client ~sw ~clock _socket request body =
                   maybe_summarize_session ~client ~sw s);
 
                 Eio.Mutex.use_rw ~protect:true pending_tbl_mu (fun () -> Hashtbl.remove pending_tbl request_id);
+                clear_progress session_id;
 
                 let body =
                   `Assoc [ ("answer", `String answer); ("sources", sources_json)
@@ -3119,6 +3243,7 @@ let handler ~client ~sw ~clock _socket request body =
            harness can inspect all prompts, not just the final chat prompt. *)
         let llm_log : Yojson.Safe.t list ref = ref [] in
 
+        set_progress session_id "Generating query";
         let queries, resolved_question, no_retrieval, rewrite_filter, rewrite_score =
           rewrite_queries_for_retrieval ~client ~sw ~question
             ~history_summary ~tail ~user_name:(s.user_name)
@@ -3126,6 +3251,7 @@ let handler ~client ~sw ~clock _socket request body =
         in
 
         if no_retrieval then (
+          clear_progress session_id;
           (* No retrieval needed — register a pending_query with empty message_ids
              so that /query/complete can answer directly from conversation context. *)
           let request_id = fresh_request_id session_id question in
@@ -3152,6 +3278,7 @@ let handler ~client ~sw ~clock _socket request body =
           in
           Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ())
         else (
+        set_progress session_id "Searching archive";
         let retrieval_sqls = ref [] in
         let retrieval_queries = ref [] in
         let embed_and_retrieve (query_text : string) : Yojson.Safe.t list =
@@ -3184,8 +3311,13 @@ let handler ~client ~sw ~clock _socket request body =
                   sources)
         in
 
+        let nq = List.length queries in
+        let qi = ref 0 in
         let all_sources =
-          List.concat (List.map embed_and_retrieve queries)
+          List.concat (List.map (fun q ->
+            incr qi;
+            set_progress session_id (Printf.sprintf "Searching archive (%d/%d)" !qi nq);
+            embed_and_retrieve q) queries)
         in
         (* If filter was used but yielded 0 results, retry without filter (keep score_expr) *)
         let all_sources =
@@ -3256,6 +3388,7 @@ let handler ~client ~sw ~clock _socket request body =
 
 
           (* Selective rehydration: ask the LLM which emails need full content. *)
+          set_progress session_id "Selecting emails";
           let message_ids =
             select_relevant_sources ~client ~sw ~resolved_question
               ~user_name:(s.user_name) ~llm_log sources_json
@@ -3274,6 +3407,7 @@ let handler ~client ~sw ~clock _socket request body =
             }
           in
           Eio.Mutex.use_rw ~protect:true pending_tbl_mu (fun () -> Hashtbl.replace pending_tbl request_id p);
+          clear_progress session_id;
 
           (* Annotate each source with rehydrated flag for the UI *)
           let rehydrated_set = Hashtbl.create 32 in
@@ -3591,6 +3725,20 @@ let handler ~client ~sw ~clock _socket request body =
          Cohttp_eio.Server.respond_string ~status:`Bad_request
            ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String msg) ]))
            ~headers:json_headers ())
+
+  | `GET, path when starts_with "/query/progress" path ->
+      let uri = Uri.of_string (Http.Request.resource request) in
+      let session_id =
+        match Uri.get_query_param uri "session_id" with
+        | Some s -> String.trim s
+        | None -> ""
+      in
+      let phase =
+        if session_id = "" then ""
+        else match Hashtbl.find_opt progress_tbl session_id with Some p -> p | None -> ""
+      in
+      let body = Yojson.Safe.to_string (`Assoc [("phase", `String phase)]) in
+      Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
 
   | `GET, "/admin/prompts" ->
       (match load_prompts_json () with

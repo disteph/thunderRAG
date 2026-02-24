@@ -153,9 +153,27 @@
       .source-header {
         display: flex;
         justify-content: space-between;
-        gap: 12px;
+        gap: 6px 12px;
         align-items: baseline;
-        flex-wrap: wrap;
+      }
+      .source-header > div:first-child {
+        flex: 1 1 0;
+        min-width: 0;
+      }
+      .source-header-right {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+      }
+      .source-tank-icon {
+        cursor: pointer;
+        font-size: 14px;
+        opacity: 0.6;
+        transition: opacity 0.15s;
+      }
+      .source-tank-icon:hover {
+        opacity: 1;
       }
       .source-title {
         font-weight: 600;
@@ -216,6 +234,14 @@
 
       .typing .dot:nth-child(3) {
         animation-delay: 0.3s;
+      }
+
+      .typing-phase {
+        margin-left: 8px;
+        font-size: 12px;
+        opacity: 0.7;
+        font-style: italic;
+        white-space: nowrap;
       }
 
       @keyframes dotPulse {
@@ -310,14 +336,6 @@
       <div class="topbar">
         <div class="row">
           <div class="field small">
-            <label for="mode">Mode</label>
-            <select id="mode">
-              <option value="assistive">Assistive</option>
-              <option value="grounded">Grounded</option>
-            </select>
-          </div>
-
-          <div class="field small">
             <label for="topK">Number of sources</label>
             <input id="topK" type="number" min="1" max="50" value="20" />
           </div>
@@ -329,7 +347,7 @@
             </select>
           </div>
 
-          <span id="status" class="muted"></span>
+          <span id="status" class="muted" style="display:none;"></span>
         </div>
 
         <div id="error" class="error" style="margin-top: 8px;"></div>
@@ -339,7 +357,7 @@
 
       <div class="composer">
         <label for="question">Message</label>
-        <textarea id="question" placeholder="Ask something about your email archive..."></textarea>
+        <textarea id="question" placeholder="Ask something about your email archive..." autofocus></textarea>
         <div class="composer-row">
           <span class="muted">Enter to send. Cmd+Enter to add a new line.</span>
           <button id="askBtn">Send</button>
@@ -348,6 +366,5 @@
     </div>
 
     <script src="query.js"></script>
-    <script>document.getElementById("question").focus();</script>
   </body>
 </html>
