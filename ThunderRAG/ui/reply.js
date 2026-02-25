@@ -236,11 +236,13 @@ function renderMidPane() {
 
 function cleanMessageForDisplay(content, role) {
   if (role !== "assistant") return content;
-  // Strip [DRAFT]...[/DRAFT] and [REPLY_TYPE] markers from display
   let s = content;
+  // Replace [DRAFT]...[/DRAFT] (and any trailing [REPLY_TYPE]...) with a placeholder
   const draftStart = s.indexOf("[DRAFT]");
   if (draftStart >= 0) {
-    s = s.substring(0, draftStart).trim();
+    const before = s.substring(0, draftStart).trim();
+    const placeholder = "✏️ The draft has been updated.";
+    s = before ? before + "\n\n" + placeholder : placeholder;
   }
   s = s.replace(/\[NO_REPLY_NEEDED\]\s*/g, "").trim();
   return s || content;
@@ -406,7 +408,10 @@ async function sendAnswer(st, inputEl) {
         messages: st.messages.map(m => ({ role: m.role, content: m.content })),
       }),
     });
-    if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+    if (!resp.ok) {
+      const errBody = await resp.text().catch(() => "");
+      throw new Error(`Server ${resp.status}: ${errBody}`);
+    }
     const data = await resp.json();
 
     st.messages.push({ role: "assistant", content: data.message || "" });
@@ -448,7 +453,10 @@ async function overrideNoReply(st) {
         messages: st.messages.map(m => ({ role: m.role, content: m.content })),
       }),
     });
-    if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+    if (!resp.ok) {
+      const errBody = await resp.text().catch(() => "");
+      throw new Error(`Server ${resp.status}: ${errBody}`);
+    }
     const data = await resp.json();
 
     st.messages.push({ role: "assistant", content: data.message || "" });

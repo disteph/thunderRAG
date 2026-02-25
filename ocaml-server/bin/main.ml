@@ -251,21 +251,41 @@ let ollama_chat ~client ~sw ?(label = "") ?(stats : call_stats option) ?(model =
   let t0 = Unix.gettimeofday () in
   let effective_model = if String.trim model <> "" then String.trim model else !ollama_llm_model in
   let uri = Uri.of_string (!ollama_base_url ^ "/api/chat") in
-  let body_obj : Yojson.Safe.t =
-    `Assoc
-      [ ("model", `String effective_model)
-      ; ("messages", `List messages)
-      ; ("stream", `Bool false)
-      ; ("options", `Assoc [ ("num_ctx", `Int !ollama_num_ctx) ])
+  (* Stop sequences to prevent models from emitting tool/function-call
+     special tokens that crash Ollama's harmony parser (see harmonyparser.go). *)
+  let stop_seqs = `List [ `String "<|channel|>"; `String "<|tool_call|>"; `String "<|function_call|>" ] in
+  let max_retries = 2 in
+  let rec attempt n =
+    let base_opts =
+      [ ("num_ctx", `Int !ollama_num_ctx)
+      ; ("stop", stop_seqs)
       ]
-  in
-  if !rag_debug_ollama_chat then
-    Printf.printf "\n[ollama.chat.request]\n%s\n%!" (Yojson.Safe.pretty_to_string body_obj);
-  let body_json = Yojson.Safe.to_string body_obj in
-  let call () = post_json_uri ~client ~sw ~uri ~body_json in
-  let resp, resp_body = !global_with_timeout !ollama_timeout_seconds call in
-  let result =
-    if not (is_ok_status (Http.Response.status resp)) then Error resp_body
+    in
+    let options =
+      if n = 0 then base_opts
+      else (
+        Printf.eprintf "[ollama.chat.retry] %s attempt %d/%d (adding temperature jitter)\n%!" label n max_retries;
+        ("temperature", `Float (0.1 *. float_of_int n)) :: base_opts)
+    in
+    let body_obj : Yojson.Safe.t =
+      `Assoc
+        [ ("model", `String effective_model)
+        ; ("messages", `List messages)
+        ; ("stream", `Bool false)
+        ; ("options", `Assoc options)
+        ]
+    in
+    if !rag_debug_ollama_chat then
+      Printf.printf "\n[ollama.chat.request]\n%s\n%!" (Yojson.Safe.pretty_to_string body_obj);
+    let body_json = Yojson.Safe.to_string body_obj in
+    let call () = post_json_uri ~client ~sw ~uri ~body_json in
+    let resp, resp_body = !global_with_timeout !ollama_timeout_seconds call in
+    if not (is_ok_status (Http.Response.status resp)) then (
+      if n < max_retries then (
+        Printf.eprintf "[ollama.chat.error] %s attempt %d — Ollama returned %d, retrying…\n%!"
+          label n (Http.Response.status resp |> Http.Status.to_int);
+        attempt (n + 1))
+      else Error resp_body)
     else
       try
         let json = Yojson.Safe.from_string resp_body in
@@ -274,12 +294,17 @@ let ollama_chat ~client ~sw ?(label = "") ?(stats : call_stats option) ?(model =
             match List.assoc_opt "message" kv with
             | Some (`Assoc mv) -> (
                 match List.assoc_opt "content" mv with
-                | Some (`String s) -> Ok s
+                | Some (`String s) ->
+                    if String.trim s = "" && n < max_retries then (
+                      Printf.eprintf "[ollama.chat.empty] %s attempt %d — empty response (likely stop-sequence hit), retrying…\n%!" label n;
+                      attempt (n + 1))
+                    else Ok s
                 | _ -> Error "missing chat content")
             | _ -> Error "missing chat message")
         | _ -> Error "bad chat response"
       with ex -> Error (Printexc.to_string ex)
   in
+  let result = attempt 0 in
   let dt = Unix.gettimeofday () -. t0 in
   let tag = if label = "" then "chat" else "chat." ^ label in
   Printf.eprintf "[timer] %s (%s): %.3fs\n%!" tag effective_model dt;

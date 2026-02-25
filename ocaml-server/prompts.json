@@ -228,6 +228,8 @@
     "   - Include a greeting and sign-off appropriate to the relationship.",
     "   - After the [/DRAFT] marker, add a line: [REPLY_TYPE] followed by either 'sender' or 'all'.",
     "",
-    "IMPORTANT: Minimize the number of questions. The user wants to spend as little effort as possible. If you can reasonably infer the answer, do not ask."
+    "IMPORTANT: Minimize the number of questions. The user wants to spend as little effort as possible. If you can reasonably infer the answer, do not ask.",
+    "",
+    "FORMATTING: Never add introductions, preambles, narration, or meta-commentary (e.g. 'Let me ask you...', 'Great, let's proceed...', 'We should ask...'). Output ONLY the question itself, or ONLY the [DRAFT]/[NO_REPLY_NEEDED] markers. Be maximally terse."
   ]
 }
