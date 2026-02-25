@@ -1227,17 +1227,32 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
       ]
   in
   let sectioned_chunks = chunk_sections ~preamble sections in
-  let embedded_chunks =
-    sectioned_chunks
-    |> List.map (fun (i, section, ch) ->
-           match ollama_embed ~client ~sw ~task:Search_document ~label:"ingest" ~stats:stats_embed_ingest ~text:ch () with
-           | Ok v -> (i, section, ch, l2_normalize v)
-           | Error msg when is_truncation_error msg ->
-               Printf.eprintf "[ingest.truncated] doc_id=%s chunk=%d section=%s chars=%d — refusing to ingest with truncated embedding\n%!"
-                 ndoc i section (String.length ch);
-               raise (Failure (Printf.sprintf "embedding truncated for chunk %d (%d chars) of %s — increase embed model context or reduce chunk_size" i (String.length ch) ndoc))
-           | Error msg -> raise (Failure ("ollama_embed failed: " ^ msg)))
+  let embed_one_chunk (i, section, ch) =
+    let rec try_embed text attempt =
+      match ollama_embed ~client ~sw ~task:Search_document ~label:"ingest" ~stats:stats_embed_ingest ~text () with
+      | Ok v -> [(i, section, text, l2_normalize v)]
+      | Error msg when is_truncation_error msg && attempt < 3 ->
+          (* Split the chunk text in half (preserving the preamble prefix) and retry each half *)
+          let half = String.length text / 2 in
+          if half < 100 then (
+            Printf.eprintf "[ingest.truncated] doc_id=%s chunk=%d section=%s chars=%d — chunk too small to split further\n%!"
+              ndoc i section (String.length text);
+            raise (Failure (Printf.sprintf "embedding truncated for chunk %d (%d chars) of %s — text too dense for embed model" i (String.length text) ndoc)))
+          else (
+            Printf.eprintf "[ingest.truncated] doc_id=%s chunk=%d section=%s chars=%d — splitting and retrying (attempt %d)\n%!"
+              ndoc i section (String.length text) (attempt + 1);
+            let left = String.sub text 0 half in
+            let right = String.sub text half (String.length text - half) in
+            try_embed left (attempt + 1) @ try_embed right (attempt + 1))
+      | Error msg when is_truncation_error msg ->
+          Printf.eprintf "[ingest.truncated] doc_id=%s chunk=%d section=%s chars=%d — max retries exceeded\n%!"
+            ndoc i section (String.length text);
+          raise (Failure (Printf.sprintf "embedding truncated for chunk %d (%d chars) of %s after %d split attempts" i (String.length text) ndoc attempt))
+      | Error msg -> raise (Failure ("ollama_embed failed: " ^ msg))
+    in
+    try_embed ch 0
   in
+  let embedded_chunks = List.concat_map embed_one_chunk sectioned_chunks in
   let attachments = extract_attachment_filenames raw in
   (* Format as PostgreSQL TEXT[] literal: {"file1.pdf","file2.xlsx"} *)
   let att_pg_array =
