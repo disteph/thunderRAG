@@ -4,10 +4,10 @@
     "base_url": "http://127.0.0.1:11434",
     "num_ctx": 32768,
     "embed_model": "mxbai-embed-large",
-    "llm_model": "qwen2.5:14b",
+    "llm_model": "gpt-oss:20b",
     "summarize_model": "qwen2.5:3b",
-    "triage_model": "qwen2.5:14b",
-    "rewrite_model": "qwen2.5:14b"
+    "triage_model": "gpt-oss:20b",
+    "rewrite_model": "gpt-oss:20b"
   },
   "pg": {
     "database": "thunderrag"
