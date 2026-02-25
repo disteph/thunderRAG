@@ -35,6 +35,17 @@ function openQueryTab() {
   }
 }
 
+/* Open the ThunderRAG reply-drafting UI with the given header Message-Ids. */
+function openReplyTab(headerMessageIds) {
+  try {
+    const ids = encodeURIComponent(JSON.stringify(headerMessageIds));
+    const url = browser.runtime.getURL(`ui/reply.html?ids=${ids}`);
+    browser.tabs.create({ url });
+  } catch (e) {
+    console.error(e);
+  }
+}
+
 /* Wire the browser-action (toolbar button) click to open the query UI tab. */
 if (browser.browserAction && browser.browserAction.onClicked) {
   browser.browserAction.onClicked.addListener(() => {
@@ -134,6 +145,37 @@ browser.runtime.onMessage.addListener(async (msg) => {
       const data = await resp.json();
       debugLog(`[fetchIngestedDetail] response:`, data);
       return data;
+    }
+
+    if (msg.type === "sendReply") {
+      const headerMessageId = (msg.headerMessageId || "").trim();
+      const body = msg.body || "";
+      const replyType = msg.replyType || "sender";
+      if (!headerMessageId) throw new Error("Missing headerMessageId");
+      const messageId = await resolveHeaderMessageId(headerMessageId);
+      const rt = replyType === "all" ? "replyToAll" : "replyToSender";
+      const composeTab = await browser.compose.beginReply(messageId, rt, {
+        plainTextBody: body,
+        isPlainText: true,
+      });
+      const saved = await browser.compose.saveMessage(composeTab.id, { mode: "draft" });
+      await browser.tabs.remove(composeTab.id);
+      return { ok: true, saved };
+    }
+
+    if (msg.type === "sendReplyNow") {
+      const headerMessageId = (msg.headerMessageId || "").trim();
+      const body = msg.body || "";
+      const replyType = msg.replyType || "sender";
+      if (!headerMessageId) throw new Error("Missing headerMessageId");
+      const messageId = await resolveHeaderMessageId(headerMessageId);
+      const rt = replyType === "all" ? "replyToAll" : "replyToSender";
+      const composeTab = await browser.compose.beginReply(messageId, rt, {
+        plainTextBody: body,
+        isPlainText: true,
+      });
+      const result = await browser.compose.sendMessage(composeTab.id, { mode: "sendNow" });
+      return { ok: true, result };
     }
 
     if (msg.type === "validateMessageIds") {
@@ -503,6 +545,12 @@ browser.menus.create({
   contexts: ["message_list"],
 });
 
+browser.menus.create({
+  id: "thunderrag-draft-reply",
+  title: "ThunderRAG: Draft reply",
+  contexts: ["message_list"],
+});
+
 browser.menus.onShown.addListener(async (info) => {
   if (!info.contexts.includes("message_list")) return;
   try {
@@ -520,6 +568,7 @@ browser.menus.onShown.addListener(async (info) => {
         browser.menus.update("thunderrag-show-ingested", { visible: true }),
         browser.menus.update("thunderrag-mark-processed", { visible: true }),
         browser.menus.update("thunderrag-mark-unprocessed", { visible: true }),
+        browser.menus.update("thunderrag-draft-reply", { visible: true }),
       ]);
     } else if (msgs.length === 1) {
       const mid = msgs[0].headerMessageId || "";
@@ -536,6 +585,7 @@ browser.menus.onShown.addListener(async (info) => {
         browser.menus.update("thunderrag-show-ingested", { visible: isIngested }),
         browser.menus.update("thunderrag-mark-processed", { visible: isIngested && !isProcessed }),
         browser.menus.update("thunderrag-mark-unprocessed", { visible: isIngested && isProcessed }),
+        browser.menus.update("thunderrag-draft-reply", { visible: true }),
       ]);
     }
     browser.menus.refresh();
@@ -556,11 +606,31 @@ browser.menus.onClicked.addListener(async (info) => {
       await handleMarkProcessed(true);
     } else if (info.menuItemId === "thunderrag-mark-unprocessed") {
       await handleMarkProcessed(false);
+    } else if (info.menuItemId === "thunderrag-draft-reply") {
+      await handleDraftReply();
     }
   } catch (e) {
     console.error(`[ThunderRAG] menu handler error: ${e}`);
   }
 });
+
+async function handleDraftReply() {
+  const tabs = await browser.mailTabs.query({ active: true, currentWindow: true });
+  if (!tabs.length) return;
+  let page = await browser.mailTabs.getSelectedMessages(tabs[0].id);
+  if (!page?.messages?.length) return;
+  const allMessages = [...page.messages];
+  while (page.id) {
+    page = await browser.messages.continueList(page.id);
+    if (page?.messages?.length) allMessages.push(...page.messages);
+  }
+  const ids = allMessages
+    .map(m => m.headerMessageId || "")
+    .filter(Boolean)
+    .map(id => id.startsWith("<") ? id : `<${id}>`);
+  if (!ids.length) return;
+  openReplyTab(ids);
+}
 
 async function handleIngestSelected() {
   const tabs = await browser.mailTabs.query({ active: true, currentWindow: true });

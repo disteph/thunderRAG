@@ -4055,6 +4055,293 @@ let handler ~client ~sw ~clock _socket request body =
       let resp, resp_body = handle_bulk_ingest ~client ~sw ~clock bulk_body in
       let status = Http.Response.status resp in
       Cohttp_eio.Server.respond_string ~status ~body:resp_body ~headers:json_headers ()
+
+  (*
+    /reply/start — Initiate a reply-drafting conversation.
+
+    Receives the raw RFC822 email that the user wants to reply to.
+    1. Parses headers (from, to, subject, date) and body.
+    2. Retrieves context emails from the RAG DB — especially emails the
+       user has SENT to the same recipient — so the LLM can match tone.
+    3. Builds the reply_interview system prompt + a hidden first user
+       message containing the email and context.
+    4. Calls ollama_chat to get the LLM's first response (either
+       [NO_REPLY_NEEDED], a question, or a [DRAFT]).
+    5. Returns everything the client needs to continue the conversation.
+  *)
+  | `POST, "/reply/start" ->
+      let raw_req = read_all body in
+      (try
+        let json = Yojson.Safe.from_string raw_req in
+        let kv = match json with `Assoc kv -> kv | _ -> [] in
+        let get_str k = match List.assoc_opt k kv with Some (`String s) -> String.trim s | _ -> "" in
+        let email_raw = get_str "email_raw" in
+        let user_name = get_str "user_name" in
+        let chat_model = get_str "chat_model" in
+        if email_raw = "" then
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing email_raw\n" ()
+        else
+        (* 1. Parse email *)
+        let headers = parse_headers email_raw in
+        let parts = extract_body_parts email_raw in
+        let new_body = String.trim parts.new_text |> sanitize_utf8 in
+        let quoted_raw = String.trim parts.quoted_text |> sanitize_utf8 in
+        let quoted_capped =
+          if String.trim quoted_raw = "" then ""
+          else
+            truncate_lines quoted_raw ~max_lines:!rag_quoted_context_max_lines
+            |> truncate_chars ~max_chars:!rag_quoted_context_max_input_chars
+            |> String.trim
+        in
+        let body_text =
+          let ps = List.filter (fun s -> s <> "")
+            [ (if quoted_capped = "" then "" else "QUOTED CONTEXT:\n" ^ quoted_capped)
+            ; "NEW CONTENT:\n" ^ new_body
+            ] in
+          String.concat "\n\n" ps
+        in
+        let from_ = header_or_empty headers "from" |> decode_rfc2047 |> sanitize_utf8 in
+        let to_ = header_or_empty headers "to" |> decode_rfc2047 |> sanitize_utf8 in
+        let cc_ = header_or_empty headers "cc" |> decode_rfc2047 |> sanitize_utf8 in
+        let subject = header_or_empty headers "subject" |> decode_rfc2047 |> sanitize_utf8 in
+        let date_ = header_or_empty headers "date" |> decode_rfc2047 |> sanitize_utf8 in
+        let email_metadata = `Assoc
+          [ ("from", `String from_); ("to", `String to_); ("cc", `String cc_)
+          ; ("subject", `String subject); ("date", `String date_) ] in
+
+        (* 2. RAG retrieval for context: emails the user has sent to this sender *)
+        let context_summary =
+          let recipient_name =
+            (* Extract just the name/email from the From header for filtering *)
+            let f = String.trim from_ in
+            if String.length f > 0 then f else "unknown"
+          in
+          let whoami_str = String.trim !whoami in
+          let escaped_name = String.escaped recipient_name in
+          let filter_opt =
+            if whoami_str <> "" then
+              Some (Printf.sprintf "sender ILIKE '%%%s%%' AND (recipient ILIKE '%%%s%%' OR cc ILIKE '%%%s%%')"
+                (String.escaped whoami_str) escaped_name escaped_name)
+            else
+              Some (Printf.sprintf "(sender ILIKE '%%%s%%' OR recipient ILIKE '%%%s%%')" escaped_name escaped_name)
+          in
+          (* Build a hypothetical query about communication with this person *)
+          let query_text = Printf.sprintf "From: %s\nTo: %s\nSubject: %s\n\n%s"
+            from_ to_ subject (truncate_chars new_body ~max_chars:500) in
+          let context_lines = ref [] in
+          (match ollama_embed ~client ~sw ~task:Search_query ~label:"reply_context" ~text:query_text () with
+          | Error _ -> ()
+          | Ok v ->
+              let emb = l2_normalize v in
+              (match Rag_lib.Pg.query_knn ~embedding:emb ~top_k:5 ?filter:filter_opt () with
+              | Error msg -> Printf.eprintf "[reply.context.error] %s\n%!" msg
+              | Ok (sources, _sql) ->
+                  List.iter (fun src ->
+                    match src with
+                    | `Assoc skv ->
+                        let s_from = (match List.assoc_opt "from" skv with Some (`String s) -> s | _ -> "") in
+                        let s_to = (match List.assoc_opt "to" skv with Some (`String s) -> s | _ -> "") in
+                        let s_subj = (match List.assoc_opt "subject" skv with Some (`String s) -> s | _ -> "") in
+                        let s_date = (match List.assoc_opt "date" skv with Some (`String s) -> s | _ -> "") in
+                        let s_text = (match List.assoc_opt "text" skv with Some (`String s) -> s | _ -> "") in
+                        let excerpt = truncate_chars (String.trim s_text) ~max_chars:800 in
+                        context_lines := (Printf.sprintf "---\nFrom: %s\nTo: %s\nSubject: %s\nDate: %s\n%s"
+                          s_from s_to s_subj s_date excerpt) :: !context_lines
+                    | _ -> ()) sources));
+          String.concat "\n" (List.rev !context_lines)
+        in
+
+        (* 3. Build system prompt *)
+        let user_identity =
+          let name_part = String.trim user_name in
+          let email_part = String.trim !whoami in
+          match (name_part <> "", email_part <> "") with
+          | true, true  -> Printf.sprintf "The user is: %s (email: %s). " name_part email_part
+          | true, false -> Printf.sprintf "The user is: %s. " name_part
+          | false, true -> Printf.sprintf "The user email is: %s. " email_part
+          | false, false -> ""
+        in
+        let system_prompt =
+          get_prompt "reply_interview"
+            ~default:"You are an email reply assistant. Ask short yes/no questions then draft a reply."
+            ~vars:[
+              ("{{user_identity}}", user_identity);
+              ("{{datetime_local}}", now_local_string ());
+            ]
+        in
+
+        (* 4. Build hidden first user message *)
+        let first_user_msg =
+          let ctx_section =
+            if String.trim context_summary = "" then
+              "\n\nCONTEXT EMAILS: (none found)"
+            else
+              "\n\nCONTEXT EMAILS (written by the user to the same recipient — use for tone/style matching):\n" ^ context_summary
+          in
+          Printf.sprintf "Please help me draft a reply to the following email.\n\n\
+            EMAIL TO REPLY TO:\nFrom: %s\nTo: %s\nCc: %s\nSubject: %s\nDate: %s\n\n%s%s"
+            from_ to_ cc_ subject date_ body_text ctx_section
+        in
+
+        (* 5. Call LLM *)
+        let messages : Yojson.Safe.t list =
+          [ `Assoc [ ("role", `String "system"); ("content", `String system_prompt) ]
+          ; `Assoc [ ("role", `String "user"); ("content", `String first_user_msg) ]
+          ]
+        in
+        let effective_model = if chat_model <> "" then chat_model else !ollama_llm_model in
+        (match ollama_chat ~client ~sw ~label:"reply_start" ~model:effective_model ~messages () with
+        | Error msg ->
+            let body = `Assoc [ ("error", `String msg) ] |> Yojson.Safe.to_string in
+            Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ()
+        | Ok raw_resp ->
+            let resp_text = String.trim raw_resp in
+            (* Parse markers *)
+            let needs_reply = not (contains_substring ~sub:"[NO_REPLY_NEEDED]" resp_text) in
+            let has_draft = contains_substring ~sub:"[DRAFT]" resp_text
+                         && contains_substring ~sub:"[/DRAFT]" resp_text in
+            let draft_body, reply_type =
+              if has_draft then
+                let start_marker = "[DRAFT]" in
+                let end_marker = "[/DRAFT]" in
+                let s_len = String.length start_marker in
+                let rec find_sub s sub from =
+                  let sub_len = String.length sub in
+                  if from + sub_len > String.length s then None
+                  else if String.sub s from sub_len = sub then Some from
+                  else find_sub s sub (from + 1)
+                in
+                match find_sub resp_text start_marker 0, find_sub resp_text end_marker 0 with
+                | Some si, Some ei ->
+                    let draft = String.trim (String.sub resp_text (si + s_len) (ei - si - s_len)) in
+                    let after_end = ei + String.length end_marker in
+                    let rest = if after_end < String.length resp_text
+                      then String.trim (String.sub resp_text after_end (String.length resp_text - after_end))
+                      else "" in
+                    let rt =
+                      if contains_substring ~sub:"[REPLY_TYPE]" rest then
+                        let rt_marker = "[REPLY_TYPE]" in
+                        match find_sub rest rt_marker 0 with
+                        | Some ri ->
+                            let after_rt = ri + String.length rt_marker in
+                            let rt_val = if after_rt < String.length rest
+                              then String.trim (String.sub rest after_rt (String.length rest - after_rt))
+                              else "sender" in
+                            let rt_val = String.lowercase_ascii rt_val in
+                            if contains_substring ~sub:"all" rt_val then "all" else "sender"
+                        | None -> "sender"
+                      else "sender"
+                    in
+                    (draft, rt)
+                | _ -> ("", "sender")
+              else ("", "sender")
+            in
+            let done_ = has_draft || not needs_reply in
+            let resp_json = `Assoc (
+              [ ("message", `String resp_text)
+              ; ("needs_reply", `Bool needs_reply)
+              ; ("done", `Bool done_)
+              ; ("email_metadata", email_metadata)
+              ; ("system_prompt", `String system_prompt)
+              ; ("first_user_message", `String first_user_msg)
+              ]
+              @ (if draft_body <> "" then [ ("draft_body", `String draft_body) ] else [])
+              @ (if done_ && draft_body <> "" then [ ("reply_type", `String reply_type) ] else [])
+            ) in
+            Cohttp_eio.Server.respond_string ~status:`OK
+              ~body:(Yojson.Safe.to_string resp_json) ~headers:json_headers ())
+      with e ->
+        Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+          ~body:(Printf.sprintf "reply/start error: %s\n" (Printexc.to_string e)) ())
+
+  (*
+    /reply/chat — Continue a reply-drafting conversation.
+
+    Stateless: the client sends the full message history (including the
+    hidden first user message from /reply/start) plus the system prompt.
+    The server calls ollama_chat and parses the response for draft markers.
+  *)
+  | `POST, "/reply/chat" ->
+      let raw_req = read_all body in
+      (try
+        let json = Yojson.Safe.from_string raw_req in
+        let kv = match json with `Assoc kv -> kv | _ -> [] in
+        let get_str k = match List.assoc_opt k kv with Some (`String s) -> String.trim s | _ -> "" in
+        let system_prompt = get_str "system_prompt" in
+        let chat_model = get_str "chat_model" in
+        let conv_messages =
+          match List.assoc_opt "messages" kv with
+          | Some (`List ms) -> ms
+          | _ -> []
+        in
+        if system_prompt = "" || conv_messages = [] then
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing system_prompt/messages\n" ()
+        else
+        let messages : Yojson.Safe.t list =
+          (`Assoc [ ("role", `String "system"); ("content", `String system_prompt) ])
+          :: conv_messages
+        in
+        let effective_model = if chat_model <> "" then chat_model else !ollama_llm_model in
+        (match ollama_chat ~client ~sw ~label:"reply_chat" ~model:effective_model ~messages () with
+        | Error msg ->
+            let body = `Assoc [ ("error", `String msg) ] |> Yojson.Safe.to_string in
+            Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ()
+        | Ok raw_resp ->
+            let resp_text = String.trim raw_resp in
+            let needs_reply = not (contains_substring ~sub:"[NO_REPLY_NEEDED]" resp_text) in
+            let has_draft = contains_substring ~sub:"[DRAFT]" resp_text
+                         && contains_substring ~sub:"[/DRAFT]" resp_text in
+            let draft_body, reply_type =
+              if has_draft then
+                let start_marker = "[DRAFT]" in
+                let end_marker = "[/DRAFT]" in
+                let s_len = String.length start_marker in
+                let rec find_sub s sub from =
+                  let sub_len = String.length sub in
+                  if from + sub_len > String.length s then None
+                  else if String.sub s from sub_len = sub then Some from
+                  else find_sub s sub (from + 1)
+                in
+                match find_sub resp_text start_marker 0, find_sub resp_text end_marker 0 with
+                | Some si, Some ei ->
+                    let draft = String.trim (String.sub resp_text (si + s_len) (ei - si - s_len)) in
+                    let after_end = ei + String.length end_marker in
+                    let rest = if after_end < String.length resp_text
+                      then String.trim (String.sub resp_text after_end (String.length resp_text - after_end))
+                      else "" in
+                    let rt =
+                      if contains_substring ~sub:"[REPLY_TYPE]" rest then
+                        let rt_marker = "[REPLY_TYPE]" in
+                        match find_sub rest rt_marker 0 with
+                        | Some ri ->
+                            let after_rt = ri + String.length rt_marker in
+                            let rt_val = if after_rt < String.length rest
+                              then String.trim (String.sub rest after_rt (String.length rest - after_rt))
+                              else "sender" in
+                            let rt_val = String.lowercase_ascii rt_val in
+                            if contains_substring ~sub:"all" rt_val then "all" else "sender"
+                        | None -> "sender"
+                      else "sender"
+                    in
+                    (draft, rt)
+                | _ -> ("", "sender")
+              else ("", "sender")
+            in
+            let done_ = has_draft || not needs_reply in
+            let resp_json = `Assoc (
+              [ ("message", `String resp_text)
+              ; ("needs_reply", `Bool needs_reply)
+              ; ("done", `Bool done_)
+              ]
+              @ (if draft_body <> "" then [ ("draft_body", `String draft_body) ] else [])
+              @ (if done_ && draft_body <> "" then [ ("reply_type", `String reply_type) ] else [])
+            ) in
+            Cohttp_eio.Server.respond_string ~status:`OK
+              ~body:(Yojson.Safe.to_string resp_json) ~headers:json_headers ())
+      with e ->
+        Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+          ~body:(Printf.sprintf "reply/chat error: %s\n" (Printexc.to_string e)) ())
+
   | `POST, _ ->
       Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"not found\n" ()
   | _ ->
