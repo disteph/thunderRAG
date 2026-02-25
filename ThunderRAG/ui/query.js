@@ -708,6 +708,11 @@ async function onAsk() {
 
       const answer = String(final?.answer || "");
       const sources = Array.isArray(final?.sources) ? final.sources : srcs;
+      // Merge folder info from TB validation into server-returned sources
+      for (const s of sources) {
+        const did = String(s?.doc_id || "");
+        if (did && folderByDocId[did]) s.folder = folderByDocId[did];
+      }
       setAssistantMessage(assistant.bubble, answer, sources, retrievalInfo);
       return;
     } else {
