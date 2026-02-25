@@ -85,7 +85,8 @@ let schema_statements () =
        reply_by      TIMESTAMPTZ,
        processed     BOOLEAN NOT NULL DEFAULT FALSE,
        processed_at  TIMESTAMPTZ,
-       ingested_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+       ingested_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+       whoami        TEXT
      )|}
   ; Printf.sprintf {|CREATE TABLE IF NOT EXISTS email_chunks (
        id          SERIAL PRIMARY KEY,
@@ -99,6 +100,7 @@ let schema_statements () =
   (* Migration: drop redundant message_id column (identical to doc_id) *)
   ; {|ALTER TABLE emails DROP COLUMN IF EXISTS message_id|}
   ; {|ALTER TABLE emails ADD COLUMN IF NOT EXISTS summarize_model TEXT NOT NULL DEFAULT ''|}
+  ; {|ALTER TABLE emails ADD COLUMN IF NOT EXISTS whoami TEXT|}
   ]
 
 let init_schema_with (module C : Caqti_eio.CONNECTION) =
@@ -136,6 +138,7 @@ let upsert_email
     ~(attachments_json : string)
     ~(action_score : int option) ~(importance_score : int option)
     ~(reply_by : string) ~(ingested_at : string)
+    ~(whoami : string)
     ?(on_done : (float -> unit) option)
     () : (unit, string) result =
   let t0 = Unix.gettimeofday () in
@@ -144,8 +147,8 @@ let upsert_email
     INSERT INTO emails
       (doc_id, embed_model, triage_model, summarize_model, sender, recipient, cc, bcc,
        subject, email_date, attachments, action_score, importance_score,
-       reply_by, processed, ingested_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,'')::timestamptz,$11::text[],$12,$13,NULLIF($14,'')::timestamptz,FALSE,NULLIF($15,'')::timestamptz)
+       reply_by, processed, ingested_at, whoami)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,'')::timestamptz,$11::text[],$12,$13,NULLIF($14,'')::timestamptz,FALSE,NULLIF($15,'')::timestamptz,$16)
     ON CONFLICT (doc_id) DO UPDATE SET
       embed_model = EXCLUDED.embed_model,
       triage_model = EXCLUDED.triage_model,
@@ -160,16 +163,18 @@ let upsert_email
       action_score = EXCLUDED.action_score,
       importance_score = EXCLUDED.importance_score,
       reply_by = EXCLUDED.reply_by,
-      ingested_at = EXCLUDED.ingested_at
+      ingested_at = EXCLUDED.ingested_at,
+      whoami = EXCLUDED.whoami
   |} in
   let open Caqti_type in
   (* Parameter order must match SQL: $1-$8 strings, $9 subject, $10 email_date,
-     $11 attachments, $12 action_score, $13 importance_score, $14 reply_by, $15 ingested_at *)
+     $11 attachments, $12 action_score, $13 importance_score, $14 reply_by,
+     $15 ingested_at, $16 whoami *)
   let pt = t2
     (t2 (t4 string string string string) (t4 string string string string))
     (t2
       (t2 string string)
-      (t2 (t2 string (option int)) (t3 (option int) string string)))
+      (t2 (t2 string (option int)) (t4 (option int) string string string)))
   in
   let req = Caqti_request.Infix.(pt ->. unit) ~oneshot:true sql in
   let result =
@@ -178,7 +183,7 @@ let upsert_email
         (((doc_id, embed_model, triage_model, summarize_model),
           (sender, recipient, cc, bcc)),
          ((subject, email_date),
-          ((attachments_json, action_score), (importance_score, reply_by, ingested_at)))))
+          ((attachments_json, action_score), (importance_score, reply_by, ingested_at, whoami)))))
   in
   let dt = Unix.gettimeofday () -. t0 in
   Printf.eprintf "[timer] pg.upsert_email: %.3fs\n%!" dt;
@@ -211,6 +216,19 @@ let insert_chunks ~(doc_id : string) ?(on_done : (float -> unit) option)
   Printf.eprintf "[timer] pg.insert_chunks (%d): %.3fs\n%!" (List.length chunks) dt;
   (match on_done with Some f -> f dt | None -> ());
   result
+
+let purge_untriaged () : (int, string) result =
+  let count_sql = "SELECT COUNT(*)::int FROM emails WHERE action_score IS NULL AND importance_score IS NULL" in
+  let count_req = Caqti_request.Infix.(Caqti_type.unit ->! Caqti_type.int) ~oneshot:true count_sql in
+  let del_sql = "DELETE FROM emails WHERE action_score IS NULL AND importance_score IS NULL" in
+  let del_req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true del_sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.find count_req () with
+    | Error _ as e -> e
+    | Ok n ->
+        match C.exec del_req () with
+        | Error _ as e -> e
+        | Ok () -> Ok n)
 
 let delete_email (doc_id : string) : (unit, string) result =
   let doc_id = normalize_doc_id doc_id in

@@ -1268,6 +1268,7 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
       ~attachments_json:att_pg_array
       ~action_score ~importance_score ~reply_by
       ~ingested_at:(now_utc_iso8601 ())
+      ~whoami
       ~on_done:(record stats_pg_upsert) ()
     with
     | Error e ->
@@ -1803,7 +1804,7 @@ let handle_bulk_ingest ~client ~sw ~clock (body : string) : (Http.Response.t * s
                   let headers = parse_headers raw in
                   let doc_id = doc_id_of_raw headers raw in
                   let resp, _body =
-                    forward_ingest_raw ~client ~sw ~log:false ~whoami:"" ~doc_id ~headers ~raw
+                    forward_ingest_raw ~client ~sw ~log:false ~whoami:(String.trim !whoami) ~doc_id ~headers ~raw
                   in
                   let code = Cohttp.Code.code_of_status (Http.Response.status resp) in
                   let ok = code >= 200 && code < 300 in
@@ -2625,6 +2626,11 @@ let handler ~client ~sw ~clock _socket request body =
 
       let hdr_whoami = request_header_or_empty request "x-thunderrag-whoami" in
       let whoami = if String.trim hdr_whoami <> "" then hdr_whoami else !whoami in
+      if String.trim whoami = "" then
+        Cohttp_eio.Server.respond_string ~status:`Bad_request
+          ~body:{|{"error":"whoami is required for ingestion. Set it in the extension options or send X-ThunderRAG-WhoAmI header."}|}
+          ~headers:json_headers ()
+      else
       let resp, resp_body =
         forward_ingest_raw ~client ~sw ~log:true ~whoami ~doc_id ~headers ~raw
       in
@@ -4107,6 +4113,11 @@ let () =
    | Error e ->
        Printf.eprintf "FATAL: PostgreSQL init failed: %s\n%!" e;
        exit 1);
+  (* Purge emails that were ingested without triage scores (whoami was empty) *)
+  (match Rag_lib.Pg.purge_untriaged () with
+   | Ok 0 -> ()
+   | Ok n -> Printf.printf "[startup] purged %d emails with no triage scores (ingested without whoami)\n%!" n
+   | Error e -> Printf.eprintf "[startup] purge_untriaged error: %s\n%!" e);
   let socket =
     try
       Eio.Net.listen env#net ~sw ~backlog:128 ~reuse_addr:true
