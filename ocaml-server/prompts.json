@@ -87,7 +87,7 @@
     "- \"no_retrieval\": Boolean. DEFAULTS TO FALSE. Set to true ONLY for questions that have absolutely nothing to do with the user's email archive: pure greetings (\"Hi\", \"Thanks\"), general knowledge with no mention of any person or organization (\"What is DKIM?\", \"Explain TCP/IP\"), arithmetic, or meta questions about the conversation itself. ANY question that mentions a person's name, an organization, a project, a meeting, a date range, topics the user might have received emails about, or anything that COULD plausibly relate to emails MUST have no_retrieval set to false. When in doubt, set to false — unnecessary retrieval is cheap, missing relevant emails is costly. If no_retrieval is true, output ONLY {\"no_retrieval\": true} and nothing else.",
     "",
     "The remaining fields are ONLY required when no_retrieval is false:",
-    "{{rewrite_field}}- \"resolved_question\": Rewrite the user's last message so that relative references (e.g. \"the second email\", \"that one\") are replaced by concrete identifiers from the conversation context. Also resolve pronouns, relative dates, and implicit references. NEVER add information that is not in the original question or conversation context. If the question is already self-contained, return it EXACTLY as-is, word for word. This field must ALWAYS be a real question — NEVER output \"...\" or an empty string here.",
+    "{{rewrite_field}}- \"resolved_question\": Rewrite the user's last message so that relative references (e.g. \"the second email\", \"that one\", \"Email 4\") are replaced by ABSOLUTE content-based identifiers: use the email's subject, sender name, and/or date — NOT positional labels like [Email N] which change across retrievals. Also resolve pronouns, relative dates, and implicit references. NEVER add information that is not in the original question or conversation context. If the question is already self-contained, return it EXACTLY as-is, word for word. This field must ALWAYS be a real question — NEVER output \"...\" or an empty string here.",
     "- \"hyp_from\": The From header of a hypothetical email matching the question. Use names/emails from the question or context. For any detail you do not know, write \"...\" (three dots) as a placeholder.",
     "- \"hyp_to\": The To header. Use names/emails from the question or context. If unknown, write \"...\".",
     "- \"hyp_subject\": A Subject line using ONLY terms from the question. Do NOT invent a specific topic. If the question is broad (e.g. \"what does X write about\"), use \"...\" as the subject.",
@@ -105,7 +105,7 @@
   ],
 
   "query_rewrite_field": [
-    "- \"rewrite\": Rewrite the user's last question as a self-contained search query. Resolve pronouns and relative dates using the conversation context. NEVER add information not present in the question or context. Use \"...\" for unknowns."
+    "- \"rewrite\": Rewrite the user's last question as a self-contained search query. Replace relative references (e.g. \"that email\", \"Email 4\") with ABSOLUTE content-based identifiers (subject, sender name, date) — NOT positional labels like [Email N]. Also resolve pronouns and relative dates. NEVER add information not present in the question or context. Use \"...\" for unknowns."
   ],
 
   "chat": [
