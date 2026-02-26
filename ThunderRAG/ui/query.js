@@ -96,6 +96,12 @@ function scrollChatToBottom() {
   chat.scrollTop = chat.scrollHeight;
 }
 
+function normalizeUnicodeWhitespace(s) {
+  // Replace common Unicode whitespace variants with ASCII equivalents
+  return s.replace(/[\u00A0\u2000-\u200A\u202F\u205F]/g, " ")
+          .replace(/[\u2010-\u2015\uFE58\uFE63\uFF0D]/g, "-");
+}
+
 function appendMessage(role, text) {
   const chat = $("chat");
 
@@ -104,7 +110,7 @@ function appendMessage(role, text) {
 
   const bubble = document.createElement("div");
   bubble.className = "bubble";
-  bubble.textContent = text;
+  bubble.textContent = normalizeUnicodeWhitespace(text);
 
   msg.appendChild(bubble);
   chat.appendChild(msg);
@@ -347,7 +353,7 @@ function setAssistantMessage(bubble, answer, sources, retrievalInfo) {
 
   const answerEl = document.createElement("div");
   const srcs = Array.isArray(sources) ? sources : [];
-  const text = String(answer || "");
+  const text = normalizeUnicodeWhitespace(String(answer || ""));
 
   // Pass 1: collect unique cited original indices (0-based) in order of appearance.
   const citedOriginal = [];

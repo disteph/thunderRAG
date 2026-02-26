@@ -230,6 +230,19 @@ let purge_untriaged () : (int, string) result =
         | Error _ as e -> e
         | Ok () -> Ok n)
 
+let purge_empty_metadata () : (int, string) result =
+  let count_sql = "SELECT COUNT(*)::int FROM emails WHERE sender = '' AND recipient = '' AND subject = ''" in
+  let count_req = Caqti_request.Infix.(Caqti_type.unit ->! Caqti_type.int) ~oneshot:true count_sql in
+  let del_sql = "DELETE FROM emails WHERE sender = '' AND recipient = '' AND subject = ''" in
+  let del_req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true del_sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.find count_req () with
+    | Error _ as e -> e
+    | Ok n ->
+        match C.exec del_req () with
+        | Error _ as e -> e
+        | Ok () -> Ok n)
+
 let delete_email (doc_id : string) : (unit, string) result =
   let doc_id = normalize_doc_id doc_id in
   let sql = "DELETE FROM emails WHERE doc_id = $1" in

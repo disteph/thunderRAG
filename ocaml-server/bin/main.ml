@@ -1147,9 +1147,28 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
   let bcc_ = header_or_empty headers "bcc" |> decode_rfc2047 |> sanitize_utf8 in
   let subject = header_or_empty headers "subject" |> decode_rfc2047 |> sanitize_utf8 in
   let date_ = header_or_empty headers "date" |> decode_rfc2047 |> sanitize_utf8 in
+  (* Reject emails with completely empty metadata — likely encrypted/unreadable *)
+  if String.trim from_ = "" && String.trim to_ = "" && String.trim subject = "" then (
+    let ndoc = Rag_lib.Pg.normalize_doc_id doc_id in
+    Printf.eprintf "[ingest.rejected] doc_id=%s reason=empty_metadata (from, to, subject all empty — likely encrypted)\n%!" ndoc;
+    let resp = Http.Response.make ~status:`Bad_request () in
+    (resp, Yojson.Safe.to_string
+      (`Assoc [ ("ok", `Bool false); ("doc_id", `String doc_id)
+              ; ("error", `String "email metadata is empty (from, to, subject all blank) — likely encrypted or unreadable") ])))
+  else
   let parts = extract_body_parts raw in
   let new_body = String.trim parts.new_text |> sanitize_utf8 in
   let quoted_raw = String.trim parts.quoted_text |> sanitize_utf8 in
+  (* Early rejection if body contains [ERROR:] markers (e.g. encrypted/encoded body) —
+     skip expensive triage, summarization, and embedding *)
+  if body_text_has_error_marker new_body || body_text_has_error_marker quoted_raw then (
+    let ndoc = Rag_lib.Pg.normalize_doc_id doc_id in
+    Printf.eprintf "[ingest.rejected] doc_id=%s reason=error_marker_in_body (likely encrypted/encoded)\n%!" ndoc;
+    let resp = Http.Response.make ~status:`Bad_request () in
+    (resp, Yojson.Safe.to_string
+      (`Assoc [ ("ok", `Bool false); ("doc_id", `String doc_id)
+              ; ("error", `String "email body contains [ERROR:] markers — likely encrypted or unreadable") ])))
+  else
   let attachment_summaries = attachment_summaries_of_raw ~client ~sw ~raw in
   let attachments_section = format_attachment_summaries_for_text attachment_summaries in
   let quoted_capped_untrimmed =
@@ -4445,6 +4464,11 @@ let () =
    | Ok 0 -> ()
    | Ok n -> Printf.printf "[startup] purged %d emails with no triage scores (ingested without whoami)\n%!" n
    | Error e -> Printf.eprintf "[startup] purge_untriaged error: %s\n%!" e);
+  (* Purge emails with empty metadata (encrypted/unreadable — slipped through before the check) *)
+  (match Rag_lib.Pg.purge_empty_metadata () with
+   | Ok 0 -> ()
+   | Ok n -> Printf.printf "[startup] purged %d emails with empty metadata (from/to/subject all blank)\n%!" n
+   | Error e -> Printf.eprintf "[startup] purge_empty_metadata error: %s\n%!" e);
   let socket =
     try
       Eio.Net.listen env#net ~sw ~backlog:128 ~reuse_addr:true
