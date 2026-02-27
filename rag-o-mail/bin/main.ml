@@ -594,6 +594,20 @@ let decode_part_body (headers : (string, string) Hashtbl.t) (body : string) : st
   else if cte = "quoted-printable" then Some (decode_quoted_printable raw)
   else Some raw
 
+(* Heuristic: does this byte string look like readable text (not binary)?
+   Scans up to the first 4096 bytes; returns false if >5% are non-text
+   control characters (ASCII 0x00-0x08, 0x0E-0x1F except \t \n \r). *)
+let looks_like_text (s : string) : bool =
+  let len = min (String.length s) 4096 in
+  if len = 0 then false
+  else
+    let bad = ref 0 in
+    for i = 0 to len - 1 do
+      let c = Char.code s.[i] in
+      if c < 0x09 || (c > 0x0D && c < 0x20) || c = 0x7F then incr bad
+    done;
+    Float.of_int !bad /. Float.of_int len < 0.05
+
 let attachment_text_of_part ~(filename : string) ~(content_type : string) ~(decoded : string) : string option =
   let ct_lower = String.lowercase_ascii (String.trim content_type) in
   let decoded =
@@ -630,6 +644,7 @@ let attachment_text_of_part ~(filename : string) ~(content_type : string) ~(deco
       (try Sys.remove tmp with _ -> ());
       Option.map (fun s -> sanitize_utf8 s |> String.trim) out
     with _ -> None)
+  else if looks_like_text decoded then Some (sanitize_utf8 decoded |> String.trim)
   else None
 
 let summarize_attachment ~client ~sw ~(filename : string) ~(text : string) : string option =
