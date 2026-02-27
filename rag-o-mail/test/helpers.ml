@@ -7,11 +7,11 @@
     - PostgreSQL running with the thunderrag database
 
   Override the server URL with:
-    THUNDERRAG_TEST_URL=http://host:port dune exec test/run_tests.exe
+    RAGOMAIL_TEST_URL=http://host:port dune exec test/run_tests.exe
 *)
 
 let base_url () =
-  match Sys.getenv_opt "THUNDERRAG_TEST_URL" with
+  match Sys.getenv_opt "RAGOMAIL_TEST_URL" with
   | Some u ->
       let u = String.trim u in
       if String.length u > 0 && u.[String.length u - 1] = '/' then

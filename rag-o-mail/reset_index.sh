@@ -3,7 +3,7 @@ set -euo pipefail
 
 port=8080
 
-bulk_state_path="${RAG_BULK_STATE:-${HOME}/.thunderRAG/bulk_ingest_state.json}"
+bulk_state_path="${RAGOMAIL_BULK_STATE:-${HOME}/.rag-o-mail/bulk_ingest_state.json}"
 
 usage() {
   cat <<'EOF'
@@ -17,8 +17,8 @@ This calls the OCaml server admin endpoint which clears the Python index.
 Use with care.
 
 This also deletes the bulk ingest resume state file if present:
-  - $RAG_BULK_STATE, or
-  - ~/.thunderRAG/bulk_ingest_state.json
+  - $RAGOMAIL_BULK_STATE, or
+  - ~/.rag-o-mail/bulk_ingest_state.json
 
 Example:
   ./reset_index.sh -p 8080

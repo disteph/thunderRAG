@@ -1,21 +1,23 @@
-# ThunderRAG OCaml Server
+# RAG-o-Mail
 
-The OCaml server is the **central orchestrator** of the ThunderRAG system. It sits between the Thunderbird add-on (which provides raw email content) and PostgreSQL/pgvector (which stores email metadata and vector embeddings), and it is the only component that talks to the LLM (Ollama).
+**A local RAG server for email: ingestion, triage, vector search, and LLM-assisted reply drafting.**
+
+RAG-o-Mail is a standalone HTTP server that sits between any mail client (which provides raw email content) and PostgreSQL/pgvector (which stores email metadata and vector embeddings). It is the only component that talks to the LLM (Ollama).
 
 ## Architecture Overview
 
 ```
-Thunderbird Add-on ──── raw RFC822 ────▸ OCaml Server ──── embeddings ────▸ PostgreSQL + pgvector
-        │                                    │                                   │
-        │  (browser.messages.getRaw)         │  (Ollama /api/embeddings)         │  (vector kNN search)
-        │                                    │  (Ollama /api/chat)               │  (email metadata)
-        ▼                                    ▼                                   ▼
-   Source of truth              Orchestrator / prompt builder          Vector index + metadata
-   for email content            Session state + conversation          Chunk-level retrieval
-                                management
+Mail Client ──── raw RFC822 ────▸ RAG-o-Mail ──── embeddings ────▸ PostgreSQL + pgvector
+      │                                │                                   │
+      │  (any client that can POST     │  (Ollama /api/embeddings)         │  (vector kNN search)
+      │   RFC822 over HTTP)            │  (Ollama /api/chat)               │  (email metadata)
+      ▼                                ▼                                   ▼
+ Source of truth              Orchestrator / prompt builder          Vector index + metadata
+ for email content            Session state + conversation          Chunk-level retrieval
+                              management
 ```
 
-**Key design principle**: The OCaml server never stores email bodies. Thunderbird is the source of truth. During queries, the UI asks Thunderbird to fetch and upload evidence on demand.
+**Key design principle**: RAG-o-Mail never stores email bodies on disk. The mail client is the source of truth for email content. During queries, the client fetches and uploads evidence on demand.
 
 ## HTTP Endpoints
 
@@ -26,7 +28,7 @@ Thunderbird Add-on ──── raw RFC822 ────▸ OCaml Server ──�
 Accepts a single raw RFC822 email message for ingestion into the vector index.
 
 - **Content-Type**: `message/rfc822`
-- **Header**: `X-Thunderbird-Message-Id` — the RFC822 Message-Id used as the stable `doc_id`
+- **Header**: `X-Thunderbird-Message-Id` — the RFC822 Message-Id used as the stable `doc_id` (header name is historical; any client can set it)
 - **Process**:
   1. Parse MIME structure (multipart boundaries, transfer encodings)
   2. Extract text: prefer `text/plain`, fall back to `text/html` → strip tags via lambdasoup
@@ -47,14 +49,14 @@ Scans local mbox files and ingests all messages. Used for initial corpus loading
 
 ### Query (2-Phase Flow)
 
-The query flow is split into three steps so that Thunderbird (not the server) fetches full email bodies. This avoids storing email content server-side.
+The query flow is split into three steps so that the mail client (not the server) fetches full email bodies. This avoids storing email content server-side.
 
 #### Phase 1: `POST /query`
 
 Retrieval only — does **not** call Ollama chat.
 
 - **Body**: JSON `{ "session_id": "...", "question": "...", "top_k": 8, "mode": "assistive", "user_name": "..." }`
-  - `user_name` (optional): User identity string from the Thunderbird add-on (email address, display name). Stored on the session (first-write wins) and included in system prompts for both query rewriting and chat answer generation.
+  - `user_name` (optional): User identity string (email address, display name). Stored on the session (first-write wins) and included in system prompts for both query rewriting and chat answer generation.
 - **Process**:
   1. **Query rewriting** (if `RAG_QUERY_REWRITE` is enabled): A single LLM call that produces:
      - `resolved_question`: The user's question with all relative references resolved (e.g. "the second email" → "the email from Mark Mitchell about project deadlines dated 2026-02-18"). Used as the final question in the chat prompt to avoid ambiguity with newly retrieved evidence.
@@ -75,7 +77,7 @@ Retrieval only — does **not** call Ollama chat.
 
 #### Phase 2: `POST /query/evidence`
 
-Thunderbird uploads raw RFC822 for each message_id returned by Phase 1.
+The client uploads raw RFC822 for each message_id returned by Phase 1.
 
 - **Content-Type**: `message/rfc822`
 - **Headers**:
@@ -124,7 +126,7 @@ Final answer generation.
 ## Module Structure
 
 ```
-ocaml-server/
+rag-o-mail/
 ├── bin/
 │   └── main.ml              # HTTP server, Ollama integration, session state,
 │                             # ingestion pipeline (with triage), query orchestration
@@ -146,7 +148,7 @@ ocaml-server/
 │   └── dune                  # Library dependencies: uri lambdasoup yojson unix mrmime
 │                             # angstrom base64 pecu uutf caqti caqti-eio caqti-driver-postgresql pg_query
 ├── bin/dune                  # Executable dependencies: rag_lib + eio cohttp-eio
-└── rag_email_server.opam     # Package metadata
+└── rag_o_mail.opam           # Package metadata
 ```
 
 ## Key Design Decisions
@@ -167,7 +169,7 @@ These scores are stored in metadata and included in both the vector index text (
 ### Session & Conversation Management
 
 Each session holds:
-- **user_name**: identity from the Thunderbird add-on (included in system prompts)
+- **user_name**: identity string from the mail client (included in system prompts)
 - **tail**: recent user/assistant turns (max 24). Assistant messages include an `EMAILS REFERENCED ABOVE` index so `[Email N]` citations remain resolvable.
 - **history_summary**: rolling LLM-compressed summary of older turns, with email references resolved to inline descriptions.
 
@@ -180,49 +182,46 @@ A single LLM call before retrieval produces:
 
 ## Configuration
 
-All configuration is via environment variables (with fallbacks to `~/.thunderrag/settings.json`).
+All configuration is in `~/.rag-o-mail/settings.json` (editable via the ThunderRAG add-on's Preferences page). There are no environment variable overrides for individual settings.
 
-### Ollama
-
-| Variable | Default | Description |
-|---|---|---|
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API base URL |
-| `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Model for `/api/embeddings` |
-| `OLLAMA_LLM_MODEL` | `llama3` | Model for `/api/chat` (main conversation) |
-| `OLLAMA_SUMMARIZE_MODEL` | (falls back to LLM_MODEL) | Model for summarization and query rewriting |
-| `OLLAMA_TRIAGE_MODEL` | (falls back to LLM_MODEL) | Model for email triage (action/importance scoring) |
-| `OLLAMA_TIMEOUT_SECONDS` | `300` | Timeout per Ollama request |
-
-### RAG Behavior
+The only environment variables are for file paths:
 
 | Variable | Default | Description |
 |---|---|---|
-| `RAG_CHUNK_SIZE` | `1500` | Characters per embedding chunk |
-| `RAG_CHUNK_OVERLAP` | `200` | Overlap between chunks |
-| `RAG_MAX_EVIDENCE_CHARS_PER_EMAIL` | `8000` | Max chars per email in evidence (recursively summarized beyond this) |
-| `RAG_NEW_CONTENT_MAX_CHARS` | `8000` | Max chars for NEW CONTENT section at ingestion |
-| `RAG_SUMMARIZE_MAX_INPUT_CHARS` | `20000` | Max chars per LLM summarization input chunk |
-| `RAG_QUERY_REWRITE` | `true` | Enable multi-query rewriting (contextual rewrite + HyDE + reference resolution) |
+| `RAGOMAIL_SETTINGS` | `~/.rag-o-mail/settings.json` | Path to the settings file |
+| `RAGOMAIL_PROMPTS` | `~/.rag-o-mail/prompts.json` | Path to the prompts file |
+| `RAGOMAIL_BULK_STATE` | `~/.rag-o-mail/bulk_ingest_state.json` | Path to bulk ingestion resume state |
 
-### Quoted Context & Attachments
+### settings.json keys
 
-| Variable | Default | Description |
+| Key path | Default | Description |
 |---|---|---|
-| `RAG_QUOTED_CONTEXT_SUMMARIZE` | `false` | LLM-summarize quoted thread context at ingestion |
-| `RAG_QUOTED_CONTEXT_MAX_LINES` | `100` | Max lines of quoted context to keep |
-| `RAG_QUOTED_CONTEXT_MAX_CHARS` | `8000` | Max chars for quoted context summary |
-| `RAG_ATTACHMENT_SUMMARIZE` | `false` | LLM-summarize attachments at ingestion |
-| `RAG_ATTACHMENT_MAX_ATTACHMENTS` | `4` | Max attachments to process per email |
-| `RAG_ATTACHMENT_MAX_CHARS` | `1500` | Max chars per attachment summary |
-| `RAG_ATTACHMENT_MAX_BYTES` | `5000000` | Max raw bytes per attachment to process |
-
-### Debugging
-
-| Variable | Description |
-|---|---|
-| `RAG_DEBUG_OLLAMA_EMBED=1` | Print Ollama embedding request JSON |
-| `RAG_DEBUG_OLLAMA_CHAT=1` | Print Ollama chat request/response JSON (full prompts) |
-| `RAG_DEBUG_RETRIEVAL=1` | Print retrieval queries, scores, and merged source summaries |
+| `ollama.base_url` | `http://localhost:11434` | Ollama API base URL |
+| `ollama.embed_model` | `nomic-embed-text` | Model for `/api/embeddings` |
+| `ollama.llm_model` | `llama3` | Model for `/api/chat` (main conversation) |
+| `ollama.summarize_model` | (falls back to `llm_model`) | Model for summarization and query rewriting |
+| `ollama.triage_model` | (falls back to `llm_model`) | Model for email triage (action/importance scoring) |
+| `ollama.timeout_seconds` | `300` | Timeout per Ollama request |
+| `ollama.num_ctx` | `32768` | Context window size (tokens) |
+| `pg.database` | `rag-o-mail` | PostgreSQL database name |
+| `pg.connection_string` | *(derived from database)* | Full PostgreSQL connection string (overrides database) |
+| `whoami` | `""` | User identity for triage and reply drafting |
+| `rag.chunk_size` | `1200` | Characters per embedding chunk |
+| `rag.chunk_overlap` | `200` | Overlap between chunks |
+| `rag.max_evidence_chars_per_email` | `8000` | Max chars per email in evidence (recursively summarized beyond this) |
+| `rag.new_content.max_chars` | `8000` | Max chars for NEW CONTENT section at ingestion |
+| `rag.summarize.max_input_chars` | `20000` | Max chars per LLM summarization input chunk |
+| `rag.query.rewrite` | `true` | Enable multi-query rewriting (contextual rewrite + HyDE + reference resolution) |
+| `rag.quoted_context.summarize` | `false` | LLM-summarize quoted thread context at ingestion |
+| `rag.quoted_context.max_lines` | `100` | Max lines of quoted context to keep |
+| `rag.quoted_context.max_chars` | `8000` | Max chars for quoted context summary |
+| `rag.attachments.summarize` | `false` | LLM-summarize attachments at ingestion |
+| `rag.attachments.max_attachments` | `4` | Max attachments to process per email |
+| `rag.attachments.max_chars` | `1500` | Max chars per attachment summary |
+| `rag.attachments.max_bytes` | `5000000` | Max raw bytes per attachment to process |
+| `debug.ollama_embed` | `false` | Print Ollama embedding request JSON |
+| `debug.ollama_chat` | `false` | Print Ollama chat request/response JSON (full prompts) |
+| `debug.retrieval` | `false` | Print retrieval queries, scores, and merged source summaries |
 
 ## Build / Run
 
@@ -231,20 +230,30 @@ Requires OCaml 5.x, opam, and PostgreSQL 17+ with pgvector and libpg_query:
 ```bash
 brew install postgresql@17 pgvector libpg_query
 brew services start postgresql@17
-createdb thunderrag
-psql -d thunderrag -c "CREATE EXTENSION IF NOT EXISTS vector;"
+createdb rag-o-mail
+psql -d rag-o-mail -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
-Then build and run:
+### macOS Library Path
+
+On Apple Silicon Macs, Homebrew installs PostgreSQL libraries under `/opt/homebrew/lib/postgresql@17`, which the OCaml linker doesn't find by default. Add this to your `~/.zshrc`:
+
+```bash
+export LIBRARY_PATH="/opt/homebrew/lib/postgresql@17:$LIBRARY_PATH"
+```
+
+Without this, `dune build` will fail with linker errors about missing `-lpq`.
+
+### Build and Run
 
 ```bash
 opam switch create . ocaml-base-compiler.5.2.0   # first time only
 opam install . --deps-only
 dune build
-dune exec -- rag-email-server -p 8080
+dune exec -- rag-o-mail -p 8080
 ```
 
-The server listens on the specified port (default 8080). On startup it connects to PostgreSQL (default `postgresql://localhost/thunderrag`, override with `THUNDERRAG_PG_URL`) and creates the schema if needed.
+The server listens on the specified port (default 8080). On startup it connects to PostgreSQL (default `postgresql://localhost/rag-o-mail`, override with `pg.connection_string` in settings.json) and creates the schema if needed.
 
 ## Dependencies
 

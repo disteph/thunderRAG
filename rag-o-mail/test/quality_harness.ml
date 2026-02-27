@@ -78,7 +78,7 @@ let extract_citations text =
 (* ---- find data files ---- *)
 
 let find_tests_dir () =
-  ["tests"; "ocaml-server/tests"; "../tests"]
+  ["tests"; "rag-o-mail/tests"; "../tests"]
   |> List.find (fun d -> Sys.file_exists (Filename.concat d "corpus.json"))
 
 (* ---- phases ---- *)

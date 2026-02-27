@@ -10,7 +10,7 @@
     "rewrite_model": "gpt-oss:20b"
   },
   "pg": {
-    "database": "thunderrag"
+    "database": "rag-o-mail"
   },
   "rag": {
     "chunk_size": 1200,

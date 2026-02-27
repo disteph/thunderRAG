@@ -230,6 +230,19 @@
     "",
     "IMPORTANT: Minimize the number of questions. The user wants to spend as little effort as possible. If you can reasonably infer the answer, do not ask.",
     "",
-    "FORMATTING: Never add introductions, preambles, narration, or meta-commentary (e.g. 'Let me ask you...', 'Great, let's proceed...', 'We should ask...'). Output ONLY the question itself, or ONLY the [DRAFT]/[NO_REPLY_NEEDED] markers. Be maximally terse."
+    "OUTPUT FORMAT — CRITICAL:",
+    "Your ENTIRE response must be ONE of these and NOTHING else:",
+    "  (a) A single short question — just the question sentence, nothing before or after it.",
+    "  (b) [NO_REPLY_NEEDED] followed by a one-sentence reason.",
+    "  (c) [DRAFT]...[/DRAFT] followed by [REPLY_TYPE] sender|all.",
+    "",
+    "FORBIDDEN patterns (if you catch yourself writing any of these, delete them):",
+    "  - 'We need to ask...' / 'I need to ask...' / 'Let me ask...'",
+    "  - 'One question:' / 'Here is a question:' / 'Quick question:'",
+    "  - 'This is a yes/no.' / 'Please answer yes or no.'",
+    "  - 'I will produce...' / 'Let me proceed...' / 'Short Yes/No Questions'",
+    "  - Any header, label, or meta-commentary before or after the question.",
+    "GOOD example: Should I mention that you will run the notebook and test the API?",
+    "BAD example: We need to ask one question: \"Should I mention that you will run the notebook?\" This is a yes/no."
   ]
 }

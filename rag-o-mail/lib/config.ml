@@ -6,17 +6,17 @@
   Call it again at any time (e.g. from /admin/reload) to pick up changes.
 *)
 
-(* User's home directory, used as the base for ~/.thunderRAG config dir. *)
-let thunderrag_home_dir () : string =
+(* User's home directory, used as the base for ~/.rag-o-mail config dir. *)
+let rag_home_dir () : string =
   match Sys.getenv_opt "HOME" with
   | Some h when String.trim h <> "" -> h
   | _ -> "."
 
 (* Mutable configuration directory.  Set via --config-dir before calling
-   load_settings().  Defaults to ~/.thunderRAG. *)
-let config_dir = ref (Filename.concat (thunderrag_home_dir ()) ".thunderRAG")
+   load_settings().  Defaults to ~/.rag-o-mail. *)
+let config_dir = ref (Filename.concat (rag_home_dir ()) ".rag-o-mail")
 
-let thunderrag_config_dir () : string = !config_dir
+let rag_config_dir () : string = !config_dir
 
 (* Create a directory (mode 0700) if it does not already exist; silently ignores errors. *)
 let ensure_dir (path : string) : unit =
@@ -24,15 +24,15 @@ let ensure_dir (path : string) : unit =
     if Sys.file_exists path then () else Unix.mkdir path 0o700
   with _ -> ()
 
-(* Resolve the path to settings.json: THUNDERRAG_SETTINGS env var, or <config_dir>/settings.json.
+(* Resolve the path to settings.json: RAGOMAIL_SETTINGS env var, or <config_dir>/settings.json.
    Supports ~ expansion. *)
 let settings_path () : string =
-  match Sys.getenv_opt "THUNDERRAG_SETTINGS" with
+  match Sys.getenv_opt "RAGOMAIL_SETTINGS" with
   | Some p when String.trim p <> "" ->
       let p = String.trim p in
-      if String.length p > 0 && p.[0] = '~' then Filename.concat (thunderrag_home_dir ()) (String.sub p 1 (String.length p - 1))
+      if String.length p > 0 && p.[0] = '~' then Filename.concat (rag_home_dir ()) (String.sub p 1 (String.length p - 1))
       else p
-  | _ -> Filename.concat (thunderrag_config_dir ()) "settings.json"
+  | _ -> Filename.concat (rag_config_dir ()) "settings.json"
 
 (* Load and parse settings.json from the current config dir. *)
 let read_settings_json () : Yojson.Safe.t option =
@@ -95,26 +95,6 @@ let setting_bool (json : Yojson.Safe.t option) (path : string list) ~(default : 
           | None -> default)
       | _ -> default)
 
-(* --- Environment variable helpers (env vars override settings.json) --- *)
-
-let env_string (name : string) (fallback : string) : string =
-  match Sys.getenv_opt name with
-  | Some s when String.trim s <> "" -> String.trim s
-  | _ -> fallback
-
-let env_int (name : string) (fallback : int) : int =
-  match Sys.getenv_opt name with
-  | Some s -> (try int_of_string (String.trim s) with _ -> fallback)
-  | None -> fallback
-
-let env_bool (name : string) (fallback : bool) : bool =
-  match Sys.getenv_opt name with
-  | Some s -> (
-      match String.lowercase_ascii (String.trim s) with
-      | "1" | "true" | "yes" | "on" -> true
-      | "0" | "false" | "no" | "off" -> false
-      | _ -> fallback)
-  | None -> fallback
 
 (* --- Mutable configuration refs (populated by load_settings) --- *)
 
@@ -145,63 +125,67 @@ let rag_attachment_use_pdftotext  = ref false
 let rag_attachment_use_pandoc     = ref false
 let rag_include_unrehydrated_metadata = ref true
 let rag_query_rewrite             = ref true
-let pg_database                   = ref "thunderrag"
-let pg_connection_string          = ref "postgresql://localhost/thunderrag"
+let pg_database                   = ref "rag-o-mail"
+let pg_connection_string          = ref "postgresql://localhost/rag-o-mail"
 let whoami                        = ref ""
 let rag_debug_ollama_embed        = ref false
 let rag_debug_ollama_chat         = ref false
 let rag_debug_retrieval           = ref false
 
-(* Read settings.json + env-var overrides into all config refs.
+(* Read settings.json into all config refs.
    Call once at startup after setting [config_dir], and again on /admin/reload. *)
 let load_settings () : unit =
   let j = read_settings_json () in
-  let ss env path ~default = env_string env (setting_string j path ~default) in
-  let si env path ~default = env_int    env (setting_int    j path ~default) in
-  let sb env path ~default = env_bool   env (setting_bool   j path ~default) in
+  let ss path ~default = setting_string j path ~default in
+  let si path ~default = setting_int    j path ~default in
+  let sb path ~default = setting_bool   j path ~default in
   ollama_timeout_seconds :=
-    (let default = 300.0 in
-     match Sys.getenv_opt "OLLAMA_TIMEOUT_SECONDS" with
-     | Some s -> (try float_of_string (String.trim s) with _ -> default)
-     | None -> default);
-  ollama_base_url       := ss "OLLAMA_BASE_URL"       [ "ollama"; "base_url" ]       ~default:"http://127.0.0.1:11434";
-  ollama_num_ctx        := si "OLLAMA_NUM_CTX"        [ "ollama"; "num_ctx" ]        ~default:32768;
-  ollama_embed_model    := ss "OLLAMA_EMBED_MODEL"    [ "ollama"; "embed_model" ]    ~default:"mxbai-embed-large";
-  ollama_llm_model      := ss "OLLAMA_LLM_MODEL"      [ "ollama"; "llm_model" ]      ~default:"llama3";
+    (match j with
+     | Some json -> (
+         match json_get_path json [ "ollama"; "timeout_seconds" ] with
+         | Some (`Float f) -> f
+         | Some (`Int n) -> Float.of_int n
+         | Some (`String s) -> (try float_of_string (String.trim s) with _ -> 300.0)
+         | _ -> 300.0)
+     | None -> 300.0);
+  ollama_base_url       := ss [ "ollama"; "base_url" ]       ~default:"http://127.0.0.1:11434";
+  ollama_num_ctx        := si [ "ollama"; "num_ctx" ]        ~default:32768;
+  ollama_embed_model    := ss [ "ollama"; "embed_model" ]    ~default:"mxbai-embed-large";
+  ollama_llm_model      := ss [ "ollama"; "llm_model" ]      ~default:"llama3";
   let llm = !ollama_llm_model in
-  let model_or_llm env path =
-    let v = ss env path ~default:"" in
+  let model_or_llm path =
+    let v = ss path ~default:"" in
     if String.trim v = "" then llm else v
   in
-  ollama_summarize_model := model_or_llm "OLLAMA_SUMMARIZE_MODEL" [ "ollama"; "summarize_model" ];
-  ollama_triage_model    := model_or_llm "OLLAMA_TRIAGE_MODEL"    [ "ollama"; "triage_model" ];
-  ollama_rewrite_model   := model_or_llm "OLLAMA_REWRITE_MODEL"   [ "ollama"; "rewrite_model" ];
-  rag_chunk_size         := si "RAG_CHUNK_SIZE"         [ "rag"; "chunk_size" ]         ~default:1200;
-  rag_chunk_overlap      := si "RAG_CHUNK_OVERLAP"      [ "rag"; "chunk_overlap" ]      ~default:200;
-  rag_max_evidence_chars_per_email := si "RAG_MAX_EVIDENCE_CHARS_PER_EMAIL" [ "rag"; "max_evidence_chars_per_email" ] ~default:8000;
-  rag_new_content_max_chars := si "RAG_NEW_CONTENT_MAX_CHARS" [ "rag"; "new_content"; "max_chars" ] ~default:8000;
-  rag_summarize_max_input_chars := si "RAG_SUMMARIZE_MAX_INPUT_CHARS" [ "rag"; "summarize"; "max_input_chars" ] ~default:20000;
-  rag_quoted_context_summarize  := sb "RAG_QUOTED_CONTEXT_SUMMARIZE"  [ "rag"; "quoted_context"; "summarize" ]  ~default:false;
-  rag_quoted_context_max_lines  := si "RAG_QUOTED_CONTEXT_MAX_LINES"  [ "rag"; "quoted_context"; "max_lines" ]  ~default:100;
-  rag_quoted_context_max_chars  := si "RAG_QUOTED_CONTEXT_MAX_CHARS"  [ "rag"; "quoted_context"; "max_chars" ]  ~default:8000;
-  rag_quoted_context_max_input_chars := si "RAG_QUOTED_CONTEXT_MAX_INPUT_CHARS" [ "rag"; "quoted_context"; "max_input_chars" ] ~default:20000;
-  rag_attachment_summarize      := sb "RAG_ATTACHMENT_SUMMARIZE"      [ "rag"; "attachments"; "summarize" ]      ~default:false;
-  rag_attachment_max_attachments := si "RAG_ATTACHMENT_MAX_ATTACHMENTS" [ "rag"; "attachments"; "max_attachments" ] ~default:4;
-  rag_attachment_max_chars      := si "RAG_ATTACHMENT_MAX_CHARS"      [ "rag"; "attachments"; "max_chars" ]      ~default:1500;
-  rag_attachment_max_input_chars := si "RAG_ATTACHMENT_MAX_INPUT_CHARS" [ "rag"; "attachments"; "max_input_chars" ] ~default:20000;
-  rag_attachment_max_bytes      := si "RAG_ATTACHMENT_MAX_BYTES"      [ "rag"; "attachments"; "max_bytes" ]      ~default:5_000_000;
-  rag_attachment_use_pdftotext  := sb "RAG_ATTACHMENT_USE_PDFTOTEXT"  [ "rag"; "attachments"; "use_pdftotext" ]  ~default:false;
-  rag_attachment_use_pandoc     := sb "RAG_ATTACHMENT_USE_PANDOC"     [ "rag"; "attachments"; "use_pandoc" ]     ~default:false;
-  rag_include_unrehydrated_metadata := sb "RAG_INCLUDE_UNREHYDRATED_METADATA" [ "rag"; "query"; "include_unrehydrated_metadata" ] ~default:true;
-  rag_query_rewrite     := sb "RAG_QUERY_REWRITE"     [ "rag"; "query"; "rewrite" ]     ~default:true;
-  pg_database           := ss "THUNDERRAG_PG_DATABASE" [ "pg"; "database" ]             ~default:"thunderrag";
-  (let explicit = ss "THUNDERRAG_PG_URL" [ "pg"; "connection_string" ] ~default:"" in
+  ollama_summarize_model := model_or_llm [ "ollama"; "summarize_model" ];
+  ollama_triage_model    := model_or_llm [ "ollama"; "triage_model" ];
+  ollama_rewrite_model   := model_or_llm [ "ollama"; "rewrite_model" ];
+  rag_chunk_size         := si [ "rag"; "chunk_size" ]         ~default:1200;
+  rag_chunk_overlap      := si [ "rag"; "chunk_overlap" ]      ~default:200;
+  rag_max_evidence_chars_per_email := si [ "rag"; "max_evidence_chars_per_email" ] ~default:8000;
+  rag_new_content_max_chars := si [ "rag"; "new_content"; "max_chars" ] ~default:8000;
+  rag_summarize_max_input_chars := si [ "rag"; "summarize"; "max_input_chars" ] ~default:20000;
+  rag_quoted_context_summarize  := sb [ "rag"; "quoted_context"; "summarize" ]  ~default:false;
+  rag_quoted_context_max_lines  := si [ "rag"; "quoted_context"; "max_lines" ]  ~default:100;
+  rag_quoted_context_max_chars  := si [ "rag"; "quoted_context"; "max_chars" ]  ~default:8000;
+  rag_quoted_context_max_input_chars := si [ "rag"; "quoted_context"; "max_input_chars" ] ~default:20000;
+  rag_attachment_summarize      := sb [ "rag"; "attachments"; "summarize" ]      ~default:false;
+  rag_attachment_max_attachments := si [ "rag"; "attachments"; "max_attachments" ] ~default:4;
+  rag_attachment_max_chars      := si [ "rag"; "attachments"; "max_chars" ]      ~default:1500;
+  rag_attachment_max_input_chars := si [ "rag"; "attachments"; "max_input_chars" ] ~default:20000;
+  rag_attachment_max_bytes      := si [ "rag"; "attachments"; "max_bytes" ]      ~default:5_000_000;
+  rag_attachment_use_pdftotext  := sb [ "rag"; "attachments"; "use_pdftotext" ]  ~default:false;
+  rag_attachment_use_pandoc     := sb [ "rag"; "attachments"; "use_pandoc" ]     ~default:false;
+  rag_include_unrehydrated_metadata := sb [ "rag"; "query"; "include_unrehydrated_metadata" ] ~default:true;
+  rag_query_rewrite     := sb [ "rag"; "query"; "rewrite" ]     ~default:true;
+  pg_database           := ss [ "pg"; "database" ]             ~default:"rag-o-mail";
+  (let explicit = ss [ "pg"; "connection_string" ] ~default:"" in
    pg_connection_string := if explicit <> "" then explicit
      else Printf.sprintf "postgresql://localhost/%s" !pg_database);
-  whoami                 := ss "THUNDERRAG_WHOAMI"      [ "whoami" ]                ~default:"";
-  rag_debug_ollama_embed := sb "RAG_DEBUG_OLLAMA_EMBED" [ "debug"; "ollama_embed" ] ~default:false;
-  rag_debug_ollama_chat  := sb "RAG_DEBUG_OLLAMA_CHAT"  [ "debug"; "ollama_chat" ]  ~default:false;
-  rag_debug_retrieval    := sb "RAG_DEBUG_RETRIEVAL"    [ "debug"; "retrieval" ]    ~default:false;
+  whoami                 := ss [ "whoami" ]                ~default:"";
+  rag_debug_ollama_embed := sb [ "debug"; "ollama_embed" ] ~default:false;
+  rag_debug_ollama_chat  := sb [ "debug"; "ollama_chat" ]  ~default:false;
+  rag_debug_retrieval    := sb [ "debug"; "retrieval" ]    ~default:false;
   Printf.printf "[config] loaded from %s (db=%s)\n%!" (settings_path ()) !pg_database
 
 (* Serialize all current settings to JSON matching the settings.json structure. *)
@@ -257,7 +241,7 @@ let current_settings_json () : Yojson.Safe.t =
 let write_settings_json (json : Yojson.Safe.t) : (unit, string) result =
   let path = settings_path () in
   try
-    ensure_dir (thunderrag_config_dir ());
+    ensure_dir (rag_config_dir ());
     let s = Yojson.Safe.pretty_to_string ~std:true json in
     let oc = open_out path in
     output_string oc s;
@@ -268,19 +252,19 @@ let write_settings_json (json : Yojson.Safe.t) : (unit, string) result =
 
 (* --- Prompts (hot-reloadable) --- *)
 
-(* Path to prompts.json: THUNDERRAG_PROMPTS env var, or ~/.thunderRAG/prompts.json. *)
+(* Path to prompts.json: RAGOMAIL_PROMPTS env var, or ~/.rag-o-mail/prompts.json. *)
 let prompts_path () : string =
-  match Sys.getenv_opt "THUNDERRAG_PROMPTS" with
+  match Sys.getenv_opt "RAGOMAIL_PROMPTS" with
   | Some p when String.trim p <> "" ->
       let p = String.trim p in
-      if String.length p > 0 && p.[0] = '~' then Filename.concat (thunderrag_home_dir ()) (String.sub p 1 (String.length p - 1))
+      if String.length p > 0 && p.[0] = '~' then Filename.concat (rag_home_dir ()) (String.sub p 1 (String.length p - 1))
       else p
-  | _ -> Filename.concat (thunderrag_config_dir ()) "prompts.json"
+  | _ -> Filename.concat (rag_config_dir ()) "prompts.json"
 
 (* Path to the default prompts.json shipped with the codebase.
-   Set via THUNDERRAG_DEFAULT_PROMPTS or auto-detected relative to the executable. *)
+   Set via RAGOMAIL_DEFAULT_PROMPTS or auto-detected relative to the executable. *)
 let default_prompts_path () : string =
-  match Sys.getenv_opt "THUNDERRAG_DEFAULT_PROMPTS" with
+  match Sys.getenv_opt "RAGOMAIL_DEFAULT_PROMPTS" with
   | Some p when String.trim p <> "" -> String.trim p
   | _ ->
       (* Try: directory of the executable / ../prompts.json (works for dune exec) *)
@@ -294,9 +278,9 @@ let default_prompts_path () : string =
         else candidate  (* will just fail gracefully later *)
 
 (* Path to the default settings.json shipped with the codebase.
-   Set via THUNDERRAG_DEFAULT_SETTINGS or auto-detected relative to the executable. *)
+   Set via RAGOMAIL_DEFAULT_SETTINGS or auto-detected relative to the executable. *)
 let default_settings_path () : string =
-  match Sys.getenv_opt "THUNDERRAG_DEFAULT_SETTINGS" with
+  match Sys.getenv_opt "RAGOMAIL_DEFAULT_SETTINGS" with
   | Some p when String.trim p <> "" -> String.trim p
   | _ ->
       let exe_dir = Filename.dirname Sys.executable_name in
@@ -310,7 +294,7 @@ let default_settings_path () : string =
 (* Copy a default file to the config directory if the target does not exist. *)
 let install_default_if_missing ~(src : string) ~(dst : string) : unit =
   if (not (Sys.file_exists dst)) && Sys.file_exists src then (
-    ensure_dir (thunderrag_config_dir ());
+    ensure_dir (rag_config_dir ());
     try
       let ic = open_in_bin src in
       let n = in_channel_length ic in
@@ -341,7 +325,7 @@ let load_prompts_json () : Yojson.Safe.t option =
 let write_prompts_json (json : Yojson.Safe.t) : (unit, string) result =
   let path = prompts_path () in
   try
-    ensure_dir (thunderrag_config_dir ());
+    ensure_dir (rag_config_dir ());
     let s = Yojson.Safe.pretty_to_string ~std:true json in
     let oc = open_out path in
     output_string oc s;

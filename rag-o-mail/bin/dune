@@ -1,7 +1,7 @@
 (executable
  (name main)
  (modules main tool_check)
- (public_name rag-email-server)
+ (public_name rag-o-mail)
  (promote (until-clean) (into ".."))
  (libraries rag_lib eio_main cohttp-eio uri yojson mrmime angstrom logs logs.fmt fmt bigstringaf unix lambdasoup))
 

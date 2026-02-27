@@ -4,8 +4,8 @@
 ThunderRAG/build/
 ThunderRAG/dist/
 
-ocaml-server/_build/
-ocaml-server/main.exe
+rag-o-mail/_build/
+rag-o-mail/main.exe
 
 __pycache__/
 *.pyc

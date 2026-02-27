@@ -1,4 +1,4 @@
-# ThunderRAG OCaml server — build, run, and test targets
+# RAG-o-Mail server — build, run, and test targets
 
 .PHONY: build install run clean test test-quick quality
 
@@ -9,26 +9,26 @@
 build:
 	dune build
 
-# Install settings.json and prompts.json to ~/.thunderRAG/ (the server
+# Install settings.json and prompts.json to ~/.rag-o-mail/ (the server
 # reads from there, not from the codebase copy).  Creates the directory
 # if needed.  Does not overwrite existing files.
 install: build
-	@mkdir -p ~/.thunderRAG
-	@if [ ! -f ~/.thunderRAG/settings.json ]; then \
-		cp settings.json ~/.thunderRAG/settings.json; \
-		echo "[install] settings.json -> ~/.thunderRAG/settings.json"; \
+	@mkdir -p ~/.rag-o-mail
+	@if [ ! -f ~/.rag-o-mail/settings.json ]; then \
+		cp settings.json ~/.rag-o-mail/settings.json; \
+		echo "[install] settings.json -> ~/.rag-o-mail/settings.json"; \
 	else \
 		echo "[install] settings.json already exists, skipping"; \
 	fi
-	@if [ ! -f ~/.thunderRAG/prompts.json ]; then \
-		cp prompts.json ~/.thunderRAG/prompts.json; \
-		echo "[install] prompts.json -> ~/.thunderRAG/prompts.json"; \
+	@if [ ! -f ~/.rag-o-mail/prompts.json ]; then \
+		cp prompts.json ~/.rag-o-mail/prompts.json; \
+		echo "[install] prompts.json -> ~/.rag-o-mail/prompts.json"; \
 	else \
 		echo "[install] prompts.json already exists, skipping"; \
 	fi
 
 run: build
-	dune exec -- rag-email-server -p 8080
+	dune exec -- rag-o-mail -p 8080
 
 clean:
 	dune clean
@@ -41,11 +41,11 @@ TEST_URL ?= http://localhost:8080
 
 # Run the full Alcotest integration suite
 test: build
-	THUNDERRAG_TEST_URL=$(TEST_URL) dune exec test/run_tests.exe
+	RAGOMAIL_TEST_URL=$(TEST_URL) dune exec test/run_tests.exe
 
 # Quick tests only (routing + admin — no Ollama needed)
 test-quick: build
-	THUNDERRAG_TEST_URL=$(TEST_URL) dune exec test/run_tests.exe -- --quick
+	RAGOMAIL_TEST_URL=$(TEST_URL) dune exec test/run_tests.exe -- --quick
 
 # Quality harness (ingests corpus, runs scored query battery)
 quality: build

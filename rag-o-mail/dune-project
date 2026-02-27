@@ -1,10 +1,10 @@
 (lang dune 3.13)
-(name rag_email_server)
+(name rag_o_mail)
 (generate_opam_files true)
 
 (package
-  (name rag_email_server)
-  (synopsis "Simple HTTP server to accept RFC822 emails and print text/plain parts")
+  (name rag_o_mail)
+  (synopsis "Local RAG server for email: ingestion, triage, vector search, and LLM-assisted reply drafting")
   (license "MIT")
   (authors "")
   (maintainers "")

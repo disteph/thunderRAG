@@ -20,12 +20,8 @@
        - Extracts body text again (same normalization as ingestion), builds the final prompt, calls
          Ollama /api/chat, updates session state, returns answer + metadata-only emails for UI.
 
-  Key environment variables
-  - OLLAMA_BASE_URL, OLLAMA_EMBED_MODEL, OLLAMA_LLM_MODEL
-  - RAG_MAX_EVIDENCE_SOURCES, RAG_MAX_EVIDENCE_CHARS_PER_EMAIL
-  - RAG_DEBUG_OLLAMA_EMBED=1: print Ollama /api/embed request JSON (ingestion + query-time)
-  - RAG_DEBUG_RETRIEVAL=1: print retrieval payloads (/api/embed + /query_embedded) and response summary
-  - RAG_DEBUG_OLLAMA_CHAT=1: print Ollama /api/chat request JSON (final generation prompt)
+  All configuration is in ~/.rag-o-mail/settings.json (no environment variable overrides).
+  Debug flags: debug.ollama_embed, debug.retrieval, debug.ollama_chat in settings.json.
 *)
 
 open Eio.Std
@@ -34,7 +30,7 @@ let () = Tool_check.ensure ()
 
 open Rag_lib.Config
 
-let () = ensure_dir (thunderrag_config_dir ())
+let () = ensure_dir (rag_config_dir ())
 
 (* Ingestion tracking is now in PostgreSQL via Rag_lib.Pg. *)
 
@@ -105,8 +101,8 @@ let get_uri ~client ~sw:_ ~(uri : Uri.t) : (Http.Response.t * string) =
   - ollama_chat: used only for final generation once all evidence has been uploaded.
 
   Debugging
-  - RAG_DEBUG_OLLAMA_EMBED=1 prints the exact embeddings request JSON.
-  - RAG_DEBUG_OLLAMA_CHAT=1 prints the exact chat request JSON.
+  - debug.ollama_embed in settings.json prints the exact embeddings request JSON.
+  - debug.ollama_chat in settings.json prints the exact chat request JSON.
 *)
 type call_stats = { mutable total : float; mutable count : int }
 let make_stats () = { total = 0.; count = 0 }
@@ -247,19 +243,15 @@ let ollama_embed ~client ~sw ?(task : embed_task option) ?(label = "") ?(stats :
    | _ -> ());
   result
 
-let ollama_chat ~client ~sw ?(label = "") ?(stats : call_stats option) ?(model = "") ~(messages : Yojson.Safe.t list) () : (string, string) result =
+let ollama_chat ~client ~sw ?(label = "") ?(stats : call_stats option) ?(model = "") ?(stop : string list = []) ~(messages : Yojson.Safe.t list) () : (string, string) result =
   let t0 = Unix.gettimeofday () in
   let effective_model = if String.trim model <> "" then String.trim model else !ollama_llm_model in
   let uri = Uri.of_string (!ollama_base_url ^ "/api/chat") in
-  (* Stop sequences to prevent models from emitting tool/function-call
-     special tokens that crash Ollama's harmony parser (see harmonyparser.go). *)
-  let stop_seqs = `List [ `String "<|channel|>"; `String "<|tool_call|>"; `String "<|function_call|>" ] in
   let max_retries = 2 in
   let rec attempt n =
     let base_opts =
-      [ ("num_ctx", `Int !ollama_num_ctx)
-      ; ("stop", stop_seqs)
-      ]
+      [ ("num_ctx", `Int !ollama_num_ctx) ]
+      @ (if stop <> [] then [ ("stop", `List (List.map (fun s -> `String s) stop)) ] else [])
     in
     let options =
       if n = 0 then base_opts
@@ -1643,7 +1635,7 @@ let collect_mbox_files_with_progress ~recursive ~(on_progress : int -> int -> st
   Tracks per-file progress (byte position, completion flag) so that
   a restarted bulk ingest can resume where it left off rather than
   re-processing already-seen messages.  State is saved as JSON to
-  ~/.thunderrag/bulk_ingest_state.json (or $RAG_BULK_STATE).
+  ~/.rag-o-mail/bulk_ingest_state.json (or $RAGOMAIL_BULK_STATE).
 *)
 type bulk_file_state =
   { size : int
@@ -1653,10 +1645,10 @@ type bulk_file_state =
   }
 
 let bulk_state_path () : string =
-  match Sys.getenv_opt "RAG_BULK_STATE" with
+  match Sys.getenv_opt "RAGOMAIL_BULK_STATE" with
   | Some p when String.trim p <> "" -> expand_home p
   | _ ->
-      Filename.concat (thunderrag_config_dir ()) "bulk_ingest_state.json"
+      Filename.concat (rag_config_dir ()) "bulk_ingest_state.json"
 
 let load_bulk_state () : (string, bulk_file_state) Hashtbl.t =
   let tbl = Hashtbl.create 128 in
@@ -2529,7 +2521,7 @@ let handler ~client ~sw ~clock _socket request body =
       let settings_raw = match read_file_opt (settings_path ()) with Some s -> s | None -> "{}" in
       let prompts_raw = match read_file_opt (prompts_path ()) with Some s -> s | None -> "{}" in
       let body = Printf.sprintf {|{"config_dir":%s,"settings":%s,"prompts":%s}|}
-        (Yojson.Safe.to_string (`String (thunderrag_config_dir ())))
+        (Yojson.Safe.to_string (`String (rag_config_dir ())))
         settings_raw prompts_raw
       in
       Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
@@ -4427,12 +4419,12 @@ let () =
   let port = ref 8080 in
   Arg.parse
     [ ("-p", Arg.Set_int port, " Listening port number (8080 by default)")
-    ; ("--config-dir", Arg.Set_string config_dir, " Config directory for settings.json and prompts.json (default: ~/.thunderRAG)")
+    ; ("--config-dir", Arg.Set_string config_dir, " Config directory for settings.json and prompts.json (default: ~/.rag-o-mail)")
     ]
     ignore "RAG email ingest server";
 
   (* Install defaults to config dir if not already present, then load *)
-  ensure_dir (thunderrag_config_dir ());
+  ensure_dir (rag_config_dir ());
   install_default_if_missing
     ~src:(default_settings_path ())
     ~dst:(settings_path ());
@@ -4476,7 +4468,7 @@ let () =
     with Unix.Unix_error (Unix.EADDRINUSE, _, _) ->
       Printf.eprintf
         "Error: port %d is already in use.\n\
-         Another instance of rag-email-server (or another process) is likely running on that port.\n\
+         Another instance of rag-o-mail (or another process) is likely running on that port.\n\
          Try:  lsof -ti:%d | xargs kill   or use a different port with -p <port>\n%!"
         !port !port;
       exit 1

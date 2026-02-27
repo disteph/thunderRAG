@@ -211,12 +211,13 @@ function renderMidPane() {
   // Scroll chat to bottom
   requestAnimationFrame(() => { chat.scrollTop = chat.scrollHeight; });
 
-  // Composer (only if interviewing)
-  if (st.status === "interviewing") {
+  // Composer (interviewing or drafted — user can request changes to draft)
+  if (st.status === "interviewing" || st.status === "drafted") {
     const composer = document.createElement("div");
     composer.className = "mid-composer";
+    const placeholder = st.status === "drafted" ? "Ask for changes to the draft…" : "Your answer…";
     composer.innerHTML = `
-      <textarea id="replyInput" rows="1" placeholder="Your answer…"></textarea>
+      <textarea id="replyInput" rows="1" placeholder="${placeholder}"></textarea>
       <button id="sendAnswer">Send</button>
     `;
     pane.appendChild(composer);
@@ -245,6 +246,13 @@ function cleanMessageForDisplay(content, role) {
     s = before ? before + "\n\n" + placeholder : placeholder;
   }
   s = s.replace(/\[NO_REPLY_NEEDED\]\s*/g, "").trim();
+  // Strip common LLM preamble/meta-commentary around questions
+  s = s.replace(/^(?:(?:We |I )need to ask[^:]*:\s*|(?:One|Here is a|Quick) question:\s*|Let me ask[^:]*:\s*)/i, "");
+  s = s.replace(/\s*(?:This is a yes\/no\.?|Please answer yes or no\.?)\s*$/i, "").trim();
+  // Strip wrapping quotes the model may add around the question
+  if (/^".*"$/.test(s)) s = s.slice(1, -1).trim();
+  // Strip markdown bold headers like **Short Yes/No Questions**\n
+  s = s.replace(/^\*\*[^*]+\*\*\s*/g, "").trim();
   return s || content;
 }
 
@@ -390,7 +398,7 @@ async function startReplyFlow(id) {
 
 async function sendAnswer(st, inputEl) {
   const text = inputEl.value.trim();
-  if (!text || st.status !== "interviewing") return;
+  if (!text || (st.status !== "interviewing" && st.status !== "drafted")) return;
 
   st.messages.push({ role: "user", content: text });
   st.status = "loading";

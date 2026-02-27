@@ -6,7 +6,7 @@
 
   Usage:
     dune exec test/run_tests.exe
-    THUNDERRAG_TEST_URL=http://localhost:9090 dune exec test/run_tests.exe
+    RAGOMAIL_TEST_URL=http://localhost:9090 dune exec test/run_tests.exe
     dune exec test/run_tests.exe -- --quick   # skip slow tests
 *)
 

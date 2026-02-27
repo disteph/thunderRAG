@@ -51,8 +51,7 @@
     .hint { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
     .sticky-header {
       position: sticky; top: 0; z-index: 20;
-      background: var(--bg); padding: 0 0 10px;
-      border-bottom: 1px solid var(--border); margin-bottom: 16px;
+      background: var(--bg); padding: 0;
     }
     .sticky-header .info-block {
       margin-top: 0; margin-bottom: 8px; padding: 8px 12px;
@@ -117,39 +116,51 @@
 <body>
   <h1>ThunderRAG Settings</h1>
 
-  <!-- Sticky toolbar: status + endpoints + save/reset -->
+  <!-- Sticky toolbar: status -->
   <div class="sticky-header" id="sticky-header">
     <div class="status" id="status"></div>
-
-    <div class="info-block">
-      <strong>Filter endpoints</strong><br>
-      <strong>Ingest:</strong> <code id="endpointIngest">http://localhost:8080/ingest</code><br>
-      <strong>Mark processed:</strong> <code id="endpointMarkProcessed">http://localhost:8080/admin/mark_processed</code>
-    </div>
-
-    <div class="btn-bar" id="settings-btn-bar" style="display:none;">
-      <button class="btn" id="saveSettingsBtn">Save settings</button>
-      <button class="btn-reset" id="resetSettingsBtn">Reset to defaults</button>
-      <span class="dirty-indicator" id="settingsDirty"></span>
-    </div>
-    <div class="path-info" id="settingsPathInfo"></div>
   </div>
 
-  <!-- Server URL — stored locally, needed to reach server -->
+  <!-- ===== Section 1: Add-on configuration (stored locally) ===== -->
+  <h2>Add-on settings</h2>
+
   <div class="field">
-    <label for="serverUrl">Server URL</label>
+    <label for="serverUrl">RAG-o-Mail URL</label>
     <input id="serverUrl" type="text" placeholder="http://localhost:8080" />
-    <div class="hint">Base URL of the ThunderRAG OCaml server.</div>
+    <div class="hint">Base URL of the RAG-o-Mail server.</div>
   </div>
 
-  <!-- Dynamic settings from server -->
+  <div class="field">
+    <label for="localTopK">Default number of sources (top-K)</label>
+    <input id="localTopK" type="number" min="1" max="50" style="width:100px; max-width:100px;" />
+    <div class="hint">How many emails to retrieve per query. Saved locally.</div>
+  </div>
+
+  <div class="info-block">
+    <strong>Filter endpoints</strong> (derived from the URL above)<br>
+    <strong>Ingest:</strong> <code id="endpointIngest">http://localhost:8080/ingest</code><br>
+    <strong>Mark processed:</strong> <code id="endpointMarkProcessed">http://localhost:8080/admin/mark_processed</code>
+  </div>
+
+  <!-- ===== Section 2: RAG-o-Mail server settings (settings.json) ===== -->
+  <h2>RAG-o-Mail settings</h2>
+  <div class="hint" style="margin-bottom:12px;">These settings are stored on the server in <code>~/.rag-o-mail/settings.json</code>.</div>
+
   <div id="settings-container" class="loading">
     <div style="color:var(--muted); font-size:0.9rem; padding:20px 0;">Loading settings from server…</div>
   </div>
 
-  <!-- Collapsible prompts section -->
+  <div class="btn-bar" id="settings-btn-bar" style="display:none;">
+    <button class="btn" id="saveSettingsBtn">Save settings</button>
+    <button class="btn-reset" id="resetSettingsBtn">Reset to defaults</button>
+    <span class="dirty-indicator" id="settingsDirty"></span>
+  </div>
+  <div class="path-info" id="settingsPathInfo"></div>
+
+  <!-- ===== Section 3: Prompts (prompts.json) ===== -->
   <details class="prompts-section" id="prompts-section">
     <summary>Prompts</summary>
+    <div class="hint" style="margin:8px 0;">Stored on the server in <code>~/.rag-o-mail/prompts.json</code>.</div>
     <div id="prompts-container" style="color:var(--muted); font-size:0.9rem; padding:10px 0;">
       Click to load prompts from the server…
     </div>

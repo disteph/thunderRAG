@@ -28,7 +28,7 @@ function statusMsg(text, isError) {
 const SETTINGS_SCHEMA = [
   { section: "Identity" },
   { key: "whoami", path: ["whoami"], label: "Who am I", type: "textarea",
-    hint: "Your name, email, role. Used by the LLM for triage." },
+    hint: "Your name, email, role. Used by the LLM for triage and reply drafting." },
 
   { section: "Ollama" },
   { key: "ollama.base_url", path: ["ollama","base_url"], label: "Ollama base URL", type: "text" },
@@ -169,29 +169,6 @@ function renderSettings(settings, models) {
   container.innerHTML = "";
   container.classList.remove("loading");
 
-  /* Local-only top-K field */
-  const topKDiv = document.createElement("div");
-  topKDiv.innerHTML = `
-    <h2>Query defaults</h2>
-    <div class="field">
-      <label for="opt-defaultTopK">Default number of sources (top-K)</label>
-      <input id="opt-defaultTopK" type="number" min="1" max="50" value="${DEFAULT_TOPK}"
-             style="width:100px; max-width:100px;" />
-      <div class="hint">Stored locally in the add-on. Saved immediately on change.</div>
-    </div>`;
-  container.appendChild(topKDiv);
-  browser.storage.local.get(TOPK_KEY).then(d => {
-    const el = document.getElementById("opt-defaultTopK");
-    if (el) el.value = d[TOPK_KEY] || DEFAULT_TOPK;
-  });
-  const topKEl = topKDiv.querySelector("input");
-  topKEl.addEventListener("change", async () => {
-    const v = Math.max(1, Math.min(50, parseInt(topKEl.value, 10) || DEFAULT_TOPK));
-    topKEl.value = v;
-    await browser.storage.local.set({ [TOPK_KEY]: v });
-    statusMsg("Top-K saved locally.");
-  });
-
   for (const f of SETTINGS_SCHEMA) {
     if (f.section) {
       const h = document.createElement("h2");
@@ -265,7 +242,7 @@ async function fetchAndRender() {
     const container = document.getElementById("settings-container");
     container.innerHTML = `<div style="color:var(--error); padding:20px 0;">
       Cannot reach server at <strong>${base}</strong>: ${e.message}<br/>
-      Check the Server URL above and ensure the OCaml server is running.</div>`;
+      Check the RAG-o-Mail URL above and ensure the server is running.</div>`;
     container.classList.remove("loading");
     document.getElementById("settings-btn-bar").style.display = "none";
     statusMsg("Server unreachable", true);
@@ -448,6 +425,8 @@ async function init() {
   const serverUrl = data[STORAGE_KEY] || DEFAULT_SERVER_URL;
   document.getElementById("serverUrl").value = serverUrl;
 
+  /* ---- Add-on local fields ---- */
+
   /* Server URL: save locally on change, then reload settings */
   const urlInput = document.getElementById("serverUrl");
   let urlSaveTimer = null;
@@ -467,6 +446,19 @@ async function init() {
   urlInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); onUrlChange(); }
   });
+
+  /* Top-K: save locally on change */
+  const topKInput = document.getElementById("localTopK");
+  const topKData = await browser.storage.local.get(TOPK_KEY);
+  topKInput.value = topKData[TOPK_KEY] || DEFAULT_TOPK;
+  topKInput.addEventListener("change", async () => {
+    const v = Math.max(1, Math.min(50, parseInt(topKInput.value, 10) || DEFAULT_TOPK));
+    topKInput.value = v;
+    await browser.storage.local.set({ [TOPK_KEY]: v });
+    statusMsg("Top-K saved locally.");
+  });
+
+  /* ---- Server-side settings & prompts ---- */
 
   /* Save / Reset settings buttons */
   document.getElementById("saveSettingsBtn").addEventListener("click", saveSettingsToServer);
