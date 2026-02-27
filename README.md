@@ -249,4 +249,4 @@ ThunderRAG/
 
 ## License
 
-TBD
+[MIT](LICENSE)
