@@ -6,8 +6,11 @@
   (name rag_o_mail)
   (synopsis "Local RAG server for email: ingestion, triage, vector search, and LLM-assisted reply drafting")
   (license "MIT")
-  (authors "")
-  (maintainers "")
+  (authors "Stéphane Graham-Lengrand <stephane.graham-lengrand@sri.com>")
+  (maintainers "Stéphane Graham-Lengrand <stephane.graham-lengrand@sri.com>")
+  (homepage "https://github.com/disteph/thunderRAG")
+  (bug_reports "https://github.com/disteph/thunderRAG/issues")
+  (source (github disteph/thunderRAG))
   (depends
    (ocaml (>= 5.1))
    (dune (>= 3.13))

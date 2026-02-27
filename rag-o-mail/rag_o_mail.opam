@@ -2,9 +2,11 @@
 opam-version: "2.0"
 synopsis:
   "Local RAG server for email: ingestion, triage, vector search, and LLM-assisted reply drafting"
-maintainer: [""]
-authors: [""]
+maintainer: ["Stéphane Graham-Lengrand <stephane.graham-lengrand@sri.com>"]
+authors: ["Stéphane Graham-Lengrand <stephane.graham-lengrand@sri.com>"]
 license: "MIT"
+homepage: "https://github.com/disteph/thunderRAG"
+bug-reports: "https://github.com/disteph/thunderRAG/issues"
 depends: [
   "ocaml" {>= "5.1"}
   "dune" {>= "3.13" & >= "3.13"}
@@ -38,3 +40,4 @@ build: [
     "@doc" {with-doc}
   ]
 ]
+dev-repo: "git+https://github.com/disteph/thunderRAG.git"
