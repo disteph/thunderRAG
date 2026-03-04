@@ -220,10 +220,15 @@ let extract_body_parts (raw : string) : body_parts =
   | Ok _ ->
       (* mrmime's Mail.stream already decodes Content-Transfer-Encoding (QP, base64),
          so we must NOT call maybe_decode_transfer_encoding here — that would double-decode.
-         Normalize \r\n → \n in the decoded output for consistent downstream handling. *)
-      let plain = Buffer.contents plain_buf |> normalize_newlines_for_parsing |> decode_html_entities |> String.trim in
+         Normalize \r\n → \n in the decoded output for consistent downstream handling.
+         Defence-in-depth: if mrmime emitted raw base64 without decoding, decode it now. *)
+      let maybe_decode_b64 s =
+        if looks_like_base64 s then (match decode_base64 s with Some d -> d | None -> s)
+        else s
+      in
+      let plain = Buffer.contents plain_buf |> maybe_decode_b64 |> normalize_newlines_for_parsing |> decode_html_entities |> String.trim in
       let plain = if looks_like_html_markup plain then strip_html plain |> String.trim else plain in
-      let html = Buffer.contents html_buf |> normalize_newlines_for_parsing |> String.trim in
+      let html = Buffer.contents html_buf |> maybe_decode_b64 |> normalize_newlines_for_parsing |> String.trim in
       if plain <> "" then (
         if html <> "" then (
           let p = split_new_vs_quoted_plain plain in

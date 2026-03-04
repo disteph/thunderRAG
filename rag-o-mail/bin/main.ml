@@ -362,6 +362,17 @@ let strip_summary_preamble (s : string) : string =
       || starts_with "summary" lower
       || starts_with "summarized" lower
       || starts_with "quoted context" lower
+      || starts_with "important:" lower
+      || starts_with "note:" lower
+      || contains_substring ~sub:"i have compressed" lower
+      || contains_substring ~sub:"compressed it to" lower
+      || contains_substring ~sub:"key details preserved" lower
+      || contains_substring ~sub:"key details:" lower
+      || contains_substring ~sub:"downstream triage" lower
+      || contains_substring ~sub:"losing these" lower
+      || contains_substring ~sub:"roughly 50%" lower
+      || contains_substring ~sub:"% of the original" lower
+      || contains_substring ~sub:"do not exceed" lower
   in
   let rec drop = function
     | [] -> []
