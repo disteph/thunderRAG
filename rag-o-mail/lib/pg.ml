@@ -243,6 +243,27 @@ let purge_empty_metadata () : (int, string) result =
         | Error _ as e -> e
         | Ok () -> Ok n)
 
+let purge_base64_chunks () : (int, string) result =
+  let count_sql = {|SELECT COUNT(DISTINCT ec.doc_id)::int
+    FROM email_chunks ec
+    WHERE ec.chunk_text ~ '^[A-Za-z0-9+/=\s]{100,}$'
+       OR ec.chunk_text ~ 'PGh0bW'|} in
+  let count_req = Caqti_request.Infix.(Caqti_type.unit ->! Caqti_type.int) ~oneshot:true count_sql in
+  let del_sql = {|DELETE FROM emails WHERE doc_id IN (
+    SELECT DISTINCT ec.doc_id FROM email_chunks ec
+    WHERE ec.chunk_text ~ '^[A-Za-z0-9+/=\s]{100,}$'
+       OR ec.chunk_text ~ 'PGh0bW')|} in
+  let del_req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true del_sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.find count_req () with
+    | Error _ as e -> e
+    | Ok n ->
+        if n = 0 then Ok 0
+        else
+          match C.exec del_req () with
+          | Error _ as e -> e
+          | Ok () -> Ok n)
+
 let delete_email (doc_id : string) : (unit, string) result =
   let doc_id = normalize_doc_id doc_id in
   let sql = "DELETE FROM emails WHERE doc_id = $1" in

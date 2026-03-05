@@ -4487,6 +4487,11 @@ let () =
    | Ok 0 -> ()
    | Ok n -> Printf.printf "[startup] purged %d emails with empty metadata (from/to/subject all blank)\n%!" n
    | Error e -> Printf.eprintf "[startup] purge_empty_metadata error: %s\n%!" e);
+  (* Purge emails whose chunks contain raw base64 (body extraction failed to decode) *)
+  (match Rag_lib.Pg.purge_base64_chunks () with
+   | Ok 0 -> ()
+   | Ok n -> Printf.printf "[startup] purged %d emails with base64-encoded chunks (body was not decoded)\n%!" n
+   | Error e -> Printf.eprintf "[startup] purge_base64_chunks error: %s\n%!" e);
   let socket =
     try
       Eio.Net.listen env#net ~sw ~backlog:128 ~reuse_addr:true
