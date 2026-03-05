@@ -205,6 +205,20 @@ let looks_like_base64 (s : string) : bool =
   String.length cleaned >= 80
   && Result.is_ok (Base64.decode ~pad:false cleaned)
 
+(* Broader heuristic: does this string consist mostly of base64 alphabet characters?
+   Unlike looks_like_base64, this does NOT require a successful trial decode —
+   it catches base64 content even when minor corruption prevents full decoding. *)
+let looks_like_base64_chars (s : string) : bool =
+  let total = ref 0 in
+  let b64 = ref 0 in
+  String.iter (fun c ->
+    match c with
+    | ' ' | '\t' | '\r' | '\n' -> ()
+    | 'A'..'Z' | 'a'..'z' | '0'..'9' | '+' | '/' | '=' -> incr total; incr b64
+    | _ -> incr total
+  ) s;
+  !total >= 80 && Float.of_int !b64 /. Float.of_int !total >= 0.95
+
 (* Best-effort Content-Transfer-Encoding decode when the CTE header is unavailable.
    Tries quoted-printable (if '=' present), then base64 (if it looks like it). *)
 let maybe_decode_transfer_encoding (s : string) : string =

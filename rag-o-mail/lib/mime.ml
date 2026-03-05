@@ -224,6 +224,15 @@ let is_text_html (header : Mrmime.Header.t) : bool =
   | `Text -> String.lowercase_ascii subty = "html"
   | _ -> false
 
+(* Check if a mrmime header indicates text/calendar content type. *)
+let is_text_calendar (header : Mrmime.Header.t) : bool =
+  let ct = Mrmime.Header.content_type header in
+  let ty = Mrmime.Content_type.ty ct in
+  let subty = Mrmime.Content_type.subty ct |> Mrmime.Content_type.Subtype.to_string in
+  match ty with
+  | `Text -> String.lowercase_ascii subty = "calendar"
+  | _ -> false
+
 (* Scan raw RFC822 text for Content-Disposition/Content-Type headers and collect
    all unique attachment filenames.  Used to populate metadata.attachments. *)
 let extract_attachment_filenames (raw : string) : string list =
