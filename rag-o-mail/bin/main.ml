@@ -1477,15 +1477,39 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
   let parts = extract_body_parts raw in
   let new_body = String.trim parts.new_text |> sanitize_utf8 in
   let quoted_raw = String.trim parts.quoted_text |> sanitize_utf8 in
-  (* Early rejection if body contains [ERROR:] markers (e.g. encrypted/encoded body) —
-     skip expensive triage, summarization, and embedding *)
+  (* Partial ingestion: body contains [ERROR:] markers (e.g. encrypted/encoded body) —
+     skip triage, summarization, and embedding but still store metadata *)
   if body_text_has_error_marker new_body || body_text_has_error_marker quoted_raw then (
     let ndoc = Rag_lib.Pg.normalize_doc_id doc_id in
-    Printf.eprintf "[ingest.rejected] doc_id=%s reason=error_marker_in_body (likely encrypted/encoded)\n%!" ndoc;
-    let resp = Http.Response.make ~status:`Bad_request () in
-    (resp, Yojson.Safe.to_string
-      (`Assoc [ ("ok", `Bool false); ("doc_id", `String doc_id)
-              ; ("error", `String "email body contains [ERROR:] markers — likely encrypted or unreadable") ])))
+    Printf.printf "[ingest.partial] doc_id=%s reason=error_marker_in_body — storing metadata only\n%!" ndoc;
+    let attachments = extract_attachment_filenames raw in
+    let att_pg_array =
+      let escaped = List.map (fun f ->
+        "\"" ^ String.concat "\\\"" (String.split_on_char '"' f) ^ "\"") attachments in
+      "{" ^ String.concat "," escaped ^ "}"
+    in
+    (match Rag_lib.Pg.upsert_email
+        ~doc_id ~embed_model:!ollama_embed_model ~triage_model:!ollama_triage_model
+        ~summarize_model:!ollama_summarize_model
+        ~sender:from_ ~recipient:to_ ~cc:cc_ ~bcc:bcc_ ~subject
+        ~email_date:(parse_rfc822_to_iso8601 date_)
+        ~attachments_json:att_pg_array
+        ~action_score:None ~importance_score:None ~reply_by:""
+        ~ingested_at:(now_utc_iso8601 ())
+        ~whoami
+        ~on_done:(record stats_pg_upsert) ()
+    with
+    | Error e ->
+        Printf.eprintf "[ingest.partial.error] upsert_email: %s\n%!" e;
+        let resp = Http.Response.make ~status:`Internal_server_error () in
+        (resp, Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
+    | Ok () ->
+        Printf.printf "[ingest.partial.ok] doc_id=%s metadata_only=true\n%!" ndoc;
+        let resp = Http.Response.make ~status:`OK () in
+        (resp, Yojson.Safe.to_string
+          (`Assoc [ ("ok", `Bool true); ("doc_id", `String doc_id)
+                  ; ("partial", `Bool true)
+                  ; ("reason", `String "body encrypted/unreadable — metadata only") ]))))
   else
   let attachment_summaries = attachment_summaries_of_raw ~client ~sw ~raw in
   let attachments_section = format_attachment_summaries_for_text attachment_summaries in
