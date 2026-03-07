@@ -119,6 +119,8 @@ let schema_statements () =
   ; Printf.sprintf
       {|ALTER TABLE tasks ADD COLUMN IF NOT EXISTS embedding vector(%d)|}
       !rag_vector_dimension
+  ; {|ALTER TABLE tasks ADD COLUMN IF NOT EXISTS context_emails JSONB NOT NULL DEFAULT '[]'|}
+  ; {|ALTER TABLE tasks ADD COLUMN IF NOT EXISTS context_prefetched BOOLEAN NOT NULL DEFAULT FALSE|}
   ; {|CREATE TABLE IF NOT EXISTS task_emails (
        task_id  TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
        doc_id   TEXT NOT NULL,
@@ -581,7 +583,9 @@ let get_task (task_id : string)
            t.conversation::text,
            t.history_summary,
            t.drafts::text,
-           t.notes
+           t.notes,
+           t.context_emails::text,
+           t.context_prefetched
     FROM tasks t WHERE t.task_id = $1
   |} in
   let open Caqti_type in
@@ -589,7 +593,9 @@ let get_task (task_id : string)
     (t4 string string string string)
     (t2
       (t4 (option int) string string string)
-      (t4 string string string string))
+      (t2
+        (t4 string string string string)
+        (t2 string bool)))
   in
   let req = Caqti_request.Infix.(string ->? rt) ~oneshot:true sql in
   (* Also fetch linked emails *)
@@ -605,9 +611,11 @@ let get_task (task_id : string)
     | Ok None -> Ok None
     | Ok (Some ((tid, title, description, status),
                 ((importance, deadline, created_at, updated_at),
-                 (conversation_text, history_summary, drafts_text, notes)))) ->
+                 ((conversation_text, history_summary, drafts_text, notes),
+                  (context_emails_text, context_prefetched))))) ->
         let conversation = try Yojson.Safe.from_string conversation_text with _ -> `List [] in
         let drafts = try Yojson.Safe.from_string drafts_text with _ -> `List [] in
+        let context_emails = try Yojson.Safe.from_string context_emails_text with _ -> `List [] in
         let emails =
           match C.collect_list emails_req tid with
           | Error _ -> []
@@ -632,6 +640,8 @@ let get_task (task_id : string)
           ; ("drafts", drafts)
           ; ("notes", `String notes)
           ; ("emails", `List emails)
+          ; ("context_emails", context_emails)
+          ; ("context_prefetched", `Bool context_prefetched)
           ])))
 
 let update_task
@@ -646,6 +656,8 @@ let update_task
     ?(history_summary : string option)
     ?(drafts_json : string option)
     ?(notes : string option)
+    ?(context_emails_json : string option)
+    ?(context_prefetched : bool option)
     () : (bool, string) result =
   let escape_literal (s : string) : string =
     let buf = Buffer.create (String.length s + 4) in
@@ -684,6 +696,12 @@ let update_task
    | Some d -> add "drafts" (escape_literal d ^ "::jsonb")
    | None -> ());
   (match notes with Some n -> add "notes" (escape_literal n) | None -> ());
+  (match context_emails_json with
+   | Some c -> add "context_emails" (escape_literal c ^ "::jsonb")
+   | None -> ());
+  (match context_prefetched with
+   | Some b -> add "context_prefetched" (if b then "TRUE" else "FALSE")
+   | None -> ());
   if !set_parts = [] then Ok true
   else begin
     add "updated_at" (escape_literal (now_utc_iso8601 ()) ^ "::timestamptz");
@@ -910,6 +928,74 @@ let auto_complete_tasks_for_email (doc_id : string)
           | _ -> ())
         ) task_ids;
         Ok (List.rev !completed))
+
+(* Get the first chunk embedding for a doc_id as a float list *)
+let get_doc_embedding (doc_id : string)
+    : (float list option, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  let sql = {|
+    SELECT embedding::text FROM email_chunks
+    WHERE doc_id = $1
+    ORDER BY chunk_index ASC
+    LIMIT 1
+  |} in
+  let req = Caqti_request.Infix.(Caqti_type.string ->? Caqti_type.string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.find_opt req doc_id with
+    | Error _ as e -> e
+    | Ok None -> Ok None
+    | Ok (Some vec_str) ->
+        (* Parse "[0.1,0.2,...]" format *)
+        let s = String.trim vec_str in
+        let s = if String.length s > 2 then String.sub s 1 (String.length s - 2) else s in
+        let floats = String.split_on_char ',' s |> List.filter_map (fun f ->
+          try Some (float_of_string (String.trim f)) with _ -> None
+        ) in
+        if floats = [] then Ok None else Ok (Some floats))
+
+(* Get a task's stored embedding vector *)
+let get_task_embedding (task_id : string)
+    : (float list option, string) result =
+  let sql = "SELECT embedding::text FROM tasks WHERE task_id = $1 AND embedding IS NOT NULL" in
+  let req = Caqti_request.Infix.(Caqti_type.string ->? Caqti_type.string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.find_opt req task_id with
+    | Error _ as e -> e
+    | Ok None -> Ok None
+    | Ok (Some vec_str) ->
+        let s = String.trim vec_str in
+        let s = if String.length s > 2 then String.sub s 1 (String.length s - 2) else s in
+        let floats = String.split_on_char ',' s |> List.filter_map (fun f ->
+          try Some (float_of_string (String.trim f)) with _ -> None
+        ) in
+        if floats = [] then Ok None else Ok (Some floats))
+
+(* Find tasks that need context prefetch: open/in_progress, not yet prefetched *)
+let tasks_needing_prefetch ?(limit : int = 5) ()
+    : ((string * string) list, string) result =
+  let sql = {|
+    SELECT task_id, title FROM tasks
+    WHERE status IN ('open', 'in_progress')
+      AND context_prefetched = FALSE
+    ORDER BY created_at ASC
+    LIMIT $1
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(int ->* t2 string string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.collect_list req limit with
+    | Error _ as e -> e
+    | Ok rows -> Ok rows)
+
+(* Get trigger email doc_ids for a task *)
+let task_trigger_doc_ids (task_id : string)
+    : (string list, string) result =
+  let sql = "SELECT doc_id FROM task_emails WHERE task_id = $1 AND role = 'trigger'" in
+  let req = Caqti_request.Infix.(Caqti_type.string ->* Caqti_type.string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.collect_list req task_id with
+    | Error _ as e -> e
+    | Ok ids -> Ok ids)
 
 let task_knn ~(embedding : float list) ~(top_k : int)
     ?(status_filter : string option)

@@ -606,6 +606,9 @@ let triage_email ~client ~sw ~(whoami : string)
       Printf.eprintf "[triage.error] %s\n%!" (truncate_chars err ~max_chars:400 |> String.trim);
       None
 
+(* Global hook for background prefetch notification — set at startup *)
+let notify_prefetch : (unit -> unit) ref = ref (fun () -> ())
+
 (*
   Task proposal processing (Phase D)
 
@@ -654,7 +657,8 @@ let process_task_proposals ~client ~sw ~(doc_id : string)
             (match Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:ndoc ~role:"trigger" with
             | Ok () -> ()
             | Error e -> Printf.eprintf "[task_dedup] link error: %s\n%!" e);
-            Printf.printf "[task_dedup] NEW task %s: %s (no neighbors)\n%!" task_id tp.tp_title
+            Printf.printf "[task_dedup] NEW task %s: %s (no neighbors)\n%!" task_id tp.tp_title;
+            !notify_prefetch ()
         | Error e ->
             Printf.eprintf "[task_dedup] create error: %s\n%!" e)
       end else begin
@@ -697,7 +701,8 @@ let process_task_proposals ~client ~sw ~(doc_id : string)
                 ~embedding ~conversation_json:"[]" ~drafts_json:"[]" () with
             | Ok () ->
                 ignore (Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:ndoc ~role:"trigger");
-                Printf.printf "[task_dedup] NEW task %s: %s (dedup LLM failed)\n%!" task_id tp.tp_title
+                Printf.printf "[task_dedup] NEW task %s: %s (dedup LLM failed)\n%!" task_id tp.tp_title;
+                !notify_prefetch ()
             | Error e -> Printf.eprintf "[task_dedup] create error: %s\n%!" e)
         | Ok raw_resp ->
             let trimmed =
@@ -766,7 +771,8 @@ let process_task_proposals ~client ~sw ~(doc_id : string)
                   (match Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:ndoc ~role:"trigger" with
                   | Ok () -> ()
                   | Error e -> Printf.eprintf "[task_dedup] link error: %s\n%!" e);
-                  Printf.printf "[task_dedup] NEW task %s: %s\n%!" task_id tp.tp_title
+                  Printf.printf "[task_dedup] NEW task %s: %s\n%!" task_id tp.tp_title;
+                  !notify_prefetch ()
               | Error e ->
                   Printf.eprintf "[task_dedup] create error: %s\n%!" e)
             end
@@ -4662,33 +4668,47 @@ let handler ~client ~sw ~clock _socket request body =
               | Some (`List es) -> es
               | _ -> []
             in
+            (* Pre-fetched context email doc_ids *)
+            let context_doc_ids =
+              match List.assoc_opt "context_emails" task_kv with
+              | Some (`List ds) ->
+                  List.filter_map (function `String s -> Some s | _ -> None) ds
+              | _ -> []
+            in
 
-            (* 2. Build email aliases — E1, E2, ... for linked emails *)
+            (* 2. Build email aliases — E1, E2, ... for linked + context emails *)
             let email_aliases = ref [] in
             let alias_idx = ref 0 in
             let email_context_lines = ref [] in
+            let seen_doc_ids = Hashtbl.create 16 in
+            let add_email_line doc_id role =
+              if not (Hashtbl.mem seen_doc_ids doc_id) then begin
+                Hashtbl.replace seen_doc_ids doc_id true;
+                incr alias_idx;
+                let alias = Printf.sprintf "E%d" !alias_idx in
+                email_aliases := (alias, doc_id) :: !email_aliases;
+                let md_line =
+                  match Rag_lib.Pg.get_email_detail doc_id with
+                  | Ok (Some detail) ->
+                      let dkv = match detail with `Assoc kv -> kv | _ -> [] in
+                      let md = match List.assoc_opt "metadata" dkv with Some (`Assoc m) -> m | _ -> [] in
+                      let ms k = match List.assoc_opt k md with Some (`String s) -> s | _ -> "" in
+                      Printf.sprintf "%s (role=%s): From: %s | To: %s | Subject: %s | Date: %s"
+                        alias role (ms "from") (ms "to") (ms "subject") (ms "date")
+                  | _ ->
+                      Printf.sprintf "%s (role=%s): doc_id=%s (metadata unavailable)" alias role doc_id
+                in
+                email_context_lines := md_line :: !email_context_lines
+              end
+            in
+            (* Add linked emails first (trigger, etc.) *)
             List.iter (fun ej ->
               let ekv = match ej with `Assoc kv -> kv | _ -> [] in
               let estr k = match List.assoc_opt k ekv with Some (`String s) -> s | _ -> "" in
-              let doc_id = estr "doc_id" in
-              let role = estr "role" in
-              incr alias_idx;
-              let alias = Printf.sprintf "E%d" !alias_idx in
-              email_aliases := (alias, doc_id) :: !email_aliases;
-              (* Try to fetch email metadata for context *)
-              let md_line =
-                match Rag_lib.Pg.get_email_detail doc_id with
-                | Ok (Some detail) ->
-                    let dkv = match detail with `Assoc kv -> kv | _ -> [] in
-                    let md = match List.assoc_opt "metadata" dkv with Some (`Assoc m) -> m | _ -> [] in
-                    let ms k = match List.assoc_opt k md with Some (`String s) -> s | _ -> "" in
-                    Printf.sprintf "%s (role=%s): From: %s | To: %s | Subject: %s | Date: %s"
-                      alias role (ms "from") (ms "to") (ms "subject") (ms "date")
-                | _ ->
-                    Printf.sprintf "%s (role=%s): doc_id=%s (metadata unavailable)" alias role doc_id
-              in
-              email_context_lines := md_line :: !email_context_lines
+              add_email_line (estr "doc_id") (estr "role")
             ) emails;
+            (* Add pre-fetched context emails *)
+            List.iter (fun did -> add_email_line did "context") context_doc_ids;
             let email_context =
               if !email_context_lines = [] then "No emails linked to this task."
               else String.concat "\n" (List.rev !email_context_lines)
@@ -5404,6 +5424,158 @@ let () =
    | Ok 0 -> ()
    | Ok n -> Printf.printf "[startup] purged %d emails with base64-encoded chunks (body was not decoded)\n%!" n
    | Error e -> Printf.eprintf "[startup] purge_base64_chunks error: %s\n%!" e);
+  (* --- Background task context prefetch daemon --- *)
+  let prefetch_wake = Eio.Stream.create 10 in
+  notify_prefetch := (fun () ->
+    try Eio.Stream.add prefetch_wake () with _ -> ());
+  let prefetch_one_task ~client ~sw (task_id : string) (title : string) : unit =
+    Printf.printf "[prefetch] starting for task %s: %s\n%!" task_id title;
+    let trigger_doc_ids = match Rag_lib.Pg.task_trigger_doc_ids task_id with
+      | Ok ids -> ids | Error _ -> []
+    in
+    let trigger_set = Hashtbl.create 16 in
+    List.iter (fun did -> Hashtbl.replace trigger_set did true) trigger_doc_ids;
+    (* Collect embeddings: task embedding + trigger email embeddings *)
+    let embeddings = ref [] in
+    (match Rag_lib.Pg.get_task_embedding task_id with
+    | Ok (Some emb) -> embeddings := emb :: !embeddings
+    | _ -> ());
+    List.iter (fun doc_id ->
+      match Rag_lib.Pg.get_doc_embedding doc_id with
+      | Ok (Some emb) -> embeddings := emb :: !embeddings
+      | _ -> ()
+    ) trigger_doc_ids;
+    if !embeddings = [] then begin
+      Printf.eprintf "[prefetch] no embeddings found for task %s, skipping\n%!" task_id;
+      ignore (Rag_lib.Pg.update_task ~task_id ~context_prefetched:true ())
+    end else begin
+      (* kNN for each embedding, collect unique doc_ids excluding triggers *)
+      let top_k_per = 10 in
+      let seen = Hashtbl.create 64 in
+      let all_results = ref [] in
+      List.iter (fun emb ->
+        match Rag_lib.Pg.query_knn ~embedding:emb ~top_k:top_k_per () with
+        | Ok (rows, _sql) ->
+            List.iter (fun row ->
+              let rkv = match row with `Assoc kv -> kv | _ -> [] in
+              let doc_id = match List.assoc_opt "doc_id" rkv with
+                | Some (`String s) -> s | _ -> "" in
+              if doc_id <> "" && not (Hashtbl.mem trigger_set doc_id)
+                 && not (Hashtbl.mem seen doc_id) then begin
+                Hashtbl.replace seen doc_id true;
+                all_results := row :: !all_results
+              end
+            ) rows
+        | Error e ->
+            Printf.eprintf "[prefetch] kNN error: %s\n%!" e
+      ) !embeddings;
+      let candidates = List.rev !all_results in
+      let n_candidates = List.length candidates in
+      Printf.printf "[prefetch] task %s: %d candidate emails from %d embeddings\n%!"
+        task_id n_candidates (List.length !embeddings);
+      if n_candidates = 0 then
+        ignore (Rag_lib.Pg.update_task ~task_id
+          ~context_emails_json:"[]" ~context_prefetched:true ())
+      else begin
+        (* Build metadata table for LLM selection *)
+        let table_lines = List.mapi (fun i row ->
+          let rkv = match row with `Assoc kv -> kv | _ -> [] in
+          let s k = match List.assoc_opt k rkv with Some (`String s) -> s | _ -> "" in
+          let md = match List.assoc_opt "metadata" rkv with Some (`Assoc m) -> m | _ -> [] in
+          let ms k = match List.assoc_opt k md with Some (`String s) -> s | _ -> "" in
+          Printf.sprintf "%d. From: %s | To: %s | Subject: %s | Date: %s | doc_id=%s"
+            (i + 1) (ms "from") (ms "to") (ms "subject") (ms "date") (s "doc_id")
+        ) candidates in
+        let task_desc = Printf.sprintf "Task: %s\nTrigger emails: %s"
+          title
+          (String.concat ", " (List.map (fun did ->
+            match Rag_lib.Pg.get_email_detail did with
+            | Ok (Some detail) ->
+                let dkv = match detail with `Assoc kv -> kv | _ -> [] in
+                let md = match List.assoc_opt "metadata" dkv with Some (`Assoc m) -> m | _ -> [] in
+                let ms k = match List.assoc_opt k md with Some (`String s) -> s | _ -> "" in
+                Printf.sprintf "%s (%s)" (ms "subject") (ms "from")
+            | _ -> did
+          ) trigger_doc_ids))
+        in
+        let select_system =
+          get_prompt "select_evidence"
+            ~default:"You are helping decide which retrieved emails need their full content loaded. Output a JSON array of 1-based row numbers."
+            ~vars:[
+              ("{{user_identity}}", "");
+              ("{{retrieved_email_table}}", String.concat "\n" table_lines);
+              ("{{resolved_question}}", task_desc);
+            ]
+        in
+        let select_messages : Yojson.Safe.t list =
+          [ `Assoc [ ("role", `String "system"); ("content", `String select_system) ]
+          ; `Assoc [ ("role", `String "user"); ("content", `String task_desc) ]
+          ]
+        in
+        let selected_doc_ids =
+          match ollama_chat ~client ~sw ~label:"prefetch_select"
+              ~model:!ollama_triage_model ~messages:select_messages () with
+          | Error e ->
+              Printf.eprintf "[prefetch] select LLM error: %s — keeping all\n%!" e;
+              List.map (fun row ->
+                let rkv = match row with `Assoc kv -> kv | _ -> [] in
+                match List.assoc_opt "doc_id" rkv with Some (`String s) -> s | _ -> ""
+              ) candidates |> List.filter (fun s -> s <> "")
+          | Ok raw ->
+              let trimmed = String.trim raw in
+              let trimmed = if starts_with "```" trimmed then
+                let after = String.sub trimmed 3 (String.length trimmed - 3) in
+                let after = if starts_with "json" after then String.sub after 4 (String.length after - 4) else after in
+                if ends_with "```" after then String.sub after 0 (String.length after - 3) else after
+              else trimmed in
+              (try
+                match Yojson.Safe.from_string (String.trim trimmed) with
+                | `List indices ->
+                    List.filter_map (fun idx ->
+                      let i = match idx with `Int n -> n - 1 | `Float f -> int_of_float f - 1 | _ -> -1 in
+                      if i >= 0 && i < n_candidates then
+                        let row = List.nth candidates i in
+                        let rkv = match row with `Assoc kv -> kv | _ -> [] in
+                        match List.assoc_opt "doc_id" rkv with Some (`String s) -> Some s | _ -> None
+                      else None
+                    ) indices
+                | _ -> []
+              with _ ->
+                Printf.eprintf "[prefetch] parse error for select response: %s\n%!"
+                  (truncate_chars raw ~max_chars:200 |> String.trim);
+                [])
+        in
+        let context_json = `List (List.map (fun did -> `String did) selected_doc_ids) in
+        (match Rag_lib.Pg.update_task ~task_id
+            ~context_emails_json:(Yojson.Safe.to_string context_json)
+            ~context_prefetched:true () with
+        | Ok _ ->
+            Printf.printf "[prefetch] task %s: stored %d context emails\n%!"
+              task_id (List.length selected_doc_ids)
+        | Error e ->
+            Printf.eprintf "[prefetch] update error: %s\n%!" e)
+      end
+    end
+  in
+  Eio.Fiber.fork_daemon ~sw (fun () ->
+    Printf.printf "[prefetch] background daemon started\n%!";
+    let rec loop () =
+      (* Wait for notification or poll every 30s *)
+      (try
+        ignore (Eio.Stream.take_nonblocking prefetch_wake)
+      with _ -> ());
+      (match Rag_lib.Pg.tasks_needing_prefetch ~limit:1 () with
+      | Ok ((task_id, title) :: _) ->
+          (try prefetch_one_task ~client ~sw task_id title
+          with e ->
+            Printf.eprintf "[prefetch] error processing %s: %s\n%!" task_id (Printexc.to_string e));
+          Eio.Time.sleep env#clock 2.0
+      | _ ->
+          Eio.Time.sleep env#clock 30.0);
+      loop ()
+    in
+    loop ());
+
   let socket =
     try
       Eio.Net.listen env#net ~sw ~backlog:128 ~reuse_addr:true
