@@ -149,7 +149,7 @@ let ingestQueueNextId = 1;
 /*
   Ingestion status cache for custom column display.
 
-  Maps headerMessageId → { ingested: bool, processed: bool, reply_by: string }.
+  Maps headerMessageId → { ingested: bool, processed: bool, partial: bool, reply_by: string }.
   Populated by the background script via updateIngestStatusCache(), which
   polls the OCaml server's /admin/ingested_status endpoint.
   Read synchronously by the custom column handler's getCellText().
@@ -173,8 +173,9 @@ let cachedThreadPaneColumns = null;
 /*
   Custom column handler implementing nsIMsgCustomColumnHandler.
 
-  Displays ● (ingested), ●✓ (ingested+processed), or blank (unknown/pending)
-  in the thread pane.  The handler reads synchronously from ingestStatusCache.
+  Displays ● (ingested), ●✓ (ingested+processed), ◯ (partial/metadata-only),
+  or blank (unknown/pending) in the thread pane.
+  The handler reads synchronously from ingestStatusCache.
 */
 const ingestColumnHandler = {
   QueryInterface: ChromeUtils.generateQI(["nsIMsgCustomColumnHandler"]),
@@ -192,6 +193,7 @@ const ingestColumnHandler = {
       const st = ingestStatusCache.get(mid);
       if (!st) return "";
       if (!st.ingested) return "";
+      if (st.partial) return "\u25EF";
       return st.processed ? "\u25CF\u2713" : "\u25CF";
     } catch (_e) {
       return "";
@@ -323,6 +325,7 @@ function registerIngestColumn() {
             const st = ingestStatusCache.get(mid);
             if (!st) return "";
             if (!st.ingested) return "";
+            if (st.partial) return "\u25EF";
             return st.processed ? "\u25CF\u2713" : "\u25CF";
           },
         });
@@ -1960,10 +1963,10 @@ var ragFilterAction = class extends ExtensionCommon.ExtensionAPI {
             const obj = JSON.parse(cacheJson);
             for (const [k, v] of Object.entries(obj)) {
               if (v && typeof v === "object") {
-                ingestStatusCache.set(k, { ingested: !!v.ingested, processed: !!v.processed, reply_by: v.reply_by || "" });
+                ingestStatusCache.set(k, { ingested: !!v.ingested, processed: !!v.processed, partial: !!v.partial, reply_by: v.reply_by || "" });
               } else {
                 // Legacy boolean format fallback.
-                ingestStatusCache.set(k, { ingested: !!v, processed: false, reply_by: "" });
+                ingestStatusCache.set(k, { ingested: !!v, processed: false, partial: false, reply_by: "" });
               }
             }
             // Refresh the column so it repaints with the new cache data.

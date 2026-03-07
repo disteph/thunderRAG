@@ -4014,12 +4014,12 @@ let handler ~client ~sw ~clock _socket request body =
           | _ -> []
         with _ -> []
       in
-      let ingested, processed, reply_by_pairs =
+      let ingested, processed, partial, reply_by_pairs =
         match Rag_lib.Pg.batch_ingested_status ids with
-        | Ok (i, p, rb) -> (i, p, rb)
+        | Ok (i, p, pa, rb) -> (i, p, pa, rb)
         | Error e ->
             Printf.eprintf "[admin.ingested_status.error] %s\n%!" e;
-            ([], [], [])
+            ([], [], [], [])
       in
       (* Map normalized doc_ids back to original request IDs for TB compatibility *)
       let norm_to_orig = Hashtbl.create 64 in
@@ -4040,6 +4040,7 @@ let handler ~client ~sw ~clock _socket request body =
         `Assoc
           [ ("ingested", `List (List.map (fun s -> `String s) (map_back ingested)))
           ; ("processed", `List (List.map (fun s -> `String s) (map_back processed)))
+          ; ("partial", `List (List.map (fun s -> `String s) (map_back partial)))
           ; ("reply_by", `Assoc reply_by_obj)
           ]
         |> Yojson.Safe.to_string

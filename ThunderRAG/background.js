@@ -845,7 +845,7 @@ async function handleShowIngested() {
   and pushed to the experiment API so the custom column handler can read
   them synchronously.
 */
-const ingestStatusCache = new Map();   // headerMessageId → { ingested: bool, processed: bool }
+const ingestStatusCache = new Map();   // headerMessageId → { ingested: bool, processed: bool, partial: bool }
 let currentFolderUri = null;
 let ingestStatusPollInterval = null;
 
@@ -877,6 +877,7 @@ async function refreshIngestStatusForFolder() {
     const chunkSize = 500;
     const ingested = new Set();
     const processed = new Set();
+    const partial = new Set();
     const replyByMap = new Map();
     for (let i = 0; i < ids.length; i += chunkSize) {
       const batch = ids.slice(i, i + chunkSize);
@@ -895,6 +896,9 @@ async function refreshIngestStatusForFolder() {
           if (Array.isArray(data.processed)) {
             for (const id of data.processed) processed.add(id);
           }
+          if (Array.isArray(data.partial)) {
+            for (const id of data.partial) partial.add(id);
+          }
           if (data.reply_by && typeof data.reply_by === "object") {
             for (const [id, dt] of Object.entries(data.reply_by)) {
               if (dt) replyByMap.set(id, String(dt));
@@ -909,14 +913,14 @@ async function refreshIngestStatusForFolder() {
     // Update cache.
     const greenCount = [...ingested].length;
     for (const id of ids) {
-      ingestStatusCache.set(id, { ingested: ingested.has(id), processed: processed.has(id), reply_by: replyByMap.get(id) || "" });
+      ingestStatusCache.set(id, { ingested: ingested.has(id), processed: processed.has(id), partial: partial.has(id), reply_by: replyByMap.get(id) || "" });
     }
     console.log(`[ThunderRAG] status poll: ${ids.length} ids checked, ${greenCount} ingested`);
 
     // Push to experiment API for the column handler.
     if (browser.ragFilterAction?.updateIngestStatusCache) {
       const obj = {};
-      for (const [k, v] of ingestStatusCache) { obj[k] = { ingested: v.ingested, processed: v.processed, reply_by: v.reply_by || "" }; }
+      for (const [k, v] of ingestStatusCache) { obj[k] = { ingested: v.ingested, processed: v.processed, partial: v.partial || false, reply_by: v.reply_by || "" }; }
       try {
         await browser.ragFilterAction.updateIngestStatusCache(JSON.stringify(obj));
       } catch (_e) {

@@ -320,23 +320,27 @@ let reset_all () : (unit, string) result =
 (* ---------- status queries ---------- *)
 
 let batch_ingested_status (ids : string list)
-    : ((string list * string list * (string * string) list), string) result =
-  if ids = [] then Ok ([], [], [])
+    : ((string list * string list * string list * (string * string) list), string) result =
+  if ids = [] then Ok ([], [], [], [])
   else
     let normed = List.map normalize_doc_id ids in
     let arr = pg_text_array normed in
-    let sql = "SELECT doc_id, processed, COALESCE(TO_CHAR(reply_by, 'YYYY-MM-DD'), '') FROM emails WHERE doc_id = ANY($1::text[])" in
+    let sql = {|SELECT e.doc_id, e.processed,
+                       COALESCE(TO_CHAR(e.reply_by, 'YYYY-MM-DD'), ''),
+                       (SELECT COUNT(*) FROM email_chunks ec WHERE ec.doc_id = e.doc_id)
+                FROM emails e WHERE e.doc_id = ANY($1::text[])|} in
     let open Caqti_type in
-    let req = Caqti_request.Infix.(string ->* t3 string bool string) ~oneshot:true sql in
+    let req = Caqti_request.Infix.(string ->* t4 string bool string int) ~oneshot:true sql in
     use_ret (fun (module C : Caqti_eio.CONNECTION) ->
       match C.collect_list req arr with
       | Error _ as e -> e
       | Ok rows ->
-          let ingested = List.map (fun (id, _, _) -> id) rows in
-          let processed = rows |> List.filter_map (fun (id, p, _) -> if p then Some id else None) in
-          let reply_by = rows |> List.filter_map (fun (id, _, rb) ->
+          let ingested = List.map (fun (id, _, _, _) -> id) rows in
+          let processed = rows |> List.filter_map (fun (id, p, _, _) -> if p then Some id else None) in
+          let partial = rows |> List.filter_map (fun (id, _, _, n_chunks) -> if n_chunks = 0 then Some id else None) in
+          let reply_by = rows |> List.filter_map (fun (id, _, rb, _) ->
             if String.trim rb <> "" then Some (id, rb) else None) in
-          Ok (ingested, processed, reply_by))
+          Ok (ingested, processed, partial, reply_by))
 
 let ingested_models (doc_id : string) : ((string * string * string) option, string) result =
   let doc_id = normalize_doc_id doc_id in
