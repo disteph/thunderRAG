@@ -742,7 +742,8 @@ let list_tasks ?(status_filter : string option) ?(email_ids : string list option
    | None -> ());
   (match email_ids with
    | Some ids when ids <> [] ->
-       let arr = pg_text_array ids in
+       let normed = List.map normalize_doc_id ids in
+       let arr = pg_text_array normed in
        wheres := Printf.sprintf "EXISTS (SELECT 1 FROM task_emails te WHERE te.task_id = t.task_id AND te.doc_id = ANY('%s'::text[]))" arr :: !wheres
    | _ -> ());
   let where_clause =

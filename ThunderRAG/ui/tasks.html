@@ -385,18 +385,33 @@
         font-size: 13px;
       }
 
-      /* Email hover popup */
+      /* Email trigger rows */
       .mh-email-row {
+        display: flex;
+        align-items: center;
+        gap: 4px;
         margin-bottom: 2px;
         line-height: 1.4;
       }
       .mh-email-row .email-link {
+        flex: 1;
         color: AccentColor;
         text-decoration: none;
         cursor: pointer;
         font-size: 11px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       .mh-email-row .email-link:hover { text-decoration: underline; }
+      .email-tank-icon {
+        cursor: pointer;
+        font-size: 12px;
+        opacity: 0.5;
+        flex-shrink: 0;
+        transition: opacity 0.15s;
+      }
+      .email-tank-icon:hover { opacity: 1; }
       .email-hover-popup {
         position: absolute;
         left: 0;

@@ -273,10 +273,26 @@ function renderMidPane() {
         } catch (_) {}
       });
 
-      // Hover popup with ingested data
+      // Oil tank icon — opens ingested-detail in a new tab
+      const tankBtn = document.createElement("span");
+      tankBtn.className = "email-tank-icon";
+      tankBtn.textContent = "\uD83D\uDEE2\uFE0F";
+      tankBtn.title = "Show ingested data";
+      tankBtn.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        try {
+          const base = await getServerBase();
+          const msgs = [{ id: e.doc_id, from: e.sender || "", subject: e.subject || "", date: e.date || "" }];
+          const url = browser.runtime.getURL("ui/ingested-detail.html")
+            + `?msgs=${encodeURIComponent(JSON.stringify(msgs))}&endpoint=${encodeURIComponent(base)}`;
+          browser.tabs.create({ url });
+        } catch (_) {}
+      });
+
+      // Hover popup with ingested data (same content as ingested-detail page)
       let popup = null;
       let hideTimer = null;
-      link.addEventListener("mouseenter", async () => {
+      const showPopup = async () => {
         if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
         if (popup) return;
         popup = document.createElement("div");
@@ -306,23 +322,28 @@ function renderMidPane() {
           if (detail.reply_by) lines.push("Reply by: " + detail.reply_by);
           lines.push(detail.processed ? "✔ Processed" : "✗ Not processed");
           if (detail.body_text) {
-            const preview = detail.body_text.length > 300 ? detail.body_text.slice(0, 300) + "…" : detail.body_text;
-            lines.push("---");
+            const preview = detail.body_text.length > 400 ? detail.body_text.slice(0, 400) + "…" : detail.body_text;
+            lines.push("───────────");
             lines.push(preview);
           }
           popup.textContent = lines.join("\n");
         } catch (_) {
           if (popup && popup.parentNode) popup.textContent = "(no ingested data)";
         }
-      });
-      link.addEventListener("mouseleave", () => {
+      };
+      const dismissPopup = () => {
         hideTimer = setTimeout(() => {
           if (popup && popup.parentNode) popup.remove();
           popup = null;
         }, 200);
-      });
+      };
+      link.addEventListener("mouseenter", showPopup);
+      link.addEventListener("mouseleave", dismissPopup);
+      tankBtn.addEventListener("mouseenter", showPopup);
+      tankBtn.addEventListener("mouseleave", dismissPopup);
 
       row.appendChild(link);
+      row.appendChild(tankBtn);
       emailsDiv.appendChild(row);
     }
     header.appendChild(emailsDiv);
