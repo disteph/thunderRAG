@@ -4048,6 +4048,60 @@ let handler ~client ~sw ~clock _socket request body =
       Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
 
   (*
+    Email detail lookup for hover popups.
+
+    Accepts {"doc_id": "<message-id>"}.
+    Returns flattened metadata: sender, recipient, cc, subject, email_date,
+    attachments, action_score, importance_score, reply_by, processed,
+    plus a body_text preview from the first chunk.
+  *)
+  | `POST, "/admin/email_detail" ->
+      let raw_req = read_all body in
+      let doc_id = match Yojson.Safe.from_string raw_req with
+        | `Assoc kv -> (match List.assoc_opt "doc_id" kv with Some (`String s) -> s | _ -> "")
+        | _ -> ""
+      in
+      if doc_id = "" then
+        Cohttp_eio.Server.respond_string ~status:`Bad_request
+          ~body:{|{"error":"missing doc_id"}|} ~headers:json_headers ()
+      else (
+        match Rag_lib.Pg.get_email_detail doc_id with
+        | Error e ->
+            Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+              ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped e)) ~headers:json_headers ()
+        | Ok None ->
+            Cohttp_eio.Server.respond_string ~status:`Not_found
+              ~body:{|{"error":"not found"}|} ~headers:json_headers ()
+        | Ok (Some detail) ->
+            (* Flatten metadata for the UI *)
+            let md = match detail with `Assoc kv -> (match List.assoc_opt "metadata" kv with Some (`Assoc m) -> m | _ -> []) | _ -> [] in
+            let str k = match List.assoc_opt k md with Some (`String s) -> s | _ -> "" in
+            let int_opt k = match List.assoc_opt k md with Some (`Int n) -> Some n | _ -> None in
+            let bool_opt k = match List.assoc_opt k md with Some (`Bool b) -> Some b | _ -> None in
+            let att = match List.assoc_opt "attachments" md with Some (`List l) -> l | _ -> [] in
+            (* Get body_text preview from first chunk *)
+            let body_preview = match Rag_lib.Pg.get_first_chunk_text doc_id with
+              | Ok (Some t) -> t
+              | _ -> ""
+            in
+            let result = `Assoc
+              [ ("sender", `String (str "from"))
+              ; ("recipient", `String (str "to"))
+              ; ("cc", `String (str "cc"))
+              ; ("subject", `String (str "subject"))
+              ; ("email_date", `String (str "date"))
+              ; ("attachments", `List att)
+              ; ("action_score", match int_opt "action_score" with Some n -> `Int n | None -> `Null)
+              ; ("importance_score", match int_opt "importance_score" with Some n -> `Int n | None -> `Null)
+              ; ("reply_by", `String (str "reply_by"))
+              ; ("processed", `Bool (bool_opt "processed" = Some true))
+              ; ("body_text", `String body_preview)
+              ]
+            in
+            Cohttp_eio.Server.respond_string ~status:`OK
+              ~body:(Yojson.Safe.to_string result) ~headers:json_headers ())
+
+  (*
     Extract body text from raw RFC822 email.
 
     Accepts {"raw": "...", "doc_id": "...", "summarize": bool}.

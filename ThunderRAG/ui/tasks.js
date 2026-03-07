@@ -235,20 +235,106 @@ function renderMidPane() {
   const header = document.createElement("div");
   header.className = "mid-header";
 
-  const emails = activeTask.emails || [];
-  const emailLines = emails.map((e, i) =>
-    `<a class="email-link" data-doc-id="${esc(e.doc_id)}">${esc(`E${i+1}`)}</a>: ${esc(e.doc_id)} (${esc(e.role)})`
-  ).join("<br>");
+  const titleEl = document.createElement("div");
+  titleEl.className = "mh-title";
+  titleEl.textContent = activeTask.title || "(untitled)";
+  header.appendChild(titleEl);
 
-  header.innerHTML = `
-    <div class="mh-title">${esc(activeTask.title || "(untitled)")}</div>
-    <div class="mh-desc">${esc(activeTask.description || "")}</div>
-    ${emails.length ? `<div class="mh-emails">${emailLines}</div>` : ""}
-    <div class="mh-actions">
-      <button id="markDoneBtn">Mark done</button>
-      <button id="dismissBtn" class="danger">Dismiss</button>
-    </div>
+  const descEl = document.createElement("div");
+  descEl.className = "mh-desc";
+  descEl.textContent = activeTask.description || "";
+  header.appendChild(descEl);
+
+  const emails = activeTask.emails || [];
+  if (emails.length) {
+    const emailsDiv = document.createElement("div");
+    emailsDiv.className = "mh-emails";
+    for (const e of emails) {
+      const row = document.createElement("div");
+      row.className = "mh-email-row";
+      row.style.position = "relative";
+
+      const sender = (e.sender || "").replace(/<[^>]+>/g, "").trim() || e.doc_id;
+      const subject = e.subject || "(no subject)";
+      const date = e.date || "";
+      const roleTag = e.role && e.role !== "trigger" ? ` [${e.role}]` : "";
+
+      const link = document.createElement("a");
+      link.className = "email-link";
+      link.href = "#";
+      link.textContent = `${sender} — ${subject}${date ? " (" + date + ")" : ""}${roleTag}`;
+      link.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        try {
+          await browser.runtime.sendMessage({
+            type: "openMessageByHeaderMessageId",
+            headerMessageId: e.doc_id,
+          });
+        } catch (_) {}
+      });
+
+      // Hover popup with ingested data
+      let popup = null;
+      let hideTimer = null;
+      link.addEventListener("mouseenter", async () => {
+        if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+        if (popup) return;
+        popup = document.createElement("div");
+        popup.className = "email-hover-popup";
+        popup.textContent = "Loading…";
+        row.appendChild(popup);
+        try {
+          const base = await getServerBase();
+          const resp = await fetch(`${base}/admin/email_detail`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ doc_id: e.doc_id }),
+          });
+          if (!resp.ok) throw new Error("not found");
+          const detail = await resp.json();
+          if (!popup || !popup.parentNode) return;
+          popup.textContent = "";
+          const lines = [];
+          if (detail.sender) lines.push("From: " + detail.sender);
+          if (detail.recipient) lines.push("To: " + detail.recipient);
+          if (detail.cc) lines.push("Cc: " + detail.cc);
+          if (detail.subject) lines.push("Subject: " + detail.subject);
+          if (detail.email_date) lines.push("Date: " + detail.email_date);
+          if (detail.attachments && detail.attachments.length) lines.push("Attachments: " + detail.attachments.join(", "));
+          if (detail.action_score != null) lines.push("Action: " + detail.action_score + "/100");
+          if (detail.importance_score != null) lines.push("Importance: " + detail.importance_score + "/100");
+          if (detail.reply_by) lines.push("Reply by: " + detail.reply_by);
+          lines.push(detail.processed ? "✔ Processed" : "✗ Not processed");
+          if (detail.body_text) {
+            const preview = detail.body_text.length > 300 ? detail.body_text.slice(0, 300) + "…" : detail.body_text;
+            lines.push("---");
+            lines.push(preview);
+          }
+          popup.textContent = lines.join("\n");
+        } catch (_) {
+          if (popup && popup.parentNode) popup.textContent = "(no ingested data)";
+        }
+      });
+      link.addEventListener("mouseleave", () => {
+        hideTimer = setTimeout(() => {
+          if (popup && popup.parentNode) popup.remove();
+          popup = null;
+        }, 200);
+      });
+
+      row.appendChild(link);
+      emailsDiv.appendChild(row);
+    }
+    header.appendChild(emailsDiv);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "mh-actions";
+  actions.innerHTML = `
+    <button id="markDoneBtn">Mark done</button>
+    <button id="dismissBtn" class="danger">Dismiss</button>
   `;
+  header.appendChild(actions);
   pane.appendChild(header);
 
   // Wire up action buttons

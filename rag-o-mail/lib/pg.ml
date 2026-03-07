@@ -602,13 +602,20 @@ let get_task (task_id : string)
         (t2 string bool)))
   in
   let req = Caqti_request.Infix.(string ->? rt) ~oneshot:true sql in
-  (* Also fetch linked emails *)
+  (* Also fetch linked emails with metadata from emails table *)
   let emails_sql = {|
-    SELECT doc_id, role, COALESCE(added_at::text, '')
-    FROM task_emails WHERE task_id = $1
-    ORDER BY added_at
+    SELECT te.doc_id, te.role, COALESCE(te.added_at::text, ''),
+           COALESCE(e.sender, ''), COALESCE(e.subject, ''),
+           COALESCE(TO_CHAR(e.email_date, 'YYYY-MM-DD'), ''),
+           COALESCE(e.recipient, ''), COALESCE(e.cc, '')
+    FROM task_emails te
+    LEFT JOIN emails e ON e.doc_id = te.doc_id
+    WHERE te.task_id = $1
+    ORDER BY te.added_at
   |} in
-  let emails_req = Caqti_request.Infix.(string ->* t3 string string string) ~oneshot:true emails_sql in
+  let open Caqti_type in
+  let emails_rt = t2 (t4 string string string string) (t4 string string string string) in
+  let emails_req = Caqti_request.Infix.(string ->* emails_rt) ~oneshot:true emails_sql in
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
     match C.find_opt req task_id with
     | Error _ as e -> e
@@ -624,10 +631,15 @@ let get_task (task_id : string)
           match C.collect_list emails_req tid with
           | Error _ -> []
           | Ok rows ->
-              List.map (fun (doc_id, role, added_at) ->
+              List.map (fun ((doc_id, role, added_at, sender), (subject, email_date, recipient, cc)) ->
                 `Assoc [ ("doc_id", `String doc_id)
                        ; ("role", `String role)
-                       ; ("added_at", `String added_at) ])
+                       ; ("added_at", `String added_at)
+                       ; ("sender", `String sender)
+                       ; ("subject", `String subject)
+                       ; ("date", `String email_date)
+                       ; ("recipient", `String recipient)
+                       ; ("cc", `String cc) ])
                 rows
         in
         Ok (Some (`Assoc
@@ -932,6 +944,17 @@ let auto_complete_tasks_for_email (doc_id : string)
           | _ -> ())
         ) task_ids;
         Ok (List.rev !completed))
+
+(* Get the text of the first chunk for a doc_id (for body preview) *)
+let get_first_chunk_text (doc_id : string)
+    : (string option, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  let sql = "SELECT chunk_text FROM email_chunks WHERE doc_id = $1 ORDER BY chunk_index ASC LIMIT 1" in
+  let req = Caqti_request.Infix.(Caqti_type.string ->? Caqti_type.string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.find_opt req doc_id with
+    | Error _ as e -> e
+    | Ok v -> Ok v)
 
 (* Get the first chunk embedding for a doc_id as a float list *)
 let get_doc_embedding (doc_id : string)
