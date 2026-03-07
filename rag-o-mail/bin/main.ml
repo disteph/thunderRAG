@@ -494,10 +494,18 @@ let summarize_quoted_context ~client ~sw ~(quoted_text : string) : string option
   and appended to the embedding text so that vector search can match
   queries like "urgent emails I need to reply to".
 *)
+type task_proposal =
+  { tp_title       : string
+  ; tp_description : string
+  ; tp_importance  : int option
+  ; tp_deadline    : string     (* YYYY-MM-DD or "" *)
+  }
+
 type triage_result =
   { action_score      : int     (* 0–100: does this email require action from me? *)
   ; importance_score  : int     (* 0–100: how important is this email? *)
   ; reply_by          : string  (* ISO 8601 date/time or "none" *)
+  ; task_proposals    : task_proposal list
   }
 
 let triage_email ~client ~sw ~(whoami : string)
@@ -515,7 +523,7 @@ let triage_email ~client ~sw ~(whoami : string)
     else ""
   in
   let system =
-    get_prompt "triage" ~default:"You are an email triage assistant. Respond with ONLY a JSON object: {\"action_score\": <int 0-100>, \"importance_score\": <int 0-100>, \"reply_by\": \"YYYY-MM-DD or none\"}" ~vars:[("{{user_identity}}", user_identity)]
+    get_prompt "triage" ~default:"You are an email triage assistant. Respond with ONLY a JSON object: {\"action_score\": <int 0-100>, \"importance_score\": <int 0-100>, \"reply_by\": \"YYYY-MM-DD or none\", \"tasks\": [{\"title\": \"short task title\", \"description\": \"what needs to be done\", \"importance\": <int 0-100>, \"deadline\": \"YYYY-MM-DD or none\"}]}. The tasks array should contain 0 or more task proposals — actions the user needs to take in response to this email. Only propose tasks for emails that require user action. Newsletters, notifications, and FYI emails should have an empty tasks array." ~vars:[("{{user_identity}}", user_identity)]
   in
   let user_msg =
     Printf.sprintf
@@ -563,8 +571,33 @@ let triage_email ~client ~sw ~(whoami : string)
         let action = max 0 (min 100 (get_int "action_score")) in
         let importance = max 0 (min 100 (get_int "importance_score")) in
         let reply_by = get_str "reply_by" in
-        Printf.printf "[triage] action=%d importance=%d reply_by=%s\n%!" action importance reply_by;
-        Some { action_score = action; importance_score = importance; reply_by }
+        let task_proposals =
+          match json with
+          | `Assoc kv ->
+              (match List.assoc_opt "tasks" kv with
+              | Some (`List tasks) ->
+                  List.filter_map (fun tj ->
+                    let tkv = match tj with `Assoc kv -> kv | _ -> [] in
+                    let ts k = match List.assoc_opt k tkv with Some (`String s) -> String.trim s | _ -> "" in
+                    let ti k = match List.assoc_opt k tkv with
+                      | Some (`Int n) -> Some (max 0 (min 100 n))
+                      | Some (`Float f) -> Some (max 0 (min 100 (int_of_float f)))
+                      | Some (`String s) -> (try Some (max 0 (min 100 (int_of_string (String.trim s)))) with _ -> None)
+                      | _ -> None
+                    in
+                    let title = ts "title" in
+                    if title = "" then None
+                    else Some { tp_title = title
+                              ; tp_description = ts "description"
+                              ; tp_importance = ti "importance"
+                              ; tp_deadline = let d = ts "deadline" in if d = "none" then "" else d
+                              }
+                  ) tasks
+              | _ -> [])
+          | _ -> []
+        in
+        Printf.printf "[triage] action=%d importance=%d reply_by=%s tasks=%d\n%!" action importance reply_by (List.length task_proposals);
+        Some { action_score = action; importance_score = importance; reply_by; task_proposals }
       with ex ->
         Printf.eprintf "[triage.parse_error] %s — raw: %s\n%!" (Printexc.to_string ex)
           (truncate_chars raw_resp ~max_chars:200 |> String.trim);
@@ -572,6 +605,174 @@ let triage_email ~client ~sw ~(whoami : string)
   | Error err ->
       Printf.eprintf "[triage.error] %s\n%!" (truncate_chars err ~max_chars:400 |> String.trim);
       None
+
+(*
+  Task proposal processing (Phase D)
+
+  After triage proposes tasks, for each proposal:
+  1. Embed title + description
+  2. kNN search against existing open/in_progress tasks
+  3. If neighbors found, call dedup LLM to decide: new task or update existing
+  4. Create or update accordingly, link the triggering email
+*)
+let process_task_proposals ~client ~sw ~(doc_id : string)
+    ~(proposals : task_proposal list) () : unit =
+  if not !task_auto_create then ()
+  else if proposals = [] then ()
+  else
+  let ndoc = Rag_lib.Pg.normalize_doc_id doc_id in
+  let top_k = !task_dedup_top_k in
+  List.iter (fun (tp : task_proposal) ->
+    (try
+      let embed_text = Printf.sprintf "%s\n%s" tp.tp_title tp.tp_description in
+      (* 1. Embed the proposal *)
+      let embedding = match ollama_embed ~client ~sw ~task:Search_document
+          ~label:"task_dedup" ~text:embed_text () with
+        | Ok v -> l2_normalize v
+        | Error msg ->
+            Printf.eprintf "[task_dedup] embed failed for '%s': %s\n%!" tp.tp_title msg;
+            raise Exit
+      in
+      (* 2. kNN search for similar existing tasks *)
+      let neighbors = match Rag_lib.Pg.task_knn ~embedding ~top_k () with
+        | Ok rows -> rows
+        | Error e ->
+            Printf.eprintf "[task_dedup] kNN error: %s\n%!" e;
+            []
+      in
+      if neighbors = [] then begin
+        (* No neighbors — create new task directly *)
+        let task_id = Printf.sprintf "%08x-%04x-%04x-%04x-%012x"
+          (Random.bits ()) (Random.int 0xFFFF) (Random.int 0xFFFF)
+          (Random.int 0xFFFF) (Random.bits () lor (Random.bits () lsl 30)) in
+        (match Rag_lib.Pg.create_task ~task_id ~title:tp.tp_title
+            ~description:tp.tp_description
+            ~importance_score:tp.tp_importance
+            ~deadline:tp.tp_deadline
+            ~embedding ~conversation_json:"[]" ~drafts_json:"[]" () with
+        | Ok () ->
+            (match Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:ndoc ~role:"trigger" with
+            | Ok () -> ()
+            | Error e -> Printf.eprintf "[task_dedup] link error: %s\n%!" e);
+            Printf.printf "[task_dedup] NEW task %s: %s (no neighbors)\n%!" task_id tp.tp_title
+        | Error e ->
+            Printf.eprintf "[task_dedup] create error: %s\n%!" e)
+      end else begin
+        (* 3. Call dedup LLM to decide: new or same-as-existing *)
+        let neighbor_lines = List.mapi (fun i (tid, title, desc, dist) ->
+          Printf.sprintf "%d. [task_id=%s dist=%.4f] %s — %s"
+            (i + 1) tid dist title desc
+        ) neighbors in
+        let dedup_system =
+          get_prompt "task_dedup"
+            ~default:"You are a task deduplication assistant. Given a proposed new task and a list of existing tasks, \
+              decide whether the proposed task is the same as an existing one or genuinely new. \
+              Respond with ONLY a JSON object: {\"decision\": \"new\" or \"same\", \"existing_task_id\": \"<id or empty>\", \
+              \"update_description\": \"<revised description if merging, or empty>\"}. \
+              Tasks are 'same' if they represent the same action item, even if worded differently. \
+              Consider the subject matter, people involved, and required action."
+            ~vars:[]
+        in
+        let dedup_user = Printf.sprintf
+          "PROPOSED TASK:\nTitle: %s\nDescription: %s\n\nEXISTING TASKS:\n%s"
+          tp.tp_title tp.tp_description
+          (String.concat "\n" neighbor_lines)
+        in
+        let dedup_messages : Yojson.Safe.t list =
+          [ `Assoc [ ("role", `String "system"); ("content", `String dedup_system) ]
+          ; `Assoc [ ("role", `String "user"); ("content", `String dedup_user) ]
+          ]
+        in
+        match ollama_chat ~client ~sw ~label:"task_dedup" ~model:!ollama_triage_model ~messages:dedup_messages () with
+        | Error msg ->
+            Printf.eprintf "[task_dedup] LLM error: %s — creating new task\n%!" msg;
+            (* Fall back to creating new *)
+            let task_id = Printf.sprintf "%08x-%04x-%04x-%04x-%012x"
+              (Random.bits ()) (Random.int 0xFFFF) (Random.int 0xFFFF)
+              (Random.int 0xFFFF) (Random.bits () lor (Random.bits () lsl 30)) in
+            (match Rag_lib.Pg.create_task ~task_id ~title:tp.tp_title
+                ~description:tp.tp_description
+                ~importance_score:tp.tp_importance
+                ~deadline:tp.tp_deadline
+                ~embedding ~conversation_json:"[]" ~drafts_json:"[]" () with
+            | Ok () ->
+                ignore (Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:ndoc ~role:"trigger");
+                Printf.printf "[task_dedup] NEW task %s: %s (dedup LLM failed)\n%!" task_id tp.tp_title
+            | Error e -> Printf.eprintf "[task_dedup] create error: %s\n%!" e)
+        | Ok raw_resp ->
+            let trimmed =
+              let s = String.trim raw_resp in
+              let s = if starts_with "```json" s then
+                let after = String.sub s 7 (String.length s - 7) in
+                if ends_with "```" after then String.sub after 0 (String.length after - 3) else after
+              else if starts_with "```" s then
+                let after = String.sub s 3 (String.length s - 3) in
+                if ends_with "```" after then String.sub after 0 (String.length after - 3) else after
+              else s
+              in String.trim s
+            in
+            let decision, existing_id, update_desc =
+              try
+                let dj = Yojson.Safe.from_string trimmed in
+                let dkv = match dj with `Assoc kv -> kv | _ -> [] in
+                let ds k = match List.assoc_opt k dkv with Some (`String s) -> String.trim s | _ -> "" in
+                (ds "decision", ds "existing_task_id", ds "update_description")
+              with _ ->
+                Printf.eprintf "[task_dedup] parse error — raw: %s\n%!"
+                  (truncate_chars raw_resp ~max_chars:200 |> String.trim);
+                ("new", "", "")
+            in
+            if decision = "same" && existing_id <> "" then begin
+              (* Update existing task: link email, optionally revise description, update embedding *)
+              (match Rag_lib.Pg.link_email_to_task ~task_id:existing_id ~doc_id:ndoc ~role:"trigger" with
+              | Ok () -> ()
+              | Error e -> Printf.eprintf "[task_dedup] link error: %s\n%!" e);
+              let desc_update = if update_desc <> "" then Some update_desc else None in
+              let imp_update = match tp.tp_importance with
+                | Some n -> Some (Some n) | None -> None
+              in
+              let dl_update = if tp.tp_deadline <> "" then Some tp.tp_deadline else None in
+              (* Re-embed if description changed *)
+              let emb_update =
+                if update_desc <> "" then
+                  let new_embed_text = Printf.sprintf "%s\n%s" tp.tp_title update_desc in
+                  (match ollama_embed ~client ~sw ~task:Search_document
+                      ~label:"task_reembed" ~text:new_embed_text () with
+                  | Ok v -> Some (l2_normalize v)
+                  | Error _ -> None)
+                else None
+              in
+              (match Rag_lib.Pg.update_task ~task_id:existing_id
+                  ?description:desc_update
+                  ?importance_score:imp_update
+                  ?deadline:dl_update
+                  ?embedding:emb_update
+                  () with
+              | Ok _ ->
+                  Printf.printf "[task_dedup] MERGED into %s: %s\n%!" existing_id tp.tp_title
+              | Error e ->
+                  Printf.eprintf "[task_dedup] update error: %s\n%!" e)
+            end else begin
+              (* Create new task *)
+              let task_id = Printf.sprintf "%08x-%04x-%04x-%04x-%012x"
+                (Random.bits ()) (Random.int 0xFFFF) (Random.int 0xFFFF)
+                (Random.int 0xFFFF) (Random.bits () lor (Random.bits () lsl 30)) in
+              (match Rag_lib.Pg.create_task ~task_id ~title:tp.tp_title
+                  ~description:tp.tp_description
+                  ~importance_score:tp.tp_importance
+                  ~deadline:tp.tp_deadline
+                  ~embedding ~conversation_json:"[]" ~drafts_json:"[]" () with
+              | Ok () ->
+                  (match Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:ndoc ~role:"trigger" with
+                  | Ok () -> ()
+                  | Error e -> Printf.eprintf "[task_dedup] link error: %s\n%!" e);
+                  Printf.printf "[task_dedup] NEW task %s: %s\n%!" task_id tp.tp_title
+              | Error e ->
+                  Printf.eprintf "[task_dedup] create error: %s\n%!" e)
+            end
+      end
+    with Exit -> ())
+  ) proposals
 
 (*
   Attachment extraction and summarization
@@ -1360,6 +1561,13 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
             (resp, Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
         | Ok () ->
             Printf.printf "[ingest.ok] doc_id=%s chunks=%d\n%!" ndoc (List.length embedded_chunks);
+            (* Process task proposals from triage (Phase D) *)
+            let task_proposals = match triage with
+              | Some t -> t.task_proposals
+              | None -> []
+            in
+            if task_proposals <> [] then
+              process_task_proposals ~client ~sw ~doc_id ~proposals:task_proposals ();
             let resp = Http.Response.make ~status:`OK () in
             (resp, {|{"ok":true}|})))
 

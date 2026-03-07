@@ -131,6 +131,8 @@ let whoami                        = ref ""
 let rag_debug_ollama_embed        = ref false
 let rag_debug_ollama_chat         = ref false
 let rag_debug_retrieval           = ref false
+let task_auto_create              = ref true
+let task_dedup_top_k              = ref 5
 
 (* Read settings.json into all config refs.
    Call once at startup after setting [config_dir], and again on /admin/reload. *)
@@ -186,6 +188,8 @@ let load_settings () : unit =
   rag_debug_ollama_embed := sb [ "debug"; "ollama_embed" ] ~default:false;
   rag_debug_ollama_chat  := sb [ "debug"; "ollama_chat" ]  ~default:false;
   rag_debug_retrieval    := sb [ "debug"; "retrieval" ]    ~default:false;
+  task_auto_create       := sb [ "task"; "auto_create" ]   ~default:true;
+  task_dedup_top_k       := si [ "task"; "dedup_top_k" ]   ~default:5;
   Printf.printf "[config] loaded from %s (db=%s)\n%!" (settings_path ()) !pg_database
 
 (* Serialize all current settings to JSON matching the settings.json structure. *)
@@ -229,6 +233,10 @@ let current_settings_json () : Yojson.Safe.t =
             [ ("include_unrehydrated_metadata", `Bool !rag_include_unrehydrated_metadata)
             ; ("rewrite", `Bool !rag_query_rewrite)
             ])
+        ])
+    ; ("task", `Assoc
+        [ ("auto_create", `Bool !task_auto_create)
+        ; ("dedup_top_k", `Int !task_dedup_top_k)
         ])
     ; ("debug", `Assoc
         [ ("ollama_embed", `Bool !rag_debug_ollama_embed)
