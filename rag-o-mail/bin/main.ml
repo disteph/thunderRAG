@@ -4714,6 +4714,58 @@ let handler ~client ~sw ~clock _socket request body =
               else String.concat "\n" (List.rev !email_context_lines)
             in
 
+            (* 2b. Style-matching RAG: find user's sent emails to trigger email senders *)
+            let style_context =
+              let whoami_str = String.trim !whoami in
+              if whoami_str = "" then ""
+              else begin
+                (* Extract unique sender names from trigger emails *)
+                let trigger_senders = ref [] in
+                List.iter (fun ej ->
+                  let ekv = match ej with `Assoc kv -> kv | _ -> [] in
+                  let role = match List.assoc_opt "role" ekv with Some (`String s) -> s | _ -> "" in
+                  if role = "trigger" then
+                    let doc_id = match List.assoc_opt "doc_id" ekv with Some (`String s) -> s | _ -> "" in
+                    (match Rag_lib.Pg.get_email_detail doc_id with
+                    | Ok (Some detail) ->
+                        let dkv = match detail with `Assoc kv -> kv | _ -> [] in
+                        let md = match List.assoc_opt "metadata" dkv with Some (`Assoc m) -> m | _ -> [] in
+                        let from = match List.assoc_opt "from" md with Some (`String s) -> String.trim s | _ -> "" in
+                        if from <> "" && not (List.mem from !trigger_senders) then
+                          trigger_senders := from :: !trigger_senders
+                    | _ -> ())
+                ) emails;
+                let style_lines = ref [] in
+                List.iter (fun sender ->
+                  let escaped_sender = String.escaped sender in
+                  let escaped_whoami = String.escaped whoami_str in
+                  let filter = Printf.sprintf
+                    "sender ILIKE '%%%s%%' AND (recipient ILIKE '%%%s%%' OR cc ILIKE '%%%s%%')"
+                    escaped_whoami escaped_sender escaped_sender in
+                  let query_text = Printf.sprintf "From: %s\nTo: %s\nRe: %s" whoami_str sender title in
+                  (match ollama_embed ~client ~sw ~task:Search_query ~label:"style_rag" ~text:query_text () with
+                  | Error _ -> ()
+                  | Ok v ->
+                      let emb = l2_normalize v in
+                      (match Rag_lib.Pg.query_knn ~embedding:emb ~top_k:3 ~filter () with
+                      | Error _ -> ()
+                      | Ok (sources, _sql) ->
+                          List.iter (fun src ->
+                            let skv = match src with `Assoc kv -> kv | _ -> [] in
+                            let ss k = match List.assoc_opt k skv with Some (`String s) -> s | _ -> "" in
+                            let excerpt = truncate_chars (String.trim (ss "text")) ~max_chars:800 in
+                            if excerpt <> "" then
+                              style_lines := (Printf.sprintf "---\nFrom: %s\nTo: %s\nSubject: %s\nDate: %s\n%s"
+                                (ss "from") (ss "to") (ss "subject") (ss "date") excerpt) :: !style_lines
+                          ) sources))
+                ) !trigger_senders;
+                if !style_lines = [] then ""
+                else
+                  "\n\nSTYLE CONTEXT (emails you have sent to the same recipients — match this tone and style):\n"
+                  ^ String.concat "\n" (List.rev !style_lines)
+              end
+            in
+
             (* 3. Build system prompt *)
             let user_identity =
               let name_part = String.trim (get_str "user_name") in
@@ -4740,6 +4792,7 @@ let handler ~client ~sw ~clock _socket request body =
                   ("{{task_title}}", title);
                   ("{{task_description}}", description);
                   ("{{email_context}}", email_context);
+                  ("{{style_context}}", style_context);
                   ("{{history_summary}}", if String.trim history_summary = "" then "(no prior conversation)" else history_summary);
                 ]
             in
