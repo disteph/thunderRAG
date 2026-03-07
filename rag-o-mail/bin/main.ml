@@ -4139,6 +4139,549 @@ let handler ~client ~sw ~clock _socket request body =
       let status = Http.Response.status resp in
       Cohttp_eio.Server.respond_string ~status ~body:resp_body ~headers:json_headers ()
 
+  (* ===================================================================
+     Task manager endpoints
+     =================================================================== *)
+
+  | `POST, "/task/list" ->
+      let raw = read_all body in
+      (try
+        let json = Yojson.Safe.from_string raw in
+        let kv = match json with `Assoc kv -> kv | _ -> [] in
+        let get_str k = match List.assoc_opt k kv with Some (`String s) -> String.trim s | _ -> "" in
+        let status_filter =
+          let s = get_str "status" in
+          if s = "" then None else Some s
+        in
+        let email_ids =
+          match List.assoc_opt "email_ids" kv with
+          | Some (`List xs) ->
+              let ids = List.filter_map (function `String s -> Some (String.trim s) | _ -> None) xs in
+              if ids = [] then None else Some ids
+          | _ -> None
+        in
+        let sort_by =
+          let s = get_str "sort_by" in
+          if s = "" then None else Some s
+        in
+        let limit =
+          match List.assoc_opt "limit" kv with
+          | Some (`Int n) -> Some n
+          | _ -> None
+        in
+        (match Rag_lib.Pg.list_tasks ?status_filter ?email_ids ?sort_by ?limit () with
+        | Ok tasks ->
+            let body = `Assoc [ ("tasks", `List tasks) ] |> Yojson.Safe.to_string in
+            Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
+        | Error e ->
+            let body = `Assoc [ ("error", `String e) ] |> Yojson.Safe.to_string in
+            Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ())
+      with e ->
+        Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+          ~body:(Printf.sprintf "task/list error: %s\n" (Printexc.to_string e)) ())
+
+  | `POST, "/task/get" ->
+      let raw = read_all body in
+      (try
+        let json = Yojson.Safe.from_string raw in
+        let task_id = match json with
+          | `Assoc kv -> (match List.assoc_opt "task_id" kv with Some (`String s) -> String.trim s | _ -> "")
+          | _ -> ""
+        in
+        if task_id = "" then
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing task_id\n" ()
+        else
+          (match Rag_lib.Pg.get_task task_id with
+          | Ok (Some task_json) ->
+              Cohttp_eio.Server.respond_string ~status:`OK
+                ~body:(Yojson.Safe.to_string task_json) ~headers:json_headers ()
+          | Ok None ->
+              Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"task not found\n" ()
+          | Error e ->
+              let body = `Assoc [ ("error", `String e) ] |> Yojson.Safe.to_string in
+              Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ())
+      with e ->
+        Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+          ~body:(Printf.sprintf "task/get error: %s\n" (Printexc.to_string e)) ())
+
+  | `POST, "/task/update" ->
+      let raw = read_all body in
+      (try
+        let json = Yojson.Safe.from_string raw in
+        let kv = match json with `Assoc kv -> kv | _ -> [] in
+        let get_str k = match List.assoc_opt k kv with Some (`String s) -> Some (String.trim s) | _ -> None in
+        let task_id = match get_str "task_id" with Some s -> s | None -> "" in
+        if task_id = "" then
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing task_id\n" ()
+        else
+          let title = get_str "title" in
+          let description = get_str "description" in
+          let status = get_str "status" in
+          let importance_score =
+            match List.assoc_opt "importance_score" kv with
+            | Some (`Int n) -> Some (Some n)
+            | Some `Null -> Some None
+            | _ -> None
+          in
+          let deadline = get_str "deadline" in
+          let notes = get_str "notes" in
+          (match Rag_lib.Pg.update_task ~task_id ?title ?description ?status
+                   ?importance_score ?deadline ?notes () with
+          | Ok true ->
+              let body = `Assoc [ ("status", `String "ok") ] |> Yojson.Safe.to_string in
+              Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
+          | Ok false ->
+              Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"task not found\n" ()
+          | Error e ->
+              let body = `Assoc [ ("error", `String e) ] |> Yojson.Safe.to_string in
+              Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ())
+      with e ->
+        Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+          ~body:(Printf.sprintf "task/update error: %s\n" (Printexc.to_string e)) ())
+
+  | `POST, "/task/delete" ->
+      let raw = read_all body in
+      (try
+        let json = Yojson.Safe.from_string raw in
+        let task_id = match json with
+          | `Assoc kv -> (match List.assoc_opt "task_id" kv with Some (`String s) -> String.trim s | _ -> "")
+          | _ -> ""
+        in
+        if task_id = "" then
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing task_id\n" ()
+        else
+          (match Rag_lib.Pg.delete_task task_id with
+          | Ok true ->
+              let body = `Assoc [ ("status", `String "ok") ] |> Yojson.Safe.to_string in
+              Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
+          | Ok false ->
+              Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"task not found\n" ()
+          | Error e ->
+              let body = `Assoc [ ("error", `String e) ] |> Yojson.Safe.to_string in
+              Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ())
+      with e ->
+        Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+          ~body:(Printf.sprintf "task/delete error: %s\n" (Printexc.to_string e)) ())
+
+  (*
+    /task/chat — Continue (or start) a task conversation.
+
+    Server-side state: loads conversation from DB, appends user message,
+    calls LLM, parses structured markers, applies side effects (drafts,
+    score updates, new tasks, etc.), saves updated state, returns response.
+
+    Request: { task_id, user_message, chat_model? }
+    Response: { message, task (updated), side_effects[] }
+  *)
+  | `POST, "/task/chat" ->
+      let raw_req = read_all body in
+      (try
+        let json = Yojson.Safe.from_string raw_req in
+        let kv = match json with `Assoc kv -> kv | _ -> [] in
+        let get_str k = match List.assoc_opt k kv with Some (`String s) -> String.trim s | _ -> "" in
+        let task_id = get_str "task_id" in
+        let user_message = get_str "user_message" in
+        let chat_model = get_str "chat_model" in
+        if task_id = "" then
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing task_id\n" ()
+        else if user_message = "" then
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing user_message\n" ()
+        else
+        (* 1. Load task from DB *)
+        match Rag_lib.Pg.get_task task_id with
+        | Error e ->
+            let body = `Assoc [ ("error", `String e) ] |> Yojson.Safe.to_string in
+            Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ()
+        | Ok None ->
+            Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"task not found\n" ()
+        | Ok (Some task_json) ->
+            let task_kv = match task_json with `Assoc kv -> kv | _ -> [] in
+            let task_str k = match List.assoc_opt k task_kv with Some (`String s) -> s | _ -> "" in
+            let title = task_str "title" in
+            let description = task_str "description" in
+            let history_summary = task_str "history_summary" in
+            let conversation =
+              match List.assoc_opt "conversation" task_kv with
+              | Some (`List ms) -> ms
+              | _ -> []
+            in
+            let emails =
+              match List.assoc_opt "emails" task_kv with
+              | Some (`List es) -> es
+              | _ -> []
+            in
+
+            (* 2. Build email aliases — E1, E2, ... for linked emails *)
+            let email_aliases = ref [] in
+            let alias_idx = ref 0 in
+            let email_context_lines = ref [] in
+            List.iter (fun ej ->
+              let ekv = match ej with `Assoc kv -> kv | _ -> [] in
+              let estr k = match List.assoc_opt k ekv with Some (`String s) -> s | _ -> "" in
+              let doc_id = estr "doc_id" in
+              let role = estr "role" in
+              incr alias_idx;
+              let alias = Printf.sprintf "E%d" !alias_idx in
+              email_aliases := (alias, doc_id) :: !email_aliases;
+              (* Try to fetch email metadata for context *)
+              let md_line =
+                match Rag_lib.Pg.get_email_detail doc_id with
+                | Ok (Some detail) ->
+                    let dkv = match detail with `Assoc kv -> kv | _ -> [] in
+                    let md = match List.assoc_opt "metadata" dkv with Some (`Assoc m) -> m | _ -> [] in
+                    let ms k = match List.assoc_opt k md with Some (`String s) -> s | _ -> "" in
+                    Printf.sprintf "%s (role=%s): From: %s | To: %s | Subject: %s | Date: %s"
+                      alias role (ms "from") (ms "to") (ms "subject") (ms "date")
+                | _ ->
+                    Printf.sprintf "%s (role=%s): doc_id=%s (metadata unavailable)" alias role doc_id
+              in
+              email_context_lines := md_line :: !email_context_lines
+            ) emails;
+            let email_context =
+              if !email_context_lines = [] then "No emails linked to this task."
+              else String.concat "\n" (List.rev !email_context_lines)
+            in
+
+            (* 3. Build system prompt *)
+            let user_identity =
+              let name_part = String.trim (get_str "user_name") in
+              let email_part = String.trim !whoami in
+              match (name_part <> "", email_part <> "") with
+              | true, true  -> Printf.sprintf "The user is: %s (email: %s). " name_part email_part
+              | true, false -> Printf.sprintf "The user is: %s. " name_part
+              | false, true -> Printf.sprintf "The user email is: %s. " email_part
+              | false, false -> ""
+            in
+            let system_prompt =
+              get_prompt "task_interview"
+                ~default:"You are a task management assistant. Help the user work through their tasks. \
+                  Ask short clarifying questions. When ready, draft emails using [DRAFT to=\"...\" subject=\"...\"]...[/DRAFT] markers. \
+                  Use [SCORE importance=N] to update importance (0-100). \
+                  Use [DEADLINE YYYY-MM-DD] to update deadline. \
+                  Use [TITLE ...] or [DESCRIPTION ...] to update task metadata. \
+                  Use [DONE] when the task is complete. \
+                  Use [TASK_NEW title=\"...\" description=\"...\"] to create a new task. \
+                  Use [LINK EN context] to link an email to the current task."
+                ~vars:[
+                  ("{{user_identity}}", user_identity);
+                  ("{{datetime_local}}", now_local_string ());
+                  ("{{task_title}}", title);
+                  ("{{task_description}}", description);
+                  ("{{email_context}}", email_context);
+                  ("{{history_summary}}", if String.trim history_summary = "" then "(no prior conversation)" else history_summary);
+                ]
+            in
+
+            (* 4. Build messages: system + conversation tail + new user message *)
+            let user_msg_json =
+              `Assoc [ ("role", `String "user"); ("content", `String user_message) ]
+            in
+            let updated_conversation = conversation @ [ user_msg_json ] in
+            let messages : Yojson.Safe.t list =
+              (`Assoc [ ("role", `String "system"); ("content", `String system_prompt) ])
+              :: updated_conversation
+            in
+
+            (* 5. Call LLM *)
+            let effective_model = if chat_model <> "" then chat_model else !ollama_llm_model in
+            (match ollama_chat ~client ~sw ~label:"task_chat" ~model:effective_model ~messages () with
+            | Error msg ->
+                let body = `Assoc [ ("error", `String msg) ] |> Yojson.Safe.to_string in
+                Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ()
+            | Ok raw_resp ->
+                let resp_text = String.trim raw_resp in
+                let side_effects = ref [] in
+
+                (* 6. Parse structured markers *)
+
+                (* Helper: find substring *)
+                let find_sub s sub from =
+                  let sub_len = String.length sub in
+                  let s_len = String.length s in
+                  let rec loop i =
+                    if i + sub_len > s_len then None
+                    else if String.sub s i sub_len = sub then Some i
+                    else loop (i + 1)
+                  in
+                  loop from
+                in
+
+                (* Parse [DRAFT ...] ... [/DRAFT] *)
+                let drafts = ref [] in
+                let rec parse_drafts text from =
+                  match find_sub text "[DRAFT" from with
+                  | None -> ()
+                  | Some di ->
+                      (* Find the end of the opening tag line *)
+                      let tag_end = match find_sub text "]" di with Some e -> e + 1 | None -> di + 6 in
+                      let tag_content = String.sub text (di + 6) (tag_end - di - 7) |> String.trim in
+                      (* Parse tag attributes: to="..." cc="..." subject="..." in_reply_to=E1 *)
+                      let parse_attr name content =
+                        let pat = name ^ "=\"" in
+                        match find_sub content pat 0 with
+                        | None -> ""
+                        | Some si ->
+                            let start = si + String.length pat in
+                            (match find_sub content "\"" start with
+                            | Some ei -> String.sub content start (ei - start)
+                            | None -> "")
+                      in
+                      let parse_attr_unquoted name content =
+                        let pat = name ^ "=" in
+                        match find_sub content pat 0 with
+                        | None -> ""
+                        | Some si ->
+                            let start = si + String.length pat in
+                            let end_pos = ref (String.length content) in
+                            for i = start to String.length content - 1 do
+                              if (content.[i] = ' ' || content.[i] = ']') && !end_pos > i then
+                                end_pos := i
+                            done;
+                            String.sub content start (!end_pos - start) |> String.trim
+                      in
+                      let draft_to = parse_attr "to" tag_content in
+                      let draft_cc = parse_attr "cc" tag_content in
+                      let draft_bcc = parse_attr "bcc" tag_content in
+                      let draft_subject = parse_attr "subject" tag_content in
+                      let draft_in_reply_to = parse_attr_unquoted "in_reply_to" tag_content in
+                      (* Find [/DRAFT] *)
+                      (match find_sub text "[/DRAFT]" tag_end with
+                      | None -> ()
+                      | Some end_di ->
+                          let draft_body = String.trim (String.sub text tag_end (end_di - tag_end)) in
+                          let draft_json = `Assoc
+                            [ ("to", `String draft_to)
+                            ; ("cc", `String draft_cc)
+                            ; ("bcc", `String draft_bcc)
+                            ; ("subject", `String draft_subject)
+                            ; ("body", `String draft_body)
+                            ; ("in_reply_to", `String draft_in_reply_to)
+                            ] in
+                          drafts := draft_json :: !drafts;
+                          side_effects := `Assoc [ ("type", `String "draft"); ("draft", draft_json) ] :: !side_effects;
+                          parse_drafts text (end_di + 8))
+                in
+                parse_drafts resp_text 0;
+
+                (* Parse [SCORE importance=N] *)
+                let new_importance = ref None in
+                (match find_sub resp_text "[SCORE " 0 with
+                | None -> ()
+                | Some si ->
+                    let tag_end = match find_sub resp_text "]" si with Some e -> e | None -> si in
+                    let tag = String.sub resp_text si (tag_end - si + 1) in
+                    (match find_sub tag "importance=" 0 with
+                    | None -> ()
+                    | Some ii ->
+                        let start = ii + 11 in
+                        let num_str = ref "" in
+                        for i = start to String.length tag - 1 do
+                          let c = tag.[i] in
+                          if c >= '0' && c <= '9' then num_str := !num_str ^ String.make 1 c
+                        done;
+                        if !num_str <> "" then begin
+                          let n = max 0 (min 100 (int_of_string !num_str)) in
+                          new_importance := Some n;
+                          side_effects := `Assoc [ ("type", `String "score"); ("importance", `Int n) ] :: !side_effects
+                        end));
+
+                (* Parse [DEADLINE YYYY-MM-DD] *)
+                let new_deadline = ref None in
+                (match find_sub resp_text "[DEADLINE " 0 with
+                | None -> ()
+                | Some si ->
+                    let start = si + 10 in
+                    let tag_end = match find_sub resp_text "]" start with Some e -> e | None -> start in
+                    let deadline_str = String.trim (String.sub resp_text start (tag_end - start)) in
+                    if String.length deadline_str >= 10 then begin
+                      new_deadline := Some deadline_str;
+                      side_effects := `Assoc [ ("type", `String "deadline"); ("deadline", `String deadline_str) ] :: !side_effects
+                    end);
+
+                (* Parse [TITLE ...] *)
+                let new_title = ref None in
+                (match find_sub resp_text "[TITLE " 0 with
+                | None -> ()
+                | Some si ->
+                    let start = si + 7 in
+                    let tag_end = match find_sub resp_text "]" start with Some e -> e | None -> start in
+                    let t = String.trim (String.sub resp_text start (tag_end - start)) in
+                    if t <> "" then begin
+                      new_title := Some t;
+                      side_effects := `Assoc [ ("type", `String "title"); ("title", `String t) ] :: !side_effects
+                    end);
+
+                (* Parse [DESCRIPTION ...] *)
+                let new_description = ref None in
+                (match find_sub resp_text "[DESCRIPTION " 0 with
+                | None -> ()
+                | Some si ->
+                    let start = si + 13 in
+                    let tag_end = match find_sub resp_text "]" start with Some e -> e | None -> start in
+                    let d = String.trim (String.sub resp_text start (tag_end - start)) in
+                    if d <> "" then begin
+                      new_description := Some d;
+                      side_effects := `Assoc [ ("type", `String "description"); ("description", `String d) ] :: !side_effects
+                    end);
+
+                (* Parse [DONE] *)
+                let is_done = find_sub resp_text "[DONE]" 0 <> None in
+                if is_done then
+                  side_effects := `Assoc [ ("type", `String "done") ] :: !side_effects;
+
+                (* Parse [TASK_NEW title="..." description="..."] *)
+                (match find_sub resp_text "[TASK_NEW " 0 with
+                | None -> ()
+                | Some si ->
+                    let tag_end = match find_sub resp_text "]" si with Some e -> e | None -> si in
+                    let tag = String.sub resp_text si (tag_end - si + 1) in
+                    let parse_attr name =
+                      let pat = name ^ "=\"" in
+                      match find_sub tag pat 0 with
+                      | None -> ""
+                      | Some ai ->
+                          let start = ai + String.length pat in
+                          (match find_sub tag "\"" start with
+                          | Some ei -> String.sub tag start (ei - start)
+                          | None -> "")
+                    in
+                    let new_title_ = parse_attr "title" in
+                    let new_desc = parse_attr "description" in
+                    if new_title_ <> "" then begin
+                      (* Create the new task *)
+                      let new_task_id = Printf.sprintf "%08x-%04x-%04x-%04x-%012x"
+                        (Random.bits ()) (Random.int 0xFFFF) (Random.int 0xFFFF)
+                        (Random.int 0xFFFF) (Random.bits () lor (Random.bits () lsl 30)) in
+                      (match Rag_lib.Pg.create_task
+                        ~task_id:new_task_id ~title:new_title_ ~description:new_desc
+                        ~importance_score:None ~deadline:""
+                        ~embedding:[] ~conversation_json:"[]" ~drafts_json:"[]" () with
+                      | Ok () ->
+                          side_effects := `Assoc
+                            [ ("type", `String "task_new")
+                            ; ("task_id", `String new_task_id)
+                            ; ("title", `String new_title_)
+                            ; ("description", `String new_desc)
+                            ] :: !side_effects;
+                          Printf.printf "[task_chat] created new task %s: %s\n%!" new_task_id new_title_
+                      | Error e ->
+                          Printf.eprintf "[task_chat] failed to create task: %s\n%!" e)
+                    end);
+
+                (* Parse [LINK EN role] *)
+                (match find_sub resp_text "[LINK " 0 with
+                | None -> ()
+                | Some si ->
+                    let start = si + 6 in
+                    let tag_end = match find_sub resp_text "]" start with Some e -> e | None -> start in
+                    let content = String.trim (String.sub resp_text start (tag_end - start)) in
+                    let parts = String.split_on_char ' ' content in
+                    (match parts with
+                    | alias :: rest ->
+                        let role = match rest with r :: _ -> String.trim r | [] -> "context" in
+                        (* Resolve alias to doc_id *)
+                        let doc_id_opt =
+                          List.find_opt (fun (a, _) -> a = alias) (List.rev !email_aliases)
+                          |> Option.map snd
+                        in
+                        (match doc_id_opt with
+                        | Some doc_id ->
+                            (match Rag_lib.Pg.link_email_to_task ~task_id ~doc_id ~role with
+                            | Ok () ->
+                                side_effects := `Assoc
+                                  [ ("type", `String "link")
+                                  ; ("alias", `String alias)
+                                  ; ("doc_id", `String doc_id)
+                                  ; ("role", `String role)
+                                  ] :: !side_effects
+                            | Error e ->
+                                Printf.eprintf "[task_chat] link error: %s\n%!" e)
+                        | None ->
+                            Printf.eprintf "[task_chat] unknown alias: %s\n%!" alias)
+                    | [] -> ()));
+
+                (* 7. Strip markers from display text *)
+                let display_text =
+                  let t = ref resp_text in
+                  (* Remove [DRAFT]...[/DRAFT] blocks *)
+                  let rec strip_drafts () =
+                    match find_sub !t "[DRAFT" 0 with
+                    | None -> ()
+                    | Some di ->
+                        (match find_sub !t "[/DRAFT]" di with
+                        | Some ei ->
+                            let before = String.sub !t 0 di in
+                            let after_end = ei + 8 in
+                            let after = if after_end < String.length !t
+                              then String.sub !t after_end (String.length !t - after_end) else "" in
+                            t := before ^ after;
+                            strip_drafts ()
+                        | None -> ())
+                  in
+                  strip_drafts ();
+                  (* Remove single-line markers *)
+                  let lines = String.split_on_char '\n' !t in
+                  let filtered = List.filter (fun line ->
+                    let l = String.trim line in
+                    not (
+                      (String.length l > 7 && String.sub l 0 7 = "[SCORE ")
+                      || (String.length l > 10 && String.sub l 0 10 = "[DEADLINE ")
+                      || (String.length l > 7 && String.sub l 0 7 = "[TITLE ")
+                      || (String.length l > 13 && String.sub l 0 13 = "[DESCRIPTION ")
+                      || l = "[DONE]"
+                      || (String.length l > 10 && String.sub l 0 10 = "[TASK_NEW ")
+                      || (String.length l > 6 && String.sub l 0 6 = "[LINK ")
+                    )) lines
+                  in
+                  String.concat "\n" filtered |> String.trim
+                in
+
+                (* 8. Update task in DB *)
+                let assistant_msg_json =
+                  `Assoc [ ("role", `String "assistant"); ("content", `String resp_text) ]
+                in
+                let final_conversation = updated_conversation @ [ assistant_msg_json ] in
+                let new_drafts_json =
+                  if !drafts <> [] then
+                    Some (Yojson.Safe.to_string (`List (List.rev !drafts)))
+                  else None
+                in
+                let new_status =
+                  if is_done then Some "done"
+                  else if conversation = [] then Some "in_progress"
+                  else None
+                in
+                let importance_update =
+                  match !new_importance with
+                  | Some n -> Some (Some n)
+                  | None -> None
+                in
+                (match Rag_lib.Pg.update_task ~task_id
+                  ?title:!new_title
+                  ?description:!new_description
+                  ?status:new_status
+                  ?importance_score:importance_update
+                  ?deadline:!new_deadline
+                  ?drafts_json:new_drafts_json
+                  ~conversation_json:(Yojson.Safe.to_string (`List final_conversation))
+                  () with
+                | Ok _ -> ()
+                | Error e -> Printf.eprintf "[task_chat] update error: %s\n%!" e);
+
+                (* 9. Return response *)
+                let resp_json = `Assoc
+                  [ ("message", `String display_text)
+                  ; ("raw_message", `String resp_text)
+                  ; ("task_id", `String task_id)
+                  ; ("side_effects", `List (List.rev !side_effects))
+                  ; ("is_done", `Bool is_done)
+                  ] in
+                Cohttp_eio.Server.respond_string ~status:`OK
+                  ~body:(Yojson.Safe.to_string resp_json) ~headers:json_headers ())
+      with e ->
+        Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+          ~body:(Printf.sprintf "task/chat error: %s\n" (Printexc.to_string e)) ())
+
   (*
     /reply/start — Initiate a reply-drafting conversation.
 
