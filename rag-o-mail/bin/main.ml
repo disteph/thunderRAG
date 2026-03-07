@@ -4643,7 +4643,10 @@ let handler ~client ~sw ~clock _socket request body =
                 let final_conversation = updated_conversation @ [ assistant_msg_json ] in
                 let new_drafts_json =
                   if !drafts <> [] then
-                    Some (Yojson.Safe.to_string (`List (List.rev !drafts)))
+                    let existing = match List.assoc_opt "drafts" task_kv with
+                      | Some (`List ds) -> ds | _ -> []
+                    in
+                    Some (Yojson.Safe.to_string (`List (existing @ List.rev !drafts)))
                   else None
                 in
                 let new_status =

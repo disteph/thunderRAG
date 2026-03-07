@@ -1,0 +1,418 @@
+<!doctype html>
+<!--
+  ThunderRAG task manager UI
+
+  3-pane layout:
+  - Left: scrollable list of tasks (from /task/list)
+  - Middle: per-task conversation with the LLM (task metadata at top, Q&A below)
+  - Right: compose form (To/Cc/Bcc/Subject/Body) populated by LLM via [DRAFT] markers
+
+  Entry points:
+  - tasks.html                     — full task list
+  - tasks.html?task_id=<id>        — open specific task
+  - tasks.html?email_ids=[...]     — tasks referencing specific emails
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ThunderRAG — Tasks</title>
+    <style>
+      :root { color-scheme: light dark; }
+      * { box-sizing: border-box; }
+      body {
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        margin: 0;
+        background: Canvas;
+        color: CanvasText;
+        height: 100vh;
+        overflow: hidden;
+      }
+
+      #app {
+        display: flex;
+        height: 100vh;
+      }
+
+      /* ── Left pane: task list ── */
+      .left-pane {
+        width: 280px;
+        min-width: 220px;
+        border-right: 1px solid rgba(127,127,127,0.25);
+        display: flex;
+        flex-direction: column;
+        background: Canvas;
+      }
+      .left-toolbar {
+        padding: 8px 10px;
+        border-bottom: 1px solid rgba(127,127,127,0.15);
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        flex-shrink: 0;
+      }
+      .left-toolbar h2 {
+        margin: 0;
+        font-size: 13px;
+        opacity: 0.7;
+        font-weight: 600;
+        flex: 1;
+      }
+      .left-toolbar select {
+        font-size: 11px;
+        padding: 2px 4px;
+        background: Field;
+        color: FieldText;
+        border: 1px solid rgba(127,127,127,0.3);
+        border-radius: 4px;
+      }
+      .task-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 0 6px 6px;
+      }
+      .task-item {
+        padding: 8px 10px;
+        border-radius: 8px;
+        cursor: pointer;
+        margin-bottom: 2px;
+        border: 1px solid transparent;
+        font-size: 13px;
+        line-height: 1.3;
+      }
+      .task-item:hover {
+        background: rgba(127,127,127,0.08);
+      }
+      .task-item.active {
+        background: AccentColor;
+        color: AccentColorText;
+        border-color: rgba(0,0,0,0);
+      }
+      .task-item .ti-title {
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .task-item .ti-desc {
+        opacity: 0.8;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-size: 12px;
+      }
+      .task-item .ti-meta {
+        font-size: 11px;
+        margin-top: 2px;
+        opacity: 0.7;
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .task-item.active .ti-meta { opacity: 0.9; }
+
+      /* Status badges */
+      .badge {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 600;
+      }
+      .badge-open { background: rgba(59,130,246,0.2); color: #2563eb; }
+      .badge-in_progress { background: rgba(234,179,8,0.2); color: #a16207; }
+      .badge-done { background: rgba(34,197,94,0.2); color: #15803d; }
+      .badge-dismissed { background: rgba(127,127,127,0.2); color: rgba(127,127,127,0.8); }
+      .task-item.active .badge { opacity: 0.9; }
+
+      .importance-pip {
+        display: inline-block;
+        width: 8px; height: 8px;
+        border-radius: 999px;
+        flex-shrink: 0;
+      }
+
+      /* ── Middle pane: conversation ── */
+      .mid-pane {
+        flex: 1;
+        min-width: 300px;
+        display: flex;
+        flex-direction: column;
+        border-right: 1px solid rgba(127,127,127,0.25);
+      }
+      .mid-header {
+        padding: 10px 14px;
+        border-bottom: 1px solid rgba(127,127,127,0.15);
+        font-size: 12px;
+        line-height: 1.4;
+        max-height: 200px;
+        overflow-y: auto;
+        flex-shrink: 0;
+      }
+      .mid-header .mh-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+      .mid-header .mh-desc { opacity: 0.85; margin-bottom: 6px; }
+      .mid-header .mh-emails {
+        font-size: 11px;
+        opacity: 0.7;
+        border-top: 1px solid rgba(127,127,127,0.1);
+        padding-top: 6px;
+      }
+      .mid-header .mh-emails a {
+        color: AccentColor;
+        text-decoration: none;
+        cursor: pointer;
+      }
+      .mid-header .mh-emails a:hover { text-decoration: underline; }
+      .mid-header .mh-actions {
+        margin-top: 6px;
+        display: flex;
+        gap: 6px;
+      }
+      .mid-header .mh-actions button {
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 4px;
+        border: 1px solid rgba(127,127,127,0.3);
+        background: Field;
+        color: FieldText;
+        cursor: pointer;
+      }
+      .mid-header .mh-actions button:hover { background: rgba(127,127,127,0.1); }
+      .mid-header .mh-actions button.danger { color: #dc2626; border-color: rgba(220,38,38,0.3); }
+
+      .mid-chat {
+        flex: 1;
+        overflow-y: auto;
+        padding: 10px 14px;
+      }
+      .mid-chat .msg {
+        display: flex;
+        margin: 6px 0;
+      }
+      .mid-chat .msg-assistant { justify-content: flex-start; }
+      .mid-chat .msg-user { justify-content: flex-end; }
+      .mid-chat .bubble {
+        max-width: 85%;
+        padding: 8px 12px;
+        border-radius: 10px;
+        line-height: 1.35;
+        white-space: pre-wrap;
+        border: 1px solid rgba(127,127,127,0.25);
+        background: Field;
+        color: FieldText;
+        font-size: 13px;
+      }
+      .mid-chat .msg-user .bubble {
+        background: AccentColor;
+        color: AccentColorText;
+        border-color: rgba(0,0,0,0);
+      }
+      .mid-composer {
+        padding: 8px 14px;
+        border-top: 1px solid rgba(127,127,127,0.25);
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+        flex-shrink: 0;
+      }
+      .mid-composer textarea {
+        flex: 1;
+        font-size: 13px;
+        padding: 6px 8px;
+        background: Field;
+        color: FieldText;
+        border: 1px solid rgba(127,127,127,0.35);
+        border-radius: 8px;
+        resize: none;
+        min-height: 36px;
+        max-height: 100px;
+        font-family: inherit;
+      }
+      .mid-composer button {
+        padding: 6px 12px;
+        font-size: 13px;
+        cursor: pointer;
+        border-radius: 8px;
+        border: 1px solid rgba(127,127,127,0.35);
+        background: Field;
+        color: FieldText;
+      }
+      .mid-composer button:hover { background: rgba(127,127,127,0.1); }
+
+      /* ── Right pane: compose form ── */
+      .right-pane {
+        width: 400px;
+        min-width: 300px;
+        display: flex;
+        flex-direction: column;
+        background: Canvas;
+      }
+      .right-header {
+        padding: 10px 14px;
+        border-bottom: 1px solid rgba(127,127,127,0.15);
+        font-size: 13px;
+        font-weight: 600;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .right-header .draft-tabs {
+        display: flex;
+        gap: 4px;
+        flex: 1;
+      }
+      .right-header .draft-tab {
+        padding: 3px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        cursor: pointer;
+        border: 1px solid rgba(127,127,127,0.3);
+        background: Field;
+        color: FieldText;
+        font-weight: 400;
+      }
+      .right-header .draft-tab.active {
+        background: AccentColor;
+        color: AccentColorText;
+        border-color: AccentColor;
+        font-weight: 600;
+      }
+      .compose-fields {
+        padding: 8px 14px 0;
+        flex-shrink: 0;
+      }
+      .compose-fields .cf-row {
+        display: flex;
+        align-items: center;
+        margin-bottom: 4px;
+        font-size: 12px;
+      }
+      .compose-fields .cf-label {
+        width: 50px;
+        font-weight: 600;
+        opacity: 0.7;
+        flex-shrink: 0;
+      }
+      .compose-fields input {
+        flex: 1;
+        font-size: 12px;
+        padding: 4px 6px;
+        background: Field;
+        color: FieldText;
+        border: 1px solid rgba(127,127,127,0.25);
+        border-radius: 4px;
+        font-family: inherit;
+      }
+      .compose-body {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        padding: 8px 14px;
+      }
+      .compose-body textarea {
+        flex: 1;
+        font-size: 13px;
+        padding: 8px;
+        background: Field;
+        color: FieldText;
+        border: 1px solid rgba(127,127,127,0.35);
+        border-radius: 8px;
+        resize: none;
+        font-family: inherit;
+        line-height: 1.4;
+      }
+      .compose-body textarea:disabled {
+        opacity: 0.7;
+        background: rgba(127,127,127,0.05);
+      }
+      .right-actions {
+        padding: 8px 14px;
+        border-top: 1px solid rgba(127,127,127,0.15);
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        flex-shrink: 0;
+      }
+      .right-actions button {
+        padding: 8px 16px;
+        font-size: 13px;
+        cursor: pointer;
+        border-radius: 8px;
+        border: 1px solid rgba(127,127,127,0.35);
+        background: Field;
+        color: FieldText;
+      }
+      .right-actions button.primary {
+        background: AccentColor;
+        color: AccentColorText;
+        border-color: AccentColor;
+        font-weight: 600;
+      }
+      .right-actions button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+
+      /* Typing indicator */
+      .typing {
+        display: inline-flex;
+        gap: 4px;
+        align-items: center;
+        font-size: 18px;
+        line-height: 1;
+        opacity: 0.85;
+      }
+      .typing .dot {
+        width: 5px; height: 5px;
+        border-radius: 999px;
+        background: currentColor;
+        animation: dotPulse 1.2s infinite ease-in-out;
+      }
+      .typing .dot:nth-child(2) { animation-delay: 0.15s; }
+      .typing .dot:nth-child(3) { animation-delay: 0.3s; }
+      @keyframes dotPulse {
+        0%, 80%, 100% { opacity: 0.2; transform: translateY(0); }
+        40% { opacity: 1; transform: translateY(-2px); }
+      }
+
+      .empty-state {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0.5;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div class="left-pane">
+        <div class="left-toolbar">
+          <h2>Tasks</h2>
+          <select id="statusFilter">
+            <option value="">All open</option>
+            <option value="open">Open</option>
+            <option value="in_progress">In progress</option>
+            <option value="done">Done</option>
+            <option value="dismissed">Dismissed</option>
+          </select>
+          <select id="sortBy">
+            <option value="updated_at">Recent</option>
+            <option value="deadline">Deadline</option>
+            <option value="importance">Importance</option>
+          </select>
+        </div>
+        <div id="taskList" class="task-list"></div>
+      </div>
+      <div class="mid-pane" id="midPane">
+        <div class="empty-state">Select a task on the left</div>
+      </div>
+      <div class="right-pane" id="rightPane">
+        <div class="empty-state">Compose form will appear here</div>
+      </div>
+    </div>
+    <script src="tasks.js"></script>
+  </body>
+</html>

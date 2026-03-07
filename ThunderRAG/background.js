@@ -35,11 +35,13 @@ function openQueryTab() {
   }
 }
 
-/* Open the ThunderRAG reply-drafting UI with the given header Message-Ids. */
-function openReplyTab(headerMessageIds) {
+/* Open the ThunderRAG task manager UI, optionally filtered to emails. */
+function openTasksTab(emailIds) {
   try {
-    const ids = encodeURIComponent(JSON.stringify(headerMessageIds));
-    const url = browser.runtime.getURL(`ui/reply.html?ids=${ids}`);
+    let url = browser.runtime.getURL("ui/tasks.html");
+    if (emailIds && emailIds.length) {
+      url += `?email_ids=${encodeURIComponent(JSON.stringify(emailIds))}`;
+    }
     browser.tabs.create({ url });
   } catch (e) {
     console.error(e);
@@ -174,6 +176,52 @@ browser.runtime.onMessage.addListener(async (msg) => {
         plainTextBody: body,
         isPlainText: true,
       });
+      const result = await browser.compose.sendMessage(composeTab.id, { mode: "sendNow" });
+      return { ok: true, result };
+    }
+
+    if (msg.type === "openCompose") {
+      const details = {
+        to: msg.to || "",
+        cc: msg.cc || "",
+        bcc: msg.bcc || "",
+        subject: msg.subject || "",
+        plainTextBody: msg.body || "",
+        isPlainText: true,
+      };
+      if (msg.inReplyTo) {
+        try {
+          const messageId = await resolveHeaderMessageId(msg.inReplyTo);
+          const composeTab = await browser.compose.beginReply(messageId, "replyToSender", details);
+          return { ok: true, tabId: composeTab.id };
+        } catch (_e) {
+          // Fall back to beginNew if the original message can't be resolved
+        }
+      }
+      const composeTab = await browser.compose.beginNew(null, details);
+      return { ok: true, tabId: composeTab.id };
+    }
+
+    if (msg.type === "sendCompose") {
+      const details = {
+        to: msg.to || "",
+        cc: msg.cc || "",
+        bcc: msg.bcc || "",
+        subject: msg.subject || "",
+        plainTextBody: msg.body || "",
+        isPlainText: true,
+      };
+      let composeTab;
+      if (msg.inReplyTo) {
+        try {
+          const messageId = await resolveHeaderMessageId(msg.inReplyTo);
+          composeTab = await browser.compose.beginReply(messageId, "replyToSender", details);
+        } catch (_e) {
+          composeTab = await browser.compose.beginNew(null, details);
+        }
+      } else {
+        composeTab = await browser.compose.beginNew(null, details);
+      }
       const result = await browser.compose.sendMessage(composeTab.id, { mode: "sendNow" });
       return { ok: true, result };
     }
@@ -546,8 +594,14 @@ browser.menus.create({
 });
 
 browser.menus.create({
-  id: "thunderrag-draft-reply",
-  title: "ThunderRAG: Draft reply",
+  id: "thunderrag-show-tasks",
+  title: "ThunderRAG: Show tasks",
+  contexts: ["message_list"],
+});
+
+browser.menus.create({
+  id: "thunderrag-open-taskmanager",
+  title: "ThunderRAG: Open task manager",
   contexts: ["message_list"],
 });
 
@@ -568,7 +622,8 @@ browser.menus.onShown.addListener(async (info) => {
         browser.menus.update("thunderrag-show-ingested", { visible: true }),
         browser.menus.update("thunderrag-mark-processed", { visible: true }),
         browser.menus.update("thunderrag-mark-unprocessed", { visible: true }),
-        browser.menus.update("thunderrag-draft-reply", { visible: true }),
+        browser.menus.update("thunderrag-show-tasks", { visible: true }),
+        browser.menus.update("thunderrag-open-taskmanager", { visible: true }),
       ]);
     } else if (msgs.length === 1) {
       const mid = msgs[0].headerMessageId || "";
@@ -585,7 +640,8 @@ browser.menus.onShown.addListener(async (info) => {
         browser.menus.update("thunderrag-show-ingested", { visible: isIngested }),
         browser.menus.update("thunderrag-mark-processed", { visible: isIngested && !isProcessed }),
         browser.menus.update("thunderrag-mark-unprocessed", { visible: isIngested && isProcessed }),
-        browser.menus.update("thunderrag-draft-reply", { visible: true }),
+        browser.menus.update("thunderrag-show-tasks", { visible: true }),
+        browser.menus.update("thunderrag-open-taskmanager", { visible: true }),
       ]);
     }
     browser.menus.refresh();
@@ -606,15 +662,17 @@ browser.menus.onClicked.addListener(async (info) => {
       await handleMarkProcessed(true);
     } else if (info.menuItemId === "thunderrag-mark-unprocessed") {
       await handleMarkProcessed(false);
-    } else if (info.menuItemId === "thunderrag-draft-reply") {
-      await handleDraftReply();
+    } else if (info.menuItemId === "thunderrag-show-tasks") {
+      await handleShowTasks();
+    } else if (info.menuItemId === "thunderrag-open-taskmanager") {
+      openTasksTab();
     }
   } catch (e) {
     console.error(`[ThunderRAG] menu handler error: ${e}`);
   }
 });
 
-async function handleDraftReply() {
+async function handleShowTasks() {
   const tabs = await browser.mailTabs.query({ active: true, currentWindow: true });
   if (!tabs.length) return;
   let page = await browser.mailTabs.getSelectedMessages(tabs[0].id);
@@ -629,7 +687,7 @@ async function handleDraftReply() {
     .filter(Boolean)
     .map(id => id.startsWith("<") ? id : `<${id}>`);
   if (!ids.length) return;
-  openReplyTab(ids);
+  openTasksTab(ids);
 }
 
 async function handleIngestSelected() {
