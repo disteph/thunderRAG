@@ -1217,6 +1217,99 @@ let maybe_summarize_session ~client ~sw (s : session_state) : unit =
         s.tail <- to_keep
     | None -> ())
 
+(*
+  Task conversation lifecycle (Phase E)
+
+  Rolling summary: when conversation tail exceeds a threshold, compress
+  older turns into history_summary via LLM.
+
+  Archival: on completion/dismissal, compress full conversation to notes,
+  clear conversation + history_summary.
+*)
+let render_json_messages (msgs : Yojson.Safe.t list) : string =
+  msgs
+  |> List.map (fun m ->
+    let kv = match m with `Assoc kv -> kv | _ -> [] in
+    let role = match List.assoc_opt "role" kv with Some (`String s) -> s | _ -> "user" in
+    let content = match List.assoc_opt "content" kv with Some (`String s) -> s | _ -> "" in
+    let label = match String.lowercase_ascii role with
+      | "assistant" -> "Assistant" | "system" -> "System" | _ -> "User"
+    in
+    Printf.sprintf "%s: %s" label (String.trim content))
+  |> String.concat "\n"
+
+let maybe_summarize_task_conversation ~client ~sw
+    ~(task_id : string) ~(conversation : Yojson.Safe.t list)
+    ~(history_summary : string) () : unit =
+  let history_max = 12000 in
+  let history_trigger = int_of_float (0.8 *. float_of_int history_max) in
+  let history_target = int_of_float (0.6 *. float_of_int history_max) in
+  let keep_recent = 10 in
+  let n = List.length conversation in
+  let tail_text = render_json_messages conversation in
+  let combined =
+    if String.trim history_summary = "" then tail_text
+    else history_summary ^ "\n\n" ^ tail_text
+  in
+  if String.length combined > history_trigger && n > keep_recent then begin
+    let to_keep = List.filteri (fun i _ -> i >= n - keep_recent) conversation in
+    let to_summarize = List.filteri (fun i _ -> i < n - keep_recent) conversation in
+    let prefix =
+      if String.trim history_summary = "" then render_json_messages to_summarize
+      else history_summary ^ "\n\n" ^ render_json_messages to_summarize
+    in
+    match call_ollama_summarize ~client ~sw ~text:prefix ~target_chars:history_target with
+    | Some summary ->
+        let new_summary = trim_to_max summary history_target in
+        (match Rag_lib.Pg.update_task ~task_id
+            ~history_summary:new_summary
+            ~conversation_json:(Yojson.Safe.to_string (`List to_keep))
+            () with
+        | Ok _ ->
+            Printf.printf "[task_lifecycle] summarized %d turns for task %s (%d chars → %d chars)\n%!"
+              (List.length to_summarize) task_id (String.length prefix) (String.length new_summary)
+        | Error e ->
+            Printf.eprintf "[task_lifecycle] summary update error: %s\n%!" e)
+    | None ->
+        Printf.eprintf "[task_lifecycle] summarize failed for task %s\n%!" task_id
+  end
+
+let archive_task_conversation ~client ~sw ~(task_id : string)
+    ~(conversation : Yojson.Safe.t list) ~(history_summary : string)
+    ~(title : string) () : unit =
+  let full_text =
+    let conv_text = render_json_messages conversation in
+    if String.trim history_summary = "" then conv_text
+    else history_summary ^ "\n\n" ^ conv_text
+  in
+  if String.trim full_text = "" then ()
+  else
+    let target_chars = 2000 in
+    let system =
+      get_prompt "task_archive"
+        ~default:"Summarize the following task conversation into concise notes. \
+          Preserve key decisions, action items, and outcomes. Third person."
+        ~vars:[("{{task_title}}", title)]
+    in
+    let messages : Yojson.Safe.t list =
+      [ `Assoc [ ("role", `String "system"); ("content", `String (system ^ Printf.sprintf " Target: at most %d characters." target_chars)) ]
+      ; `Assoc [ ("role", `String "user"); ("content", `String full_text) ]
+      ]
+    in
+    match ollama_chat ~client ~sw ~label:"task_archive" ~messages () with
+    | Ok raw ->
+        let notes = trim_to_max (String.trim raw) target_chars in
+        (match Rag_lib.Pg.update_task ~task_id
+            ~notes
+            ~conversation_json:"[]"
+            ~history_summary:""
+            () with
+        | Ok _ ->
+            Printf.printf "[task_lifecycle] archived task %s (%d char notes)\n%!" task_id (String.length notes)
+        | Error e ->
+            Printf.eprintf "[task_lifecycle] archive update error: %s\n%!" e)
+    | Error e ->
+        Printf.eprintf "[task_lifecycle] archive LLM error: %s\n%!" e
 
 let request_header_or_empty (request : Http.Request.t) (name : string) : string =
   match Http.Header.get (Http.Request.headers request) name with
@@ -4433,9 +4526,32 @@ let handler ~client ~sw ~clock _socket request body =
           in
           let deadline = get_str "deadline" in
           let notes = get_str "notes" in
+          let should_archive = match status with
+            | Some "done" | Some "dismissed" -> true | _ -> false
+          in
+          (* If archiving, fetch task first for conversation data *)
+          let pre_task = if should_archive then Rag_lib.Pg.get_task task_id else Ok None in
           (match Rag_lib.Pg.update_task ~task_id ?title ?description ?status
                    ?importance_score ?deadline ?notes () with
           | Ok true ->
+              (* Archive conversation on completion/dismissal *)
+              if should_archive then begin
+                match pre_task with
+                | Ok (Some task_json) ->
+                    let tkv = match task_json with `Assoc kv -> kv | _ -> [] in
+                    let conv = match List.assoc_opt "conversation" tkv with
+                      | Some (`List l) -> l | _ -> []
+                    in
+                    let hist = match List.assoc_opt "history_summary" tkv with
+                      | Some (`String s) -> s | _ -> ""
+                    in
+                    let t = match List.assoc_opt "title" tkv with
+                      | Some (`String s) -> s | _ -> ""
+                    in
+                    archive_task_conversation ~client ~sw ~task_id
+                      ~conversation:conv ~history_summary:hist ~title:t ()
+                | _ -> ()
+              end;
               let body = `Assoc [ ("status", `String "ok") ] |> Yojson.Safe.to_string in
               Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
           | Ok false ->
@@ -4878,6 +4994,20 @@ let handler ~client ~sw ~clock _socket request body =
                   () with
                 | Ok _ -> ()
                 | Error e -> Printf.eprintf "[task_chat] update error: %s\n%!" e);
+
+                (* 8b. Lifecycle: rolling summary or archival *)
+                let task_history_summary = match List.assoc_opt "history_summary" task_kv with
+                  | Some (`String s) -> s | _ -> ""
+                in
+                if is_done then
+                  archive_task_conversation ~client ~sw ~task_id
+                    ~conversation:final_conversation
+                    ~history_summary:task_history_summary
+                    ~title ()
+                else
+                  maybe_summarize_task_conversation ~client ~sw ~task_id
+                    ~conversation:final_conversation
+                    ~history_summary:task_history_summary ();
 
                 (* 9. Return response *)
                 let resp_json = `Assoc
