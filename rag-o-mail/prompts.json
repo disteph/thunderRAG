@@ -71,8 +71,17 @@
     "- Any explicit deadlines or urgency cues",
     "- The email's Date header as the reference point for relative deadlines",
     "",
+    "4. tasks (array of objects): Actions the user needs to take in response to this email. Each object has:",
+    "   - \"title\": short task title (e.g. \"Reply to Alice about budget\")",
+    "   - \"description\": what needs to be done (1-2 sentences)",
+    "   - \"importance\": integer 0-100, how important this task is",
+    "   - \"deadline\": \"YYYY-MM-DD\" or \"none\"",
+    "Only propose tasks for emails that require concrete user action (reply, review, submit, schedule, etc.).",
+    "Newsletters, automated notifications, FYI-only emails, and spam should have an empty tasks array.",
+    "Most actionable emails produce exactly 1 task. Only produce multiple if distinctly different actions are needed.",
+    "",
     "Respond with ONLY a JSON object, no markdown, no explanation:",
-    "{\"action_score\": <int>, \"importance_score\": <int>, \"reply_by\": \"YYYY-MM-DD or none\"}"
+    "{\"action_score\": <int>, \"importance_score\": <int>, \"reply_by\": \"YYYY-MM-DD or none\", \"tasks\": [{\"title\": \"...\", \"description\": \"...\", \"importance\": <int>, \"deadline\": \"YYYY-MM-DD or none\"}]}"
   ],
 
   "query_rewrite": [
