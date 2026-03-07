@@ -609,6 +609,33 @@ let triage_email ~client ~sw ~(whoami : string)
 (* Global hook for background prefetch notification — set at startup *)
 let notify_prefetch : (unit -> unit) ref = ref (fun () -> ())
 
+(* Build a context summary from a trigger email for the first task conversation message.
+   Returns an assistant message string summarizing the email context. *)
+let build_task_context_summary ~(doc_id : string) ~(title : string) ~(description : string) : string =
+  let parts = ref [] in
+  parts := Printf.sprintf "**Task: %s**\n%s" title description :: !parts;
+  (match Rag_lib.Pg.get_email_detail doc_id with
+   | Ok (Some json) ->
+       let md = match json with
+         | `Assoc kv -> (match List.assoc_opt "metadata" kv with Some (`Assoc m) -> m | _ -> [])
+         | _ -> []
+       in
+       let str k = match List.assoc_opt k md with Some (`String s) when s <> "" -> Some s | _ -> None in
+       let lines = ref [] in
+       (match str "from" with Some v -> lines := ("From: " ^ v) :: !lines | None -> ());
+       (match str "to" with Some v -> lines := ("To: " ^ v) :: !lines | None -> ());
+       (match str "subject" with Some v -> lines := ("Subject: " ^ v) :: !lines | None -> ());
+       (match str "date" with Some v -> lines := ("Date: " ^ v) :: !lines | None -> ());
+       if !lines <> [] then
+         parts := ("\n**Trigger email:**\n" ^ String.concat "\n" (List.rev !lines)) :: !parts
+   | _ -> ());
+  (match Rag_lib.Pg.get_first_chunk_text doc_id with
+   | Ok (Some body) when String.length body > 0 ->
+       let preview = if String.length body > 600 then String.sub body 0 600 ^ "…" else body in
+       parts := ("\n**Email content preview:**\n" ^ preview) :: !parts
+   | _ -> ());
+  String.concat "\n" (List.rev !parts)
+
 (*
   Task proposal processing (Phase D)
 
@@ -648,11 +675,15 @@ let process_task_proposals ~client ~sw ~(doc_id : string)
         let task_id = Printf.sprintf "%08x-%04x-%04x-%04x-%012x"
           (Random.bits ()) (Random.int 0xFFFF) (Random.int 0xFFFF)
           (Random.int 0xFFFF) (Random.bits () lor (Random.bits () lsl 30)) in
+        let ctx_summary = build_task_context_summary ~doc_id:ndoc ~title:tp.tp_title ~description:tp.tp_description in
+        let init_conv = `List [
+          `Assoc [ ("role", `String "assistant"); ("content", `String ctx_summary) ]
+        ] |> Yojson.Safe.to_string in
         (match Rag_lib.Pg.create_task ~task_id ~title:tp.tp_title
             ~description:tp.tp_description
             ~importance_score:tp.tp_importance
             ~deadline:tp.tp_deadline
-            ~embedding ~conversation_json:"[]" ~drafts_json:"[]" () with
+            ~embedding ~conversation_json:init_conv ~drafts_json:"[]" () with
         | Ok () ->
             (match Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:ndoc ~role:"trigger" with
             | Ok () -> ()
@@ -694,11 +725,15 @@ let process_task_proposals ~client ~sw ~(doc_id : string)
             let task_id = Printf.sprintf "%08x-%04x-%04x-%04x-%012x"
               (Random.bits ()) (Random.int 0xFFFF) (Random.int 0xFFFF)
               (Random.int 0xFFFF) (Random.bits () lor (Random.bits () lsl 30)) in
+            let ctx_summary = build_task_context_summary ~doc_id:ndoc ~title:tp.tp_title ~description:tp.tp_description in
+            let init_conv = `List [
+              `Assoc [ ("role", `String "assistant"); ("content", `String ctx_summary) ]
+            ] |> Yojson.Safe.to_string in
             (match Rag_lib.Pg.create_task ~task_id ~title:tp.tp_title
                 ~description:tp.tp_description
                 ~importance_score:tp.tp_importance
                 ~deadline:tp.tp_deadline
-                ~embedding ~conversation_json:"[]" ~drafts_json:"[]" () with
+                ~embedding ~conversation_json:init_conv ~drafts_json:"[]" () with
             | Ok () ->
                 ignore (Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:ndoc ~role:"trigger");
                 Printf.printf "[task_dedup] NEW task %s: %s (dedup LLM failed)\n%!" task_id tp.tp_title;
@@ -762,11 +797,15 @@ let process_task_proposals ~client ~sw ~(doc_id : string)
               let task_id = Printf.sprintf "%08x-%04x-%04x-%04x-%012x"
                 (Random.bits ()) (Random.int 0xFFFF) (Random.int 0xFFFF)
                 (Random.int 0xFFFF) (Random.bits () lor (Random.bits () lsl 30)) in
+              let ctx_summary = build_task_context_summary ~doc_id:ndoc ~title:tp.tp_title ~description:tp.tp_description in
+              let init_conv = `List [
+                `Assoc [ ("role", `String "assistant"); ("content", `String ctx_summary) ]
+              ] |> Yojson.Safe.to_string in
               (match Rag_lib.Pg.create_task ~task_id ~title:tp.tp_title
                   ~description:tp.tp_description
                   ~importance_score:tp.tp_importance
                   ~deadline:tp.tp_deadline
-                  ~embedding ~conversation_json:"[]" ~drafts_json:"[]" () with
+                  ~embedding ~conversation_json:init_conv ~drafts_json:"[]" () with
               | Ok () ->
                   (match Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:ndoc ~role:"trigger" with
                   | Ok () -> ()
@@ -4207,7 +4246,14 @@ let handler ~client ~sw ~clock _socket request body =
       else
         let body =
           match Rag_lib.Pg.get_email_detail id with
-          | Ok (Some json) -> json
+          | Ok (Some json) ->
+              (* Attach stored body text from chunks as fallback for body extraction *)
+              let stored_body = match Rag_lib.Pg.get_first_chunk_text id with
+                | Ok (Some t) -> t | _ -> ""
+              in
+              (match json with
+               | `Assoc kv -> `Assoc (kv @ [ ("stored_body_text", `String stored_body) ])
+               | other -> other)
           | Ok None ->
               `Assoc
                 [ ("doc_id", `String id)

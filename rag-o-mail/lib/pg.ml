@@ -606,7 +606,7 @@ let get_task (task_id : string)
   let emails_sql = {|
     SELECT te.doc_id, te.role, COALESCE(te.added_at::text, ''),
            COALESCE(e.sender, ''), COALESCE(e.subject, ''),
-           COALESCE(TO_CHAR(e.email_date, 'YYYY-MM-DD'), ''),
+           COALESCE(TO_CHAR(e.email_date, 'YYYY-MM-DD HH24:MI'), ''),
            COALESCE(e.recipient, ''), COALESCE(e.cc, '')
     FROM task_emails te
     LEFT JOIN emails e ON e.doc_id = te.doc_id

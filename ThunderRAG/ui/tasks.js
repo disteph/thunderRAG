@@ -61,6 +61,20 @@ async function init() {
   document.getElementById("statusFilter").addEventListener("change", () => loadTaskList());
   document.getElementById("sortBy").addEventListener("change", () => loadTaskList());
 
+  // General chat click handler (static HTML element)
+  document.getElementById("generalChatItem").addEventListener("click", () => selectTask("general"));
+
+  // Load models into the left-pane dropdowns
+  await fetchModels();
+
+  // Persist model selections & notify iframe on change
+  for (const [id, key] of [["chatModel", "rag.chatModel"], ["summarizeModel", "rag.summarizeModel"], ["rewriteModel", "rag.rewriteModel"]]) {
+    document.getElementById(id).addEventListener("change", () => {
+      localStorage.setItem(key, document.getElementById(id).value);
+      notifyIframeModels();
+    });
+  }
+
   // Load task list
   await loadTaskList(params.emailIds);
 
@@ -72,6 +86,65 @@ async function init() {
   } else {
     selectTask("general");
   }
+}
+
+/* ── Model management ── */
+
+function populateSelect(sel, models, defaultModel, storageKey) {
+  const savedModel = localStorage.getItem(storageKey) || "";
+  sel.innerHTML = "";
+  if (models.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "(no models)";
+    sel.appendChild(opt);
+    return;
+  }
+  for (const m of models) {
+    const opt = document.createElement("option");
+    opt.value = m;
+    opt.textContent = m;
+    sel.appendChild(opt);
+  }
+  if (savedModel && models.includes(savedModel)) {
+    sel.value = savedModel;
+  } else if (defaultModel && models.includes(defaultModel)) {
+    sel.value = defaultModel;
+  } else {
+    sel.value = models[0];
+  }
+}
+
+async function fetchModels() {
+  const base = await getServerBase();
+  const selectors = [
+    { el: document.getElementById("chatModel"),       key: "rag.chatModel",       defaultKey: "default_chat_model" },
+    { el: document.getElementById("summarizeModel"),  key: "rag.summarizeModel",  defaultKey: "default_summarize_model" },
+    { el: document.getElementById("rewriteModel"),    key: "rag.rewriteModel",    defaultKey: "default_rewrite_model" },
+  ];
+  try {
+    const resp = await fetch(`${base}/admin/models`);
+    const data = await resp.json();
+    const models = Array.isArray(data?.models) ? data.models : [];
+    for (const s of selectors) {
+      populateSelect(s.el, models, String(data?.[s.defaultKey] || ""), s.key);
+    }
+  } catch (_) {
+    for (const s of selectors) {
+      s.el.innerHTML = '<option value="">(error)</option>';
+    }
+  }
+}
+
+function notifyIframeModels() {
+  const iframe = document.querySelector("#midPane iframe");
+  if (!iframe || !iframe.contentWindow) return;
+  iframe.contentWindow.postMessage({
+    type: "setModels",
+    chatModel: document.getElementById("chatModel").value,
+    summarizeModel: document.getElementById("summarizeModel").value,
+    rewriteModel: document.getElementById("rewriteModel").value,
+  }, "*");
 }
 
 /* ── Task list (left pane) ── */
@@ -112,16 +185,11 @@ function renderTaskList() {
   const list = document.getElementById("taskList");
   list.innerHTML = "";
 
-  // Always-present "General chat" pseudo-task at top
-  const gcEl = document.createElement("div");
-  gcEl.className = "task-item" + (activeTaskId === "general" ? " active" : "");
-  gcEl.dataset.id = "general";
-  gcEl.innerHTML = `
-    <div class="ti-title">💬 General chat</div>
-    <div class="ti-desc">RAG conversation</div>
-  `;
-  gcEl.addEventListener("click", () => selectTask("general"));
-  list.appendChild(gcEl);
+  // Update General chat active state (it's static HTML now)
+  const gcEl = document.getElementById("generalChatItem");
+  if (gcEl) {
+    gcEl.className = "task-item" + (activeTaskId === "general" ? " active" : "");
+  }
 
   if (tasks.length === 0) {
     const emptyEl = document.createElement("div");
@@ -141,9 +209,9 @@ function renderTaskList() {
     const deadline = t.deadline ? `<span style="font-size:10px;">📅 ${esc(t.deadline)}</span>` : "";
     const pip = importancePip(t.importance_score);
 
+    const displayTitle = (t.title || "(untitled)").replace(/^Respond to\b/i, "↩");
     el.innerHTML = `
-      <div class="ti-title">${esc(t.title || "(untitled)")}</div>
-      <div class="ti-desc">${esc(t.description || "")}</div>
+      <div class="ti-title">${esc(displayTitle)}</div>
       <div class="ti-meta">${badge} ${pip} ${deadline}</div>
     `;
     el.addEventListener("click", () => selectTask(t.task_id));
@@ -220,6 +288,7 @@ function renderMidPane() {
     const iframe = document.createElement("iframe");
     iframe.src = "query.html";
     iframe.style.cssText = "width:100%;height:100%;border:none;";
+    iframe.addEventListener("load", () => notifyIframeModels());
     pane.appendChild(iframe);
     return;
   }
@@ -292,13 +361,17 @@ function renderMidPane() {
       // Hover popup with ingested data (same content as ingested-detail page)
       let popup = null;
       let hideTimer = null;
-      const showPopup = async () => {
+      const showPopup = async (ev) => {
         if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
         if (popup) return;
         popup = document.createElement("div");
         popup.className = "email-hover-popup";
         popup.textContent = "Loading…";
-        row.appendChild(popup);
+        document.body.appendChild(popup);
+        // Position below the hovered element
+        const rect = (ev.target || link).getBoundingClientRect();
+        popup.style.left = Math.max(0, rect.left) + "px";
+        popup.style.top = (rect.bottom + 4) + "px";
         try {
           const base = await getServerBase();
           const resp = await fetch(`${base}/admin/email_detail`, {
@@ -333,8 +406,7 @@ function renderMidPane() {
       };
       const dismissPopup = () => {
         hideTimer = setTimeout(() => {
-          if (popup && popup.parentNode) popup.remove();
-          popup = null;
+          if (popup) { popup.remove(); popup = null; }
         }, 200);
       };
       link.addEventListener("mouseenter", showPopup);
@@ -452,6 +524,7 @@ async function sendMessage(inputEl) {
         task_id: activeTaskId,
         user_message: text,
         user_name: userName,
+        chat_model: document.getElementById("chatModel")?.value || "",
       }),
     });
     if (!resp.ok) {

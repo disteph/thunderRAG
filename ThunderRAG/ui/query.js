@@ -802,9 +802,18 @@ async function loadDefaultTopK() {
   } catch (_e) { /* keep hardcoded default */ }
 }
 
+/* Detect if we are embedded in an iframe (e.g. inside the unified task manager). */
+const isEmbedded = (window !== window.top);
+
 /* Initialize the UI: restore saved settings from localStorage and wire up event listeners. */
 function init() {
   loadDefaultTopK();
+
+  // When embedded, hide the topbar (models are controlled by the parent)
+  if (isEmbedded) {
+    const topbar = document.querySelector(".topbar");
+    if (topbar) topbar.style.display = "none";
+  }
 
   $("askBtn").addEventListener("click", onAsk);
 
@@ -825,12 +834,23 @@ function init() {
     onAsk();
   });
 
-  // Persist selected models.
-  for (const [id, key] of [["chatModel", "rag.chatModel"], ["summarizeModel", "rag.summarizeModel"], ["rewriteModel", "rag.rewriteModel"]]) {
-    $(id).addEventListener("change", () => {
-      localStorage.setItem(key, $(id).value);
-    });
+  // Persist selected models (only when NOT embedded; parent handles persistence when embedded).
+  if (!isEmbedded) {
+    for (const [id, key] of [["chatModel", "rag.chatModel"], ["summarizeModel", "rag.summarizeModel"], ["rewriteModel", "rag.rewriteModel"]]) {
+      $(id).addEventListener("change", () => {
+        localStorage.setItem(key, $(id).value);
+      });
+    }
   }
+
+  // Listen for model updates from the parent frame
+  window.addEventListener("message", (ev) => {
+    if (ev.data && ev.data.type === "setModels") {
+      if (ev.data.chatModel) $("chatModel").value = ev.data.chatModel;
+      if (ev.data.summarizeModel) $("summarizeModel").value = ev.data.summarizeModel;
+      if (ev.data.rewriteModel) $("rewriteModel").value = ev.data.rewriteModel;
+    }
+  });
 
   // Re-fetch models if the server URL changes in options.
   browser.storage.onChanged.addListener((changes, area) => {

@@ -192,7 +192,12 @@ function startBodyExtraction(msgId, endpoint) {
         statusEl.textContent = "(LLM summarization returned no result; showing raw)";
       }
     } catch (err) {
-      statusEl.textContent = `Error: ${err.message}`;
+      // If extraction failed but we already have stored body text, keep showing it
+      if (bodyValueEl.textContent && bodyValueEl.textContent.trim()) {
+        statusEl.textContent = "(Live extraction unavailable — showing stored content)";
+      } else {
+        statusEl.textContent = `Error: ${err.message}`;
+      }
     }
   })();
 }
@@ -240,11 +245,12 @@ async function load() {
 
       // Body text card — only for single-email view of ingested messages
       if (isSingle && data && (data.embed_model || data.metadata)) {
+        const storedBody = data.stored_body_text || "";
         sectionHtml += `<div class="card" id="body-card">
-          <div id="body-status" style="font-size:12px; color:var(--label);">Extracting body…</div>
-          <div id="body-text" style="display:none; margin-top:8px;">
-            <div class="label">Recomputing content from Thunderbird…</div>
-            <div class="value" id="body-value"></div>
+          <div id="body-status" style="font-size:12px; color:var(--label);">${storedBody ? "Re-extracting from Thunderbird…" : "Extracting body…"}</div>
+          <div id="body-text" style="${storedBody ? "display:block" : "display:none"}; margin-top:8px;">
+            <div class="label">${storedBody ? "Content (stored at ingestion)" : "Recomputing content from Thunderbird…"}</div>
+            <div class="value" id="body-value">${storedBody ? esc(storedBody) : ""}</div>
           </div>
         </div>`;
       }
