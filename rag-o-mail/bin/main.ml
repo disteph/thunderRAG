@@ -4155,6 +4155,23 @@ let handler ~client ~sw ~clock _socket request body =
       else (
         match Rag_lib.Pg.delete_email doc_id with
         | Ok () ->
+            (* Clean up task links for this email *)
+            (match Rag_lib.Pg.remove_email_from_all_tasks doc_id with
+            | Ok affected_task_ids ->
+                if affected_task_ids <> [] then begin
+                  Printf.printf "[admin.delete] unlinked %s from %d task(s)\n%!"
+                    doc_id (List.length affected_task_ids);
+                  (* Delete tasks that now have no trigger emails *)
+                  (match Rag_lib.Pg.delete_orphan_tasks affected_task_ids with
+                  | Ok deleted ->
+                      List.iter (fun tid ->
+                        Printf.printf "[admin.delete] deleted orphan task %s\n%!" tid
+                      ) deleted
+                  | Error e ->
+                      Printf.eprintf "[admin.delete] orphan cleanup error: %s\n%!" e)
+                end
+            | Error e ->
+                Printf.eprintf "[admin.delete] task unlink error: %s\n%!" e);
             Cohttp_eio.Server.respond_string ~status:`OK
               ~body:{|{"ok":true}|} ~headers:json_headers ()
         | Error e ->
@@ -4360,9 +4377,19 @@ let handler ~client ~sw ~clock _socket request body =
         Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing id\n" ())
       else (
         Printf.printf "[admin.mark_processed] id=%s is_json=%b\n%!" id is_json;
+        let check_auto_complete doc_id =
+          match Rag_lib.Pg.auto_complete_tasks_for_email doc_id with
+          | Ok completed ->
+              List.iter (fun tid ->
+                Printf.printf "[admin.mark_processed] auto-completed task %s (all triggers processed)\n%!" tid
+              ) completed
+          | Error e ->
+              Printf.eprintf "[admin.mark_processed] auto-complete check error: %s\n%!" e
+        in
         match Rag_lib.Pg.set_processed id true with
         | Ok true ->
             Printf.printf "[admin.mark_processed] %s -> processed=true\n%!" id;
+            check_auto_complete id;
             Cohttp_eio.Server.respond_string ~status:`OK
               ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool true); ("id", `String id); ("processed", `Bool true) ]))
               ~headers:json_headers ()
@@ -4379,6 +4406,7 @@ let handler ~client ~sw ~clock _socket request body =
             let code = Cohttp.Code.code_of_status (Http.Response.status resp) in
             if code >= 200 && code < 300 then (
               ignore (Rag_lib.Pg.set_processed doc_id true);
+              check_auto_complete doc_id;
               Cohttp_eio.Server.respond_string ~status:`OK
                 ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool true); ("id", `String doc_id); ("processed", `Bool true); ("auto_ingested", `Bool true) ]))
                 ~headers:json_headers ())

@@ -825,6 +825,92 @@ let find_tasks_for_email (doc_id : string)
             ; ("role", `String role)
             ]) rows))
 
+(* Remove a doc_id from all task_emails rows, return affected task_ids *)
+let remove_email_from_all_tasks (doc_id : string)
+    : (string list, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  let sql = "DELETE FROM task_emails WHERE doc_id = $1 RETURNING task_id" in
+  let req = Caqti_request.Infix.(Caqti_type.string ->* Caqti_type.string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.collect_list req doc_id with
+    | Error _ as e -> e
+    | Ok ids -> Ok ids)
+
+(* Delete tasks that have no remaining task_emails rows *)
+let delete_orphan_tasks (task_ids : string list)
+    : (string list, string) result =
+  if task_ids = [] then Ok []
+  else
+    let placeholders = List.mapi (fun i _ -> Printf.sprintf "$%d" (i + 1)) task_ids in
+    let sql = Printf.sprintf
+      {|DELETE FROM tasks WHERE task_id IN (%s)
+        AND NOT EXISTS (SELECT 1 FROM task_emails te WHERE te.task_id = tasks.task_id)
+        RETURNING task_id|}
+      (String.concat ", " placeholders) in
+    (* Use oneshot with dynamic SQL since param count varies *)
+    use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+      match task_ids with
+      | [a] ->
+          let req = Caqti_request.Infix.(Caqti_type.string ->* Caqti_type.string) ~oneshot:true
+            {|DELETE FROM tasks WHERE task_id = $1
+              AND NOT EXISTS (SELECT 1 FROM task_emails te WHERE te.task_id = tasks.task_id)
+              RETURNING task_id|} in
+          (match C.collect_list req a with Error _ as e -> e | Ok ids -> Ok ids)
+      | [a; b] ->
+          let open Caqti_type in
+          let req = Caqti_request.Infix.(t2 string string ->* string) ~oneshot:true sql in
+          (match C.collect_list req (a, b) with Error _ as e -> e | Ok ids -> Ok ids)
+      | _ ->
+          (* For 3+ task_ids, iterate one at a time *)
+          let deleted = ref [] in
+          let single_sql =
+            {|DELETE FROM tasks WHERE task_id = $1
+              AND NOT EXISTS (SELECT 1 FROM task_emails te WHERE te.task_id = tasks.task_id)
+              RETURNING task_id|} in
+          let single_req = Caqti_request.Infix.(Caqti_type.string ->? Caqti_type.string) ~oneshot:true single_sql in
+          List.iter (fun tid ->
+            match C.find_opt single_req tid with
+            | Ok (Some id) -> deleted := id :: !deleted
+            | _ -> ()
+          ) task_ids;
+          Ok (List.rev !deleted))
+
+(* For each task linked to doc_id via trigger role, check if ALL trigger emails
+   are processed. If so, auto-complete the task. Returns list of auto-completed task_ids. *)
+let auto_complete_tasks_for_email (doc_id : string)
+    : (string list, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  (* Find task_ids linked to this email as trigger *)
+  let find_sql = "SELECT DISTINCT task_id FROM task_emails WHERE doc_id = $1 AND role = 'trigger'" in
+  let find_req = Caqti_request.Infix.(Caqti_type.string ->* Caqti_type.string) ~oneshot:true find_sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.collect_list find_req doc_id with
+    | Error _ as e -> e
+    | Ok task_ids ->
+        let completed = ref [] in
+        List.iter (fun tid ->
+          (* Check: all trigger emails for this task are processed *)
+          let check_sql =
+            {|SELECT COUNT(*) = 0 FROM task_emails te
+              JOIN emails e ON e.doc_id = te.doc_id
+              WHERE te.task_id = $1 AND te.role = 'trigger'
+                AND (e.metadata->>'processed')::boolean IS NOT TRUE|} in
+          let check_req = Caqti_request.Infix.(Caqti_type.string ->! Caqti_type.bool) ~oneshot:true check_sql in
+          (match C.find check_req tid with
+          | Ok true ->
+              (* All triggers processed — mark task done if still open/in_progress *)
+              let update_sql =
+                {|UPDATE tasks SET status = 'done', updated_at = NOW()
+                  WHERE task_id = $1 AND status IN ('open', 'in_progress')
+                  RETURNING task_id|} in
+              let update_req = Caqti_request.Infix.(Caqti_type.string ->? Caqti_type.string) ~oneshot:true update_sql in
+              (match C.find_opt update_req tid with
+              | Ok (Some id) -> completed := id :: !completed
+              | _ -> ())
+          | _ -> ())
+        ) task_ids;
+        Ok (List.rev !completed))
+
 let task_knn ~(embedding : float list) ~(top_k : int)
     ?(status_filter : string option)
     () : ((string * string * string * float) list, string) result =
