@@ -1,14 +1,14 @@
 <!doctype html>
 <!--
-  ThunderRAG task manager UI
+  ThunderRAG unified task manager + conversation UI
 
   3-pane layout:
-  - Left: scrollable list of tasks (from /task/list)
-  - Middle: per-task conversation with the LLM (task metadata at top, Q&A below)
+  - Left: "General chat" (always present) + scrollable list of tasks
+  - Middle: RAG conversation (General chat) or per-task LLM conversation
   - Right: compose form (To/Cc/Bcc/Subject/Body) populated by LLM via [DRAFT] markers
 
   Entry points:
-  - tasks.html                     — full task list
+  - tasks.html                     — opens with General chat selected
   - tasks.html?task_id=<id>        — open specific task
   - tasks.html?email_ids=[...]     — tasks referencing specific emails
 -->
@@ -16,7 +16,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>ThunderRAG — Tasks</title>
+    <title>ThunderRAG</title>
     <style>
       :root { color-scheme: light dark; }
       * { box-sizing: border-box; }
@@ -407,7 +407,7 @@
         <div id="taskList" class="task-list"></div>
       </div>
       <div class="mid-pane" id="midPane">
-        <div class="empty-state">Select a task on the left</div>
+        <div class="empty-state">Loading…</div>
       </div>
       <div class="right-pane" id="rightPane">
         <div class="empty-state">Compose form will appear here</div>

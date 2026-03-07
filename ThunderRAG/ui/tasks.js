@@ -1,13 +1,13 @@
 /*
-  ThunderRAG task manager UI logic
+  ThunderRAG unified task manager + conversation UI
 
-  Manages task list and per-task conversation across a 3-pane layout:
-  - Left pane: task list from /task/list (filterable, sortable)
-  - Mid pane: conversation with LLM loaded from server (persistent state)
-  - Right pane: compose form (To/Cc/Bcc/Subject/Body) populated by [DRAFT] markers
+  3-pane layout:
+  - Left pane: permanent "General chat" at top + task list from /task/list
+  - Mid pane: RAG conversation (General chat) or per-task LLM conversation
+  - Right pane: compose form (To/Cc/Bcc/Subject/Body) for task drafts
 
   Entry points:
-  - tasks.html                     — full task list
+  - tasks.html                     — opens with General chat selected
   - tasks.html?task_id=<id>        — open specific task
   - tasks.html?email_ids=[...]     — tasks referencing specific emails
 */
@@ -35,7 +35,7 @@ async function getWhoAmI() {
 /* ── State ── */
 
 let tasks = [];           // Array of task summary objects from /task/list
-let activeTaskId = null;  // Currently selected task_id
+let activeTaskId = "general";  // Currently selected task_id ("general" = RAG conversation)
 let activeTask = null;    // Full task detail from /task/get (conversation, drafts, emails)
 let activeDraftIdx = 0;   // Which draft tab is selected (0-based)
 let isLoading = false;    // Whether an LLM call is in progress
@@ -64,11 +64,13 @@ async function init() {
   // Load task list
   await loadTaskList(params.emailIds);
 
-  // Auto-select task if specified
+  // Auto-select task if specified, otherwise General chat
   if (params.taskId) {
     selectTask(params.taskId);
-  } else if (tasks.length > 0) {
+  } else if (params.emailIds && tasks.length > 0) {
     selectTask(tasks[0].task_id);
+  } else {
+    selectTask("general");
   }
 }
 
@@ -110,8 +112,23 @@ function renderTaskList() {
   const list = document.getElementById("taskList");
   list.innerHTML = "";
 
+  // Always-present "General chat" pseudo-task at top
+  const gcEl = document.createElement("div");
+  gcEl.className = "task-item" + (activeTaskId === "general" ? " active" : "");
+  gcEl.dataset.id = "general";
+  gcEl.innerHTML = `
+    <div class="ti-title">💬 General chat</div>
+    <div class="ti-desc">RAG conversation</div>
+  `;
+  gcEl.addEventListener("click", () => selectTask("general"));
+  list.appendChild(gcEl);
+
   if (tasks.length === 0) {
-    list.innerHTML = '<div class="empty-state" style="padding:20px;font-size:12px;">No tasks found</div>';
+    const emptyEl = document.createElement("div");
+    emptyEl.className = "empty-state";
+    emptyEl.style.cssText = "padding:20px;font-size:12px;";
+    emptyEl.textContent = "No tasks yet";
+    list.appendChild(emptyEl);
     return;
   }
 
@@ -166,6 +183,13 @@ async function selectTask(taskId) {
   activeDraftIdx = 0;
   renderTaskList();
 
+  if (taskId === "general") {
+    activeTask = null;
+    renderMidPane();
+    renderRightPane();
+    return;
+  }
+
   // Load full task detail from server
   try {
     const base = await getServerBase();
@@ -189,6 +213,17 @@ async function selectTask(taskId) {
 
 function renderMidPane() {
   const pane = document.getElementById("midPane");
+
+  // General chat mode: embed the RAG query UI
+  if (activeTaskId === "general") {
+    pane.innerHTML = '';
+    const iframe = document.createElement("iframe");
+    iframe.src = "query.html";
+    iframe.style.cssText = "width:100%;height:100%;border:none;";
+    pane.appendChild(iframe);
+    return;
+  }
+
   if (!activeTask) {
     pane.innerHTML = '<div class="empty-state">Select a task on the left</div>';
     return;
@@ -372,6 +407,14 @@ async function updateTaskStatus(newStatus) {
 
 function renderRightPane() {
   const pane = document.getElementById("rightPane");
+
+  // Hide right pane for General chat
+  if (activeTaskId === "general") {
+    pane.style.display = "none";
+    return;
+  }
+  pane.style.display = "";
+
   if (!activeTask) {
     pane.innerHTML = '<div class="empty-state">Compose form will appear here</div>';
     return;

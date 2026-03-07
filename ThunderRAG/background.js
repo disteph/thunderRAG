@@ -48,10 +48,10 @@ function openTasksTab(emailIds) {
   }
 }
 
-/* Wire the browser-action (toolbar button) click to open the query UI tab. */
+/* Wire the browser-action (toolbar button) click to open the unified task manager tab. */
 if (browser.browserAction && browser.browserAction.onClicked) {
   browser.browserAction.onClicked.addListener(() => {
-    openQueryTab();
+    openTasksTab();
   });
 }
 
@@ -599,11 +599,6 @@ browser.menus.create({
   contexts: ["message_list"],
 });
 
-browser.menus.create({
-  id: "thunderrag-open-taskmanager",
-  title: "ThunderRAG: Open task manager",
-  contexts: ["message_list"],
-});
 
 browser.menus.onShown.addListener(async (info) => {
   if (!info.contexts.includes("message_list")) return;
@@ -623,7 +618,6 @@ browser.menus.onShown.addListener(async (info) => {
         browser.menus.update("thunderrag-mark-processed", { visible: true }),
         browser.menus.update("thunderrag-mark-unprocessed", { visible: true }),
         browser.menus.update("thunderrag-show-tasks", { visible: true }),
-        browser.menus.update("thunderrag-open-taskmanager", { visible: true }),
       ]);
     } else if (msgs.length === 1) {
       const mid = msgs[0].headerMessageId || "";
@@ -641,7 +635,6 @@ browser.menus.onShown.addListener(async (info) => {
         browser.menus.update("thunderrag-mark-processed", { visible: isIngested && !isProcessed }),
         browser.menus.update("thunderrag-mark-unprocessed", { visible: isIngested && isProcessed }),
         browser.menus.update("thunderrag-show-tasks", { visible: true }),
-        browser.menus.update("thunderrag-open-taskmanager", { visible: true }),
       ]);
     }
     browser.menus.refresh();
@@ -664,8 +657,6 @@ browser.menus.onClicked.addListener(async (info) => {
       await handleMarkProcessed(false);
     } else if (info.menuItemId === "thunderrag-show-tasks") {
       await handleShowTasks();
-    } else if (info.menuItemId === "thunderrag-open-taskmanager") {
-      openTasksTab();
     }
   } catch (e) {
     console.error(`[ThunderRAG] menu handler error: ${e}`);

@@ -193,7 +193,7 @@ const ingestColumnHandler = {
       const st = ingestStatusCache.get(mid);
       if (!st) return "";
       if (!st.ingested) return "";
-      if (st.partial) return "\u25EF";
+      if (st.partial) return st.processed ? "\u25EF\u2713" : "\u25EF";
       return st.processed ? "\u25CF\u2713" : "\u25CF";
     } catch (_e) {
       return "";
@@ -325,7 +325,7 @@ function registerIngestColumn() {
             const st = ingestStatusCache.get(mid);
             if (!st) return "";
             if (!st.ingested) return "";
-            if (st.partial) return "\u25EF";
+            if (st.partial) return st.processed ? "\u25EF\u2713" : "\u25EF";
             return st.processed ? "\u25CF\u2713" : "\u25CF";
           },
         });
