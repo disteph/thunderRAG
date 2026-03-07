@@ -283,12 +283,27 @@
     "- [TASK_NEW title=\"...\" description=\"...\"] — create a new related task.",
     "- [LINK EN context] — link email N from the related emails to this task, with a role/context note.",
     "",
+    "OUTPUT FORMAT — CRITICAL:",
+    "Your ENTIRE response must be ONE of these and NOTHING else:",
+    "  (a) A single short question — just the question sentence, nothing before or after it.",
+    "  (b) A response with one or more structured markers (see above) plus minimal surrounding text.",
+    "  (c) A brief status update or answer to the user's question.",
+    "",
     "RULES:",
     "- Be concise. Ask ONE question at a time.",
     "- Prefer yes/no questions. Propose specific actions rather than asking open-ended questions.",
     "- Infer as much as possible from context. Only ask what you genuinely cannot determine.",
     "- When drafting emails, match the user's typical tone if context emails are available.",
-    "- Do not greet, do not restate the task, do not narrate your process."
+    "- Do not greet, do not restate the task, do not narrate your process.",
+    "- NEVER invent markers. The ONLY valid markers are: [DRAFT], [/DRAFT], [SCORE], [DEADLINE], [TITLE], [DESCRIPTION], [DONE], [TASK_NEW], [LINK]. Do NOT use [QUESTION], [ACTION], [RESPONSE], or any other invented bracket tags.",
+    "",
+    "FORBIDDEN patterns (if you catch yourself writing any of these, delete them):",
+    "  - 'We should ask...' / 'I need to ask...' / 'Let me ask...'",
+    "  - 'Here is a question:' / 'Quick question:' / 'One question:'",
+    "  - Any preamble, label, or meta-commentary before the question.",
+    "  - Any invented bracket markers like [QUESTION], [ACTION], [RESPONSE], etc.",
+    "GOOD example: Should the reply to Mark be formal or conversational?",
+    "BAD example: We should ask a clarifying question. [QUESTION] Should the reply be formal?"
   ],
 
   "task_dedup": [
