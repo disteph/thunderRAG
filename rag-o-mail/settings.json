@@ -33,6 +33,17 @@
       "use_pandoc": true
     }
   },
+  "task": {
+    "auto_create": true,
+    "dedup_top_k": 5
+  },
+  "memory": {
+    "enabled": true,
+    "max_chars": 3000,
+    "knn_top_k": 10,
+    "template_count": 3,
+    "rule_max_retries": 3
+  },
   "debug": {
     "ollama_embed": true,
     "ollama_chat": true,

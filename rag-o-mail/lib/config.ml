@@ -133,6 +133,11 @@ let rag_debug_ollama_chat         = ref false
 let rag_debug_retrieval           = ref false
 let task_auto_create              = ref true
 let task_dedup_top_k              = ref 5
+let memory_enabled                = ref true
+let memory_max_chars              = ref 3000
+let memory_knn_top_k              = ref 10
+let memory_template_count         = ref 3
+let memory_rule_max_retries       = ref 3
 
 (* Read settings.json into all config refs.
    Call once at startup after setting [config_dir], and again on /admin/reload. *)
@@ -190,6 +195,11 @@ let load_settings () : unit =
   rag_debug_retrieval    := sb [ "debug"; "retrieval" ]    ~default:false;
   task_auto_create       := sb [ "task"; "auto_create" ]   ~default:true;
   task_dedup_top_k       := si [ "task"; "dedup_top_k" ]   ~default:5;
+  memory_enabled         := sb [ "memory"; "enabled" ]     ~default:true;
+  memory_max_chars       := si [ "memory"; "max_chars" ]   ~default:3000;
+  memory_knn_top_k       := si [ "memory"; "knn_top_k" ]   ~default:10;
+  memory_template_count  := si [ "memory"; "template_count" ] ~default:3;
+  memory_rule_max_retries := si [ "memory"; "rule_max_retries" ] ~default:3;
   Printf.printf "[config] loaded from %s (db=%s)\n%!" (settings_path ()) !pg_database
 
 (* Serialize all current settings to JSON matching the settings.json structure. *)
@@ -237,6 +247,13 @@ let current_settings_json () : Yojson.Safe.t =
     ; ("task", `Assoc
         [ ("auto_create", `Bool !task_auto_create)
         ; ("dedup_top_k", `Int !task_dedup_top_k)
+        ])
+    ; ("memory", `Assoc
+        [ ("enabled", `Bool !memory_enabled)
+        ; ("max_chars", `Int !memory_max_chars)
+        ; ("knn_top_k", `Int !memory_knn_top_k)
+        ; ("template_count", `Int !memory_template_count)
+        ; ("rule_max_retries", `Int !memory_rule_max_retries)
         ])
     ; ("debug", `Assoc
         [ ("ollama_embed", `Bool !rag_debug_ollama_embed)

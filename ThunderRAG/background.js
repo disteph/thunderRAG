@@ -35,6 +35,13 @@ function openQueryTab() {
   }
 }
 
+/* Notify any open task UI tabs that something changed (new task, context ready, etc.) */
+function notifyTasksChanged() {
+  try {
+    browser.runtime.sendMessage({ type: "tasksChanged" }).catch(() => {});
+  } catch (_) {}
+}
+
 /* Open the ThunderRAG task manager UI, optionally filtered to emails. */
 function openTasksTab(emailIds) {
   try {
@@ -192,7 +199,8 @@ browser.runtime.onMessage.addListener(async (msg) => {
       if (msg.inReplyTo) {
         try {
           const messageId = await resolveHeaderMessageId(msg.inReplyTo);
-          const composeTab = await browser.compose.beginReply(messageId, "replyToSender", details);
+          const rt = (msg.cc || "").trim() ? "replyToAll" : "replyToSender";
+          const composeTab = await browser.compose.beginReply(messageId, rt, details);
           return { ok: true, tabId: composeTab.id };
         } catch (_e) {
           // Fall back to beginNew if the original message can't be resolved
@@ -215,7 +223,8 @@ browser.runtime.onMessage.addListener(async (msg) => {
       if (msg.inReplyTo) {
         try {
           const messageId = await resolveHeaderMessageId(msg.inReplyTo);
-          composeTab = await browser.compose.beginReply(messageId, "replyToSender", details);
+          const rt = (msg.cc || "").trim() ? "replyToAll" : "replyToSender";
+          composeTab = await browser.compose.beginReply(messageId, rt, details);
         } catch (_e) {
           composeTab = await browser.compose.beginNew(null, details);
         }
@@ -266,15 +275,13 @@ browser.runtime.onMessage.addListener(async (msg) => {
 
       const messageId = await resolveHeaderMessageId(headerMessageId);
       const raw = await getRawDecrypted(messageId);
-      const whoami = await getWhoAmI();
-      debugLog(`[ingestByHdrMsgId] headerMessageId=${headerMessageId} endpoint=${endpoint} whoami=${whoami ? whoami.slice(0, 40) + "..." : "(empty)"}`);
+      debugLog(`[ingestByHdrMsgId] headerMessageId=${headerMessageId} endpoint=${endpoint}`);
 
       const bytes = new TextEncoder().encode(raw);
       const blob = new Blob([bytes], { type: "message/rfc822" });
       const headers = new Headers();
       headers.set("Content-Type", "message/rfc822");
       headers.set("X-Thunderbird-Message-Id", headerMessageId);
-      if (whoami) headers.set("X-ThunderRAG-WhoAmI", whoami);
 
       const resp = await fetch(endpoint, {
         method: "POST",
@@ -283,6 +290,7 @@ browser.runtime.onMessage.addListener(async (msg) => {
       });
       const text = await resp.text();
       debugLog(`[ingestByHdrMsgId] response: ${resp.status} ${text.slice(0, 200)}`);
+      if (resp.ok) notifyTasksChanged();
       return { ok: resp.ok, status: resp.status, statusText: resp.statusText, body: text };
     }
   } catch (e) {
@@ -466,7 +474,6 @@ async function processIngestQueue() {
 
         const messageId = await resolveHeaderMessageId(headerMessageId);
         const rfc822 = await getDecryptedRfc822ForIngest(messageId, headerMessageId);
-        const whoami = await getWhoAmI();
 
         const bytes = new TextEncoder().encode(rfc822);
         const blob = new Blob([bytes], { type: "message/rfc822" });
@@ -474,11 +481,11 @@ async function processIngestQueue() {
         headers.set("Content-Type", "message/rfc822");
         const mid = headerMessageId;
         headers.set("X-Thunderbird-Message-Id", mid.startsWith("<") ? mid : "<" + mid + ">");
-        if (whoami) headers.set("X-ThunderRAG-WhoAmI", whoami);
 
         const resp = await fetch(endpoint, { method: "POST", headers, body: blob });
         if (resp.ok) {
           console.log(`[ThunderRAG] ingestQueue: success for ${headerMessageId}`);
+          notifyTasksChanged();
         } else {
           console.warn(`[ThunderRAG] ingestQueue: POST ${resp.status} for ${headerMessageId}`);
         }
@@ -518,6 +525,109 @@ function stopIngestQueuePoller() {
 }
 
 /*
+  Task evidence queue poller.
+
+  Periodically polls GET /task/needs_evidence to discover task_emails rows
+  that need raw RFC822 bodies uploaded.  For each doc_id, fetches the raw
+  message from Thunderbird and POSTs it to /task/evidence.  After all
+  uploads for a task complete, signals /task/evidence_done.
+*/
+let taskEvidenceProcessing = false;
+let taskEvidenceInterval = null;
+
+async function processTaskEvidenceQueue() {
+  if (taskEvidenceProcessing) return;
+  taskEvidenceProcessing = true;
+  try {
+    const base = await getServerBase();
+    const resp = await fetch(`${base}/task/needs_evidence`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const tasks = data.tasks || [];
+    if (tasks.length === 0) return;
+
+    debugLog(`[ThunderRAG] taskEvidence: ${tasks.length} task(s) need evidence`);
+
+    for (const task of tasks) {
+      const taskId = task.task_id;
+      const docIds = task.doc_ids || [];
+      let uploadedCount = 0;
+
+      for (const docId of docIds) {
+        try {
+          // Resolve header message ID and fetch raw RFC822
+          const messageId = await resolveHeaderMessageId(docId);
+          if (!messageId) {
+            debugWarn(`[ThunderRAG] taskEvidence: cannot resolve ${docId}`);
+            continue;
+          }
+          const raw = await getRawDecrypted(messageId);
+          if (!raw) {
+            debugWarn(`[ThunderRAG] taskEvidence: no raw for ${docId}`);
+            continue;
+          }
+
+          const bytes = new TextEncoder().encode(raw);
+          const blob = new Blob([bytes], { type: "message/rfc822" });
+          const headers = new Headers();
+          headers.set("Content-Type", "message/rfc822");
+          headers.set("X-Task-Id", taskId);
+          headers.set("X-Thunderbird-Message-Id", docId.startsWith("<") ? docId : "<" + docId + ">");
+
+          const uploadResp = await fetch(`${base}/task/evidence`, {
+            method: "POST", headers, body: blob
+          });
+          if (uploadResp.ok) {
+            uploadedCount++;
+            debugLog(`[ThunderRAG] taskEvidence: uploaded ${docId} for task ${taskId}`);
+          } else {
+            debugWarn(`[ThunderRAG] taskEvidence: POST ${uploadResp.status} for ${docId}`);
+          }
+        } catch (e) {
+          debugWarn(`[ThunderRAG] taskEvidence: error uploading ${docId}: ${e}`);
+        }
+      }
+
+      // Signal that we've attempted all uploads for this task
+      if (uploadedCount > 0) {
+        try {
+          await fetch(`${base}/task/evidence_done`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ task_id: taskId })
+          });
+          debugLog(`[ThunderRAG] taskEvidence: signaled evidence_done for task ${taskId} (${uploadedCount}/${docIds.length})`);
+          notifyTasksChanged();
+        } catch (e) {
+          debugWarn(`[ThunderRAG] taskEvidence: evidence_done error for ${taskId}: ${e}`);
+        }
+      }
+    }
+  } catch (e) {
+    // Server may not be running — silently ignore connection errors
+    if (!String(e).includes("NetworkError") && !String(e).includes("Failed to fetch")) {
+      debugWarn(`[ThunderRAG] taskEvidence poll error: ${e}`);
+    }
+  } finally {
+    taskEvidenceProcessing = false;
+  }
+}
+
+function startTaskEvidencePoller() {
+  if (taskEvidenceInterval) return;
+  // Poll every 15 seconds — lightweight when queue is empty (single GET).
+  taskEvidenceInterval = setInterval(processTaskEvidenceQueue, 15000);
+  setTimeout(processTaskEvidenceQueue, 5000);
+}
+
+function stopTaskEvidencePoller() {
+  if (taskEvidenceInterval) {
+    clearInterval(taskEvidenceInterval);
+    taskEvidenceInterval = null;
+  }
+}
+
+/*
   OCaml server base URL — single source of truth is browser.storage.local.
   Configurable via the add-on options page (ui/options.html).
 */
@@ -533,14 +643,8 @@ async function getServerBase() {
   }
 }
 
-async function getWhoAmI() {
-  try {
-    const data = await browser.storage.local.get("ragWhoAmI");
-    return (data.ragWhoAmI || "").trim();
-  } catch (_e) {
-    return "";
-  }
-}
+// whoami is always read from settings.json on the server side.
+// The TB add-on does not need to know or send it.
 
 /* Remote logging: POST plain-text messages to the OCaml server's
    /debug/stdout or /debug/stderr endpoints so they appear in the
@@ -565,37 +669,43 @@ function debugWarn(...args) { console.warn(...args); _debugPost("/debug/stderr",
 */
 browser.menus.create({
   id: "thunderrag-ingest-selected",
-  title: "ThunderRAG: Ingest selected emails",
+  title: "Ingest selected emails",
   contexts: ["message_list"],
 });
 
 browser.menus.create({
   id: "thunderrag-deingest",
-  title: "ThunderRAG: De-ingest selected emails",
+  title: "De-ingest selected emails",
   contexts: ["message_list"],
 });
 
 browser.menus.create({
   id: "thunderrag-show-ingested",
-  title: "ThunderRAG: Show ingested data",
+  title: "Show ingested data",
   contexts: ["message_list"],
 });
 
 browser.menus.create({
   id: "thunderrag-mark-processed",
-  title: "ThunderRAG: Mark as processed",
+  title: "Mark as processed",
   contexts: ["message_list"],
 });
 
 browser.menus.create({
   id: "thunderrag-mark-unprocessed",
-  title: "ThunderRAG: Mark as unprocessed",
+  title: "Mark as unprocessed",
   contexts: ["message_list"],
 });
 
 browser.menus.create({
   id: "thunderrag-show-tasks",
-  title: "ThunderRAG: Show tasks",
+  title: "Show tasks",
+  contexts: ["message_list"],
+});
+
+browser.menus.create({
+  id: "thunderrag-recompute-tasks",
+  title: "Recompute tasks",
   contexts: ["message_list"],
 });
 
@@ -618,6 +728,7 @@ browser.menus.onShown.addListener(async (info) => {
         browser.menus.update("thunderrag-mark-processed", { visible: true }),
         browser.menus.update("thunderrag-mark-unprocessed", { visible: true }),
         browser.menus.update("thunderrag-show-tasks", { visible: true }),
+        browser.menus.update("thunderrag-recompute-tasks", { visible: true }),
       ]);
     } else if (msgs.length === 1) {
       const mid = msgs[0].headerMessageId || "";
@@ -635,6 +746,7 @@ browser.menus.onShown.addListener(async (info) => {
         browser.menus.update("thunderrag-mark-processed", { visible: isIngested && !isProcessed }),
         browser.menus.update("thunderrag-mark-unprocessed", { visible: isIngested && isProcessed }),
         browser.menus.update("thunderrag-show-tasks", { visible: true }),
+        browser.menus.update("thunderrag-recompute-tasks", { visible: isIngested }),
       ]);
     }
     browser.menus.refresh();
@@ -657,6 +769,8 @@ browser.menus.onClicked.addListener(async (info) => {
       await handleMarkProcessed(false);
     } else if (info.menuItemId === "thunderrag-show-tasks") {
       await handleShowTasks();
+    } else if (info.menuItemId === "thunderrag-recompute-tasks") {
+      await handleRecomputeTasks();
     }
   } catch (e) {
     console.error(`[ThunderRAG] menu handler error: ${e}`);
@@ -696,8 +810,7 @@ async function handleIngestSelected() {
 
   const serverBase = await getServerBase();
   const endpoint = `${serverBase}/ingest`;
-  const whoami = await getWhoAmI();
-  debugLog(`[ingestSelected] endpoint=${endpoint} whoami=${whoami ? whoami.slice(0, 60) : "(empty)"} count=${allMessages.length}`);
+  debugLog(`[ingestSelected] endpoint=${endpoint} count=${allMessages.length}`);
   let ok = 0, fail = 0;
 
   for (const msg of allMessages) {
@@ -712,7 +825,6 @@ async function handleIngestSelected() {
       const headers = new Headers();
       headers.set("Content-Type", "message/rfc822");
       headers.set("X-Thunderbird-Message-Id", mid);
-      if (whoami) headers.set("X-ThunderRAG-WhoAmI", whoami);
 
       const resp = await fetch(endpoint, { method: "POST", headers, body: blob });
       const respText = await resp.text();
@@ -728,6 +840,47 @@ async function handleIngestSelected() {
 
   // Refresh the ingestion status cache for the affected messages.
   refreshIngestStatusForFolder();
+}
+
+async function handleRecomputeTasks() {
+  const tabs = await browser.mailTabs.query({ active: true, currentWindow: true });
+  if (!tabs.length) return;
+  let page = await browser.mailTabs.getSelectedMessages(tabs[0].id);
+  if (!page?.messages?.length) return;
+
+  const allMessages = [...page.messages];
+  while (page.id) {
+    page = await browser.messages.continueList(page.id);
+    if (page?.messages?.length) allMessages.push(...page.messages);
+  }
+
+  const serverBase = await getServerBase();
+  let ok = 0, fail = 0;
+
+  for (const msg of allMessages) {
+    try {
+      const headerMessageId = msg.headerMessageId || "";
+      if (!headerMessageId) { fail++; continue; }
+      const mid = headerMessageId.startsWith("<") ? headerMessageId : `<${headerMessageId}>`;
+
+      const rfc822 = await getDecryptedRfc822ForIngest(msg.id, headerMessageId);
+      const resp = await fetch(`${serverBase}/email/recompute_tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doc_id: mid, raw: rfc822 }),
+      });
+      const respText = await resp.text();
+      debugLog(`[recomputeTasks] ${mid} -> ${resp.status} ${respText.slice(0, 200)}`);
+      if (resp.ok) { ok++; } else { fail++; }
+    } catch (e) {
+      debugWarn(`[recomputeTasks] failed for ${msg.headerMessageId}: ${e}`);
+      fail++;
+    }
+  }
+
+  debugLog(`[recomputeTasks] done: ${ok} ok, ${fail} failed out of ${allMessages.length}`);
+  refreshIngestStatusForFolder();
+  if (ok > 0) notifyTasksChanged();
 }
 
 async function handleDeingest() {
@@ -764,6 +917,7 @@ async function handleDeingest() {
 
   console.log(`[ThunderRAG] de-ingest: ${ok} ok, ${fail} failed out of ${allMessages.length}`);
   refreshIngestStatusForFolder();
+  if (ok > 0) notifyTasksChanged();
 }
 
 async function handleMarkProcessed(processed) {
@@ -836,7 +990,7 @@ async function handleShowIngested() {
   and pushed to the experiment API so the custom column handler can read
   them synchronously.
 */
-const ingestStatusCache = new Map();   // headerMessageId → { ingested: bool, processed: bool, partial: bool }
+const ingestStatusCache = new Map();   // headerMessageId → { ingested: bool, processed: bool, partial: bool, trigger_active: bool }
 let currentFolderUri = null;
 let ingestStatusPollInterval = null;
 
@@ -869,6 +1023,7 @@ async function refreshIngestStatusForFolder() {
     const ingested = new Set();
     const processed = new Set();
     const partial = new Set();
+    const triggerActive = new Set();
     const replyByMap = new Map();
     for (let i = 0; i < ids.length; i += chunkSize) {
       const batch = ids.slice(i, i + chunkSize);
@@ -890,6 +1045,9 @@ async function refreshIngestStatusForFolder() {
           if (Array.isArray(data.partial)) {
             for (const id of data.partial) partial.add(id);
           }
+          if (Array.isArray(data.trigger_active)) {
+            for (const id of data.trigger_active) triggerActive.add(id);
+          }
           if (data.reply_by && typeof data.reply_by === "object") {
             for (const [id, dt] of Object.entries(data.reply_by)) {
               if (dt) replyByMap.set(id, String(dt));
@@ -904,14 +1062,14 @@ async function refreshIngestStatusForFolder() {
     // Update cache.
     const greenCount = [...ingested].length;
     for (const id of ids) {
-      ingestStatusCache.set(id, { ingested: ingested.has(id), processed: processed.has(id), partial: partial.has(id), reply_by: replyByMap.get(id) || "" });
+      ingestStatusCache.set(id, { ingested: ingested.has(id), processed: processed.has(id), partial: partial.has(id), trigger_active: triggerActive.has(id), reply_by: replyByMap.get(id) || "" });
     }
     console.log(`[ThunderRAG] status poll: ${ids.length} ids checked, ${greenCount} ingested`);
 
     // Push to experiment API for the column handler.
     if (browser.ragFilterAction?.updateIngestStatusCache) {
       const obj = {};
-      for (const [k, v] of ingestStatusCache) { obj[k] = { ingested: v.ingested, processed: v.processed, partial: v.partial || false, reply_by: v.reply_by || "" }; }
+      for (const [k, v] of ingestStatusCache) { obj[k] = { ingested: v.ingested, processed: v.processed, partial: v.partial || false, trigger_active: v.trigger_active || false, reply_by: v.reply_by || "" }; }
       try {
         await browser.ragFilterAction.updateIngestStatusCache(JSON.stringify(obj));
       } catch (_e) {
@@ -962,11 +1120,29 @@ browser.messages.onMoved.addListener((_originalMessages, movedMessages) => {
     const ft = msg.folder?.type || "";
     if (ft === "trash" || ft === "junk") {
       proactiveDelete(msg.headerMessageId, `moved to ${ft}`);
+    } else if (ft === "archives") {
+      // Auto-mark as processed when archived
+      const hmid = msg.headerMessageId || "";
+      if (!hmid) continue;
+      const mid = hmid.startsWith("<") ? hmid : `<${hmid}>`;
+      getServerBase().then(base => {
+        fetch(`${base}/admin/mark_processed`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: mid }),
+        }).then(resp => {
+          if (resp.ok) {
+            console.log(`[ThunderRAG] auto-marked processed (archived): ${hmid}`);
+            notifyTasksChanged();
+          }
+        }).catch(e => console.warn(`[ThunderRAG] auto-mark processed failed for ${hmid}:`, e));
+      });
     }
   }
 });
 
 startup().then(() => {
   startIngestQueuePoller();
+  startTaskEvidencePoller();
   startIngestStatusPoller();
 });

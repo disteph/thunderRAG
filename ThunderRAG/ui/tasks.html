@@ -37,11 +37,12 @@
       /* ── Left pane: task list ── */
       .left-pane {
         width: 280px;
-        min-width: 220px;
-        border-right: 1px solid rgba(127,127,127,0.25);
+        min-width: 160px;
+        border-right: none;
         display: flex;
         flex-direction: column;
         background: Canvas;
+        flex-shrink: 0;
       }
       .left-toolbar {
         padding: 8px 10px;
@@ -69,9 +70,24 @@
       .left-models {
         padding: 4px 10px 6px;
         display: flex;
-        gap: 4px;
+        flex-direction: column;
+        gap: 3px;
         flex-shrink: 0;
         border-bottom: 1px solid rgba(127,127,127,0.1);
+      }
+      .left-models .model-row {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .left-models .model-label {
+        font-size: 9px;
+        font-weight: 600;
+        opacity: 0.55;
+        width: 52px;
+        flex-shrink: 0;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
       }
       .left-models select {
         flex: 1;
@@ -98,6 +114,26 @@
         text-transform: uppercase;
         letter-spacing: 0.5px;
       }
+      .status-filters {
+        display: flex;
+        gap: 6px;
+        padding: 2px 10px 4px;
+        flex-shrink: 0;
+        flex-wrap: wrap;
+      }
+      .status-filters label {
+        font-size: 10px;
+        opacity: 0.75;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 2px;
+      }
+      .status-filters input[type="checkbox"] {
+        margin: 0;
+        width: 12px;
+        height: 12px;
+      }
       .left-tasks-header select {
         font-size: 10px;
         padding: 1px 3px;
@@ -122,6 +158,10 @@
       }
       .task-item:hover {
         background: rgba(127,127,127,0.08);
+      }
+      .task-item.selected {
+        background: color-mix(in srgb, AccentColor 15%, Canvas);
+        border-color: color-mix(in srgb, AccentColor 40%, transparent);
       }
       .task-item.active {
         background: AccentColor;
@@ -159,26 +199,53 @@
         font-size: 10px;
         font-weight: 600;
       }
-      .badge-open { background: rgba(59,130,246,0.2); color: #2563eb; }
-      .badge-in_progress { background: rgba(234,179,8,0.2); color: #a16207; }
-      .badge-done { background: rgba(34,197,94,0.2); color: #15803d; }
-      .badge-dismissed { background: rgba(127,127,127,0.2); color: rgba(127,127,127,0.8); }
-      .task-item.active .badge { opacity: 0.9; }
+      .badge-open { background: color-mix(in srgb, AccentColor 20%, Canvas); color: color-mix(in srgb, AccentColor 60%, CanvasText); }
+      .badge-in_progress { background: color-mix(in srgb, CanvasText 12%, Canvas); color: CanvasText; opacity: 0.8; }
+      .badge-done { background: color-mix(in srgb, CanvasText 12%, Canvas); color: CanvasText; opacity: 0.6; }
+      .badge-dismissed { background: color-mix(in srgb, CanvasText 10%, Canvas); color: CanvasText; opacity: 0.45; }
+      .task-item.active .badge { opacity: 0.9; color: AccentColorText; }
 
-      .importance-pip {
+      .readiness-pip {
         display: inline-block;
         width: 8px; height: 8px;
         border-radius: 999px;
         flex-shrink: 0;
       }
+      .readiness-pip.ready-yes { background: color-mix(in srgb, #22c55e 75%, CanvasText); }
+      .readiness-pip.ready-no  { background: color-mix(in srgb, CanvasText 30%, Canvas); }
+
+      /* ── Pane resize handles ── */
+      .pane-divider {
+        width: 5px;
+        cursor: col-resize;
+        background: rgba(127,127,127,0.15);
+        flex-shrink: 0;
+        position: relative;
+        z-index: 10;
+        transition: background 0.15s;
+      }
+      .pane-divider:hover,
+      .pane-divider.active {
+        background: AccentColor;
+      }
+      body.resizing-cols {
+        cursor: col-resize !important;
+        user-select: none;
+      }
+      .resize-overlay {
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        z-index: 9999;
+        cursor: col-resize;
+      }
 
       /* ── Middle pane: conversation ── */
       .mid-pane {
         flex: 1;
-        min-width: 300px;
+        min-width: 200px;
         display: flex;
         flex-direction: column;
-        border-right: 1px solid rgba(127,127,127,0.25);
+        border-right: none;
       }
       .mid-header {
         padding: 10px 14px;
@@ -188,7 +255,7 @@
         flex-shrink: 0;
         position: relative;
       }
-      .mid-header .mh-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+      .mid-header .mh-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; text-align: left; }
       .mid-header .mh-desc { opacity: 0.85; margin-bottom: 6px; }
       .mid-header .mh-emails {
         font-size: 11px;
@@ -197,7 +264,7 @@
         padding-top: 6px;
       }
       .mid-header .mh-emails a {
-        color: AccentColor;
+        color: LinkText;
         text-decoration: none;
         cursor: pointer;
       }
@@ -217,7 +284,16 @@
         cursor: pointer;
       }
       .mid-header .mh-actions button:hover { background: rgba(127,127,127,0.1); }
-      .mid-header .mh-actions button.danger { color: #dc2626; border-color: rgba(220,38,38,0.3); }
+      .mid-header .mh-actions button.danger { color: color-mix(in srgb, red 70%, CanvasText); border-color: color-mix(in srgb, red 30%, transparent); }
+
+      .context-banner {
+        padding: 8px 14px;
+        background: color-mix(in srgb, orange 12%, Canvas);
+        border-bottom: 1px solid color-mix(in srgb, orange 25%, transparent);
+        font-size: 13px;
+        color: inherit;
+        text-align: center;
+      }
 
       .mid-chat {
         flex: 1;
@@ -246,6 +322,17 @@
         color: AccentColorText;
         border-color: rgba(0,0,0,0);
       }
+      .llm-debug-icon {
+        position: absolute;
+        top: 2px;
+        right: 4px;
+        cursor: pointer;
+        font-size: 12px;
+        opacity: 0.3;
+        transition: opacity 0.15s;
+        user-select: none;
+      }
+      .llm-debug-icon:hover { opacity: 0.9; }
       .mid-composer {
         padding: 8px 14px;
         border-top: 1px solid rgba(127,127,127,0.25);
@@ -281,10 +368,11 @@
       /* ── Right pane: compose form ── */
       .right-pane {
         width: 400px;
-        min-width: 300px;
+        min-width: 200px;
         display: flex;
         flex-direction: column;
         background: Canvas;
+        flex-shrink: 0;
       }
       .right-header {
         padding: 10px 14px;
@@ -358,7 +446,7 @@
         border: 1px solid rgba(127,127,127,0.35);
         border-radius: 8px;
         resize: none;
-        font-family: inherit;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
         line-height: 1.4;
       }
       .compose-body textarea:disabled {
@@ -451,6 +539,69 @@
         transition: opacity 0.15s;
       }
       .email-tank-icon:hover { opacity: 1; }
+      /* Task context menu (right-click) */
+      .task-context-menu {
+        position: fixed;
+        z-index: 9999;
+        min-width: 140px;
+        background: Field;
+        color: FieldText;
+        border: 1px solid rgba(127,127,127,0.35);
+        border-radius: 6px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+        padding: 4px 0;
+        font-size: 13px;
+      }
+      .task-context-menu .ctx-item {
+        padding: 6px 14px;
+        cursor: pointer;
+      }
+      .task-context-menu .ctx-item:hover {
+        background: rgba(127,127,127,0.12);
+      }
+      .task-context-menu .ctx-item.danger {
+        color: color-mix(in srgb, red 70%, CanvasText);
+      }
+      .task-context-menu .ctx-sep {
+        height: 1px;
+        margin: 4px 8px;
+        background: rgba(127,127,127,0.25);
+      }
+
+      /* Collapsible email sections */
+      .mh-email-section {
+        margin-top: 4px;
+      }
+      .mh-email-toggle {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 600;
+        opacity: 0.6;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+        user-select: none;
+        padding: 3px 0;
+      }
+      .mh-email-toggle:hover { opacity: 1; }
+      .mh-email-toggle .triangle {
+        display: inline-block;
+        font-size: 8px;
+        transition: transform 0.15s;
+      }
+      .mh-email-toggle .triangle.open {
+        transform: rotate(90deg);
+      }
+      .mh-email-section-body {
+        display: none;
+        padding-left: 2px;
+      }
+      .mh-email-section-body.open {
+        display: block;
+      }
+
       .email-hover-popup {
         position: fixed;
         z-index: 9999;
@@ -467,7 +618,113 @@
         line-height: 1.4;
         white-space: pre-wrap;
         box-shadow: 0 6px 24px rgba(0,0,0,0.22);
-        pointer-events: none;
+        pointer-events: auto;
+      }
+
+      /* ── Memory management ── */
+      .memory-list { padding: 10px 14px; overflow-y: auto; flex: 1; }
+      .memory-card {
+        border: 1px solid rgba(127,127,127,0.25);
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-bottom: 8px;
+        background: Field;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+      .memory-card.disabled { opacity: 0.5; }
+      .memory-card .mc-text { margin-bottom: 6px; white-space: pre-wrap; }
+      .memory-card .mc-meta {
+        font-size: 11px;
+        opacity: 0.65;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .memory-card .mc-actions {
+        margin-top: 6px;
+        display: flex;
+        gap: 6px;
+      }
+      .memory-card .mc-actions button {
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 4px;
+        border: 1px solid rgba(127,127,127,0.3);
+        background: Field;
+        color: FieldText;
+        cursor: pointer;
+      }
+      .memory-card .mc-actions button:hover { background: rgba(127,127,127,0.1); }
+      .memory-card .mc-actions button.danger { color: color-mix(in srgb, red 70%, CanvasText); }
+      .memory-card .mc-rule {
+        margin-top: 6px;
+        padding: 6px 8px;
+        background: rgba(127,127,127,0.06);
+        border-radius: 4px;
+        font-size: 11px;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      .memory-toolbar {
+        padding: 8px 14px;
+        border-bottom: 1px solid rgba(127,127,127,0.15);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+      .memory-toolbar h3 { margin: 0; font-size: 14px; flex: 1; }
+      .memory-toolbar button {
+        font-size: 12px;
+        padding: 4px 10px;
+        border-radius: 6px;
+        border: 1px solid rgba(127,127,127,0.3);
+        background: Field;
+        color: FieldText;
+        cursor: pointer;
+      }
+      .memory-toolbar button:hover { background: rgba(127,127,127,0.1); }
+      .memory-create-form {
+        padding: 10px 14px;
+        border-bottom: 1px solid rgba(127,127,127,0.15);
+        flex-shrink: 0;
+      }
+      .memory-create-form textarea {
+        width: 100%;
+        font-size: 13px;
+        padding: 6px 8px;
+        background: Field;
+        color: FieldText;
+        border: 1px solid rgba(127,127,127,0.35);
+        border-radius: 6px;
+        resize: vertical;
+        min-height: 50px;
+        font-family: inherit;
+        line-height: 1.4;
+      }
+      .memory-create-form .mcf-actions {
+        margin-top: 6px;
+        display: flex;
+        gap: 6px;
+        justify-content: flex-end;
+      }
+      .memory-create-form .mcf-actions button {
+        font-size: 12px;
+        padding: 4px 12px;
+        border-radius: 6px;
+        border: 1px solid rgba(127,127,127,0.3);
+        background: Field;
+        color: FieldText;
+        cursor: pointer;
+      }
+      .memory-create-form .mcf-actions button.primary {
+        background: AccentColor;
+        color: AccentColorText;
+        border-color: AccentColor;
+        font-weight: 600;
       }
     </style>
   </head>
@@ -478,33 +735,40 @@
           <h2>ThunderRAG</h2>
         </div>
         <div class="left-models">
-          <select id="chatModel" title="Chat model"><option>(loading…)</option></select>
-          <select id="rewriteModel" title="Query generation model"><option>(loading…)</option></select>
-          <select id="summarizeModel" title="Summarization model"><option>(loading…)</option></select>
+          <div class="model-row"><span class="model-label">Chat</span><select id="chatModel" title="Chat model"><option>(loading…)</option></select></div>
+          <div class="model-row"><span class="model-label">Rewrite</span><select id="rewriteModel" title="Query generation model"><option>(loading…)</option></select></div>
+          <div class="model-row"><span class="model-label">Summary</span><select id="summarizeModel" title="Summarization model"><option>(loading…)</option></select></div>
         </div>
         <div id="generalChatItem" class="task-item active" data-id="general">
           <div class="ti-title">💬 General chat</div>
         </div>
+        <div id="memoriesItem" class="task-item" data-id="memories">
+          <div class="ti-title">🧠 Memories</div>
+        </div>
+        <div id="dbStatsItem" class="task-item" data-id="dbstats">
+          <div class="ti-title">📊 DB Stats</div>
+        </div>
         <div class="left-tasks-header">
           <span class="lth-label">Tasks</span>
-          <select id="statusFilter">
-            <option value="">All open</option>
-            <option value="open">Open</option>
-            <option value="in_progress">In progress</option>
-            <option value="done">Done</option>
-            <option value="dismissed">Dismissed</option>
-          </select>
           <select id="sortBy">
             <option value="updated_at">Recent</option>
             <option value="deadline">Deadline</option>
             <option value="importance">Importance</option>
           </select>
         </div>
+        <div class="status-filters">
+          <label><input type="checkbox" class="status-cb" value="open" checked> Open</label>
+          <label><input type="checkbox" class="status-cb" value="in_progress" checked> In prog</label>
+          <label><input type="checkbox" class="status-cb" value="done"> Done</label>
+          <label><input type="checkbox" class="status-cb" value="dismissed"> Dismissed</label>
+        </div>
         <div id="taskList" class="task-list"></div>
       </div>
+      <div class="pane-divider" id="dividerLeft"></div>
       <div class="mid-pane" id="midPane">
         <div class="empty-state">Loading…</div>
       </div>
+      <div class="pane-divider" id="dividerRight"></div>
       <div class="right-pane" id="rightPane">
         <div class="empty-state">Compose form will appear here</div>
       </div>

@@ -146,6 +146,9 @@ async function saveSettingsToServer() {
     const data = await resp.json();
     if (data.ok) {
       if (data.settings) currentSettings = data.settings;
+      /* Sync whoami to local storage for other UI pages */
+      const whoami = (patch.whoami || "").trim();
+      if (whoami) await browser.storage.local.set({ ragWhoAmI: whoami });
       clearSettingsDirty();
       statusMsg("Settings saved.");
     } else {
@@ -232,6 +235,9 @@ async function fetchAndRender() {
     const models = await modelsResp.json();
     const settings = settingsData.settings || settingsData;
     renderSettings(settings, models);
+    /* Sync whoami to local storage for other UI pages */
+    const whoami = (settings.whoami || "").trim();
+    if (whoami) await browser.storage.local.set({ ragWhoAmI: whoami });
     /* Show file paths */
     const pathEl = document.getElementById("settingsPathInfo");
     if (settingsData.path) {

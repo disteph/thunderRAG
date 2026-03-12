@@ -93,13 +93,14 @@ let schema_statements () =
        doc_id      TEXT NOT NULL REFERENCES emails(doc_id) ON DELETE CASCADE,
        chunk_index INT NOT NULL,
        section     TEXT NOT NULL DEFAULT '',
-       chunk_text  TEXT NOT NULL,
        embedding   vector(%d) NOT NULL
      )|} !rag_vector_dimension
   ; {|CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON email_chunks(doc_id)|}
   (* Migration: drop redundant message_id column (identical to doc_id) *)
   ; {|ALTER TABLE emails DROP COLUMN IF EXISTS message_id|}
   ; {|ALTER TABLE emails ADD COLUMN IF NOT EXISTS summarize_model TEXT NOT NULL DEFAULT ''|}
+  (* Migration: drop chunk_text column — email bodies are not stored server-side *)
+  ; {|ALTER TABLE email_chunks DROP COLUMN IF EXISTS chunk_text|}
   ; {|ALTER TABLE emails ADD COLUMN IF NOT EXISTS whoami TEXT|}
   (* --- task manager tables --- *)
   ; {|CREATE TABLE IF NOT EXISTS tasks (
@@ -129,6 +130,37 @@ let schema_statements () =
        PRIMARY KEY (task_id, doc_id)
      )|}
   ; {|CREATE INDEX IF NOT EXISTS idx_task_emails_doc_id ON task_emails(doc_id)|}
+  ; {|ALTER TABLE task_emails ADD COLUMN IF NOT EXISTS compressed_body TEXT NOT NULL DEFAULT ''|}
+  ; {|ALTER TABLE tasks ADD COLUMN IF NOT EXISTS context_ready BOOLEAN NOT NULL DEFAULT FALSE|}
+  ; {|CREATE TABLE IF NOT EXISTS propose_tasks_log (
+       doc_id     TEXT PRIMARY KEY,
+       debug      JSONB NOT NULL,
+       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )|}
+  ; {|ALTER TABLE emails DROP COLUMN IF EXISTS propose_tasks_debug|}
+  (* --- memory system tables --- *)
+  ; {|CREATE TABLE IF NOT EXISTS memories (
+       memory_id      TEXT PRIMARY KEY,
+       text           TEXT NOT NULL,
+       rule           JSONB,
+       source_task_id TEXT,
+       enabled        BOOLEAN NOT NULL DEFAULT TRUE,
+       created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+       updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )|}
+  ; {|CREATE TABLE IF NOT EXISTS memory_emails (
+       memory_id TEXT NOT NULL REFERENCES memories(memory_id) ON DELETE CASCADE,
+       doc_id    TEXT NOT NULL,
+       PRIMARY KEY (memory_id, doc_id)
+     )|}
+  ; {|CREATE INDEX IF NOT EXISTS idx_memory_emails_doc_id ON memory_emails(doc_id)|}
+  ; Printf.sprintf {|CREATE TABLE IF NOT EXISTS memory_templates (
+       id            SERIAL PRIMARY KEY,
+       memory_id     TEXT NOT NULL REFERENCES memories(memory_id) ON DELETE CASCADE,
+       template_text TEXT NOT NULL,
+       embedding     vector(%d) NOT NULL
+     )|} !rag_vector_dimension
+  ; {|CREATE INDEX IF NOT EXISTS idx_memory_templates_memory_id ON memory_templates(memory_id)|}
   ]
 
 let init_schema_with (module C : Caqti_eio.CONNECTION) =
@@ -219,22 +251,22 @@ let upsert_email
   result
 
 let insert_chunks ~(doc_id : string) ?(on_done : (float -> unit) option)
-    (chunks : (int * string * string * float list) list) : (unit, string) result =
+    (chunks : (int * string * float list) list) : (unit, string) result =
   let t0 = Unix.gettimeofday () in
   let doc_id = normalize_doc_id doc_id in
   let sql = {|
-    INSERT INTO email_chunks (doc_id, chunk_index, section, chunk_text, embedding)
-    VALUES ($1, $2, $3, $4, $5::vector)
+    INSERT INTO email_chunks (doc_id, chunk_index, section, embedding)
+    VALUES ($1, $2, $3, $4::vector)
   |} in
   let open Caqti_type in
-  let req = Caqti_request.Infix.(t2 (t3 string int string) (t2 string string) ->. unit) ~oneshot:true sql in
+  let req = Caqti_request.Infix.(t2 (t3 string int string) string ->. unit) ~oneshot:true sql in
   let result =
     use (fun (module C : Caqti_eio.CONNECTION) ->
       let rec run = function
         | [] -> Ok ()
-        | (idx, section, text, emb) :: rest ->
+        | (idx, section, emb) :: rest ->
             let vec_str = float_list_to_pgvector emb in
-            (match C.exec req ((doc_id, idx, section), (text, vec_str)) with
+            (match C.exec req ((doc_id, idx, section), vec_str) with
              | Ok () -> run rest
              | Error _ as e -> e)
       in
@@ -244,19 +276,6 @@ let insert_chunks ~(doc_id : string) ?(on_done : (float -> unit) option)
   Printf.eprintf "[timer] pg.insert_chunks (%d): %.3fs\n%!" (List.length chunks) dt;
   (match on_done with Some f -> f dt | None -> ());
   result
-
-let purge_untriaged () : (int, string) result =
-  let count_sql = "SELECT COUNT(*)::int FROM emails WHERE action_score IS NULL AND importance_score IS NULL" in
-  let count_req = Caqti_request.Infix.(Caqti_type.unit ->! Caqti_type.int) ~oneshot:true count_sql in
-  let del_sql = "DELETE FROM emails WHERE action_score IS NULL AND importance_score IS NULL" in
-  let del_req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true del_sql in
-  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
-    match C.find count_req () with
-    | Error _ as e -> e
-    | Ok n ->
-        match C.exec del_req () with
-        | Error _ as e -> e
-        | Ok () -> Ok n)
 
 let purge_empty_metadata () : (int, string) result =
   let count_sql = "SELECT COUNT(*)::int FROM emails WHERE sender = '' AND recipient = '' AND subject = ''" in
@@ -271,26 +290,8 @@ let purge_empty_metadata () : (int, string) result =
         | Error _ as e -> e
         | Ok () -> Ok n)
 
-let purge_base64_chunks () : (int, string) result =
-  let count_sql = {|SELECT COUNT(DISTINCT ec.doc_id)::int
-    FROM email_chunks ec
-    WHERE ec.chunk_text ~ '^[A-Za-z0-9+/=\s]{100,}$'
-       OR ec.chunk_text ~ 'PGh0bW'|} in
-  let count_req = Caqti_request.Infix.(Caqti_type.unit ->! Caqti_type.int) ~oneshot:true count_sql in
-  let del_sql = {|DELETE FROM emails WHERE doc_id IN (
-    SELECT DISTINCT ec.doc_id FROM email_chunks ec
-    WHERE ec.chunk_text ~ '^[A-Za-z0-9+/=\s]{100,}$'
-       OR ec.chunk_text ~ 'PGh0bW')|} in
-  let del_req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true del_sql in
-  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
-    match C.find count_req () with
-    | Error _ as e -> e
-    | Ok n ->
-        if n = 0 then Ok 0
-        else
-          match C.exec del_req () with
-          | Error _ as e -> e
-          | Ok () -> Ok n)
+(* purge_base64_chunks: no-op — chunk_text column has been dropped *)
+let purge_base64_chunks () : (int, string) result = Ok 0
 
 let delete_email (doc_id : string) : (unit, string) result =
   let doc_id = normalize_doc_id doc_id in
@@ -341,6 +342,24 @@ let batch_ingested_status (ids : string list)
           let reply_by = rows |> List.filter_map (fun (id, _, rb, _) ->
             if String.trim rb <> "" then Some (id, rb) else None) in
           Ok (ingested, processed, partial, reply_by))
+
+let batch_trigger_active (ids : string list) : (string list, string) result =
+  if ids = [] then Ok []
+  else
+    let normed = List.map normalize_doc_id ids in
+    let arr = pg_text_array normed in
+    let sql = {|SELECT DISTINCT te.doc_id
+                FROM task_emails te
+                JOIN tasks t ON t.task_id = te.task_id
+                WHERE te.doc_id = ANY($1::text[])
+                  AND te.role = 'trigger'
+                  AND t.status IN ('open', 'in_progress')|} in
+    let open Caqti_type in
+    let req = Caqti_request.Infix.(string ->* string) ~oneshot:true sql in
+    use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+      match C.collect_list req arr with
+      | Error _ as e -> e
+      | Ok rows -> Ok rows)
 
 let ingested_models (doc_id : string) : ((string * string * string) option, string) result =
   let doc_id = normalize_doc_id doc_id in
@@ -424,6 +443,27 @@ let get_email_detail (doc_id : string) : (Yojson.Safe.t option, string) result =
           ; ("metadata", metadata)
           ])))
 
+let set_propose_tasks_debug (doc_id : string) (debug_json : string) : (unit, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  let sql = {|
+    INSERT INTO propose_tasks_log (doc_id, debug, created_at)
+    VALUES ($1, $2::jsonb, NOW())
+    ON CONFLICT (doc_id) DO UPDATE SET debug = EXCLUDED.debug, created_at = NOW()
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(t2 string string ->. unit) ~oneshot:true sql in
+  use (fun (module C : Caqti_eio.CONNECTION) ->
+    C.exec req (doc_id, debug_json))
+
+let get_propose_tasks_debug (doc_id : string) : (string option, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  let sql = {|SELECT debug::text FROM propose_tasks_log WHERE doc_id = $1|} in
+  let req = Caqti_request.Infix.(Caqti_type.string ->? Caqti_type.string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.find_opt req doc_id with
+    | Ok v -> Ok v
+    | Error _ as e -> e)
+
 let set_processed (doc_id : string) (value : bool) : (bool, string) result =
   let doc_id = normalize_doc_id doc_id in
   if value then
@@ -454,7 +494,7 @@ let set_processed (doc_id : string) (value : bool) : (bool, string) result =
 (* ---------- kNN retrieval ---------- *)
 
 let row_to_source_json
-    ((doc_id, chunk_text, distance, sender),
+    ((doc_id, distance, sender),
      ((recipient, cc, bcc, subject),
       ((email_date, att_text, action_score, importance_score),
        (reply_by, processed, ingested_at))))
@@ -477,7 +517,6 @@ let row_to_source_json
       @ (match action_score with Some s -> [("action_score", `Int s)] | None -> [])
       @ (match importance_score with Some s -> [("importance_score", `Int s)] | None -> []))
   in
-  ignore chunk_text;
   `Assoc
     [ ("doc_id", `String doc_id)
     ; ("score", `Float score)
@@ -487,7 +526,7 @@ let row_to_source_json
 let knn_row_type =
   let open Caqti_type in
   t2
-    (t4 string string float string)
+    (t3 string float string)
     (t2
       (t4 string string string string)
       (t2
@@ -511,7 +550,7 @@ let query_knn ~(embedding : float list) ~(top_k : int)
     | None -> ""
   in
   let sql = Printf.sprintf {|
-    SELECT ec.doc_id, ec.chunk_text,
+    SELECT ec.doc_id,
            ec.embedding <=> $1::vector AS distance,
            e.sender, e.recipient, e.cc, e.bcc, e.subject, COALESCE(e.email_date::text, ''),
            COALESCE(array_to_json(e.attachments)::text, '[]'),
@@ -589,7 +628,8 @@ let get_task (task_id : string)
            t.drafts::text,
            t.notes,
            t.context_emails::text,
-           t.context_prefetched
+           t.context_prefetched,
+           t.context_ready
     FROM tasks t WHERE t.task_id = $1
   |} in
   let open Caqti_type in
@@ -599,7 +639,7 @@ let get_task (task_id : string)
       (t4 (option int) string string string)
       (t2
         (t4 string string string string)
-        (t2 string bool)))
+        (t2 string (t2 bool bool))))
   in
   let req = Caqti_request.Infix.(string ->? rt) ~oneshot:true sql in
   (* Also fetch linked emails with metadata from emails table *)
@@ -607,14 +647,15 @@ let get_task (task_id : string)
     SELECT te.doc_id, te.role, COALESCE(te.added_at::text, ''),
            COALESCE(e.sender, ''), COALESCE(e.subject, ''),
            COALESCE(TO_CHAR(e.email_date, 'YYYY-MM-DD HH24:MI'), ''),
-           COALESCE(e.recipient, ''), COALESCE(e.cc, '')
+           COALESCE(e.recipient, ''), COALESCE(e.cc, ''),
+           COALESCE(te.compressed_body, '')
     FROM task_emails te
     LEFT JOIN emails e ON e.doc_id = te.doc_id
     WHERE te.task_id = $1
     ORDER BY te.added_at
   |} in
   let open Caqti_type in
-  let emails_rt = t2 (t4 string string string string) (t4 string string string string) in
+  let emails_rt = t2 (t2 (t4 string string string string) (t4 string string string string)) string in
   let emails_req = Caqti_request.Infix.(string ->* emails_rt) ~oneshot:true emails_sql in
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
     match C.find_opt req task_id with
@@ -623,7 +664,7 @@ let get_task (task_id : string)
     | Ok (Some ((tid, title, description, status),
                 ((importance, deadline, created_at, updated_at),
                  ((conversation_text, history_summary, drafts_text, notes),
-                  (context_emails_text, context_prefetched))))) ->
+                  (context_emails_text, (context_prefetched, context_ready)))))) ->
         let conversation = try Yojson.Safe.from_string conversation_text with _ -> `List [] in
         let drafts = try Yojson.Safe.from_string drafts_text with _ -> `List [] in
         let context_emails = try Yojson.Safe.from_string context_emails_text with _ -> `List [] in
@@ -631,7 +672,7 @@ let get_task (task_id : string)
           match C.collect_list emails_req tid with
           | Error _ -> []
           | Ok rows ->
-              List.map (fun ((doc_id, role, added_at, sender), (subject, email_date, recipient, cc)) ->
+              List.map (fun (((doc_id, role, added_at, sender), (subject, email_date, recipient, cc)), compressed_body) ->
                 `Assoc [ ("doc_id", `String doc_id)
                        ; ("role", `String role)
                        ; ("added_at", `String added_at)
@@ -639,7 +680,8 @@ let get_task (task_id : string)
                        ; ("subject", `String subject)
                        ; ("date", `String email_date)
                        ; ("recipient", `String recipient)
-                       ; ("cc", `String cc) ])
+                       ; ("cc", `String cc)
+                       ; ("compressed_body", `String compressed_body) ])
                 rows
         in
         Ok (Some (`Assoc
@@ -658,6 +700,7 @@ let get_task (task_id : string)
           ; ("emails", `List emails)
           ; ("context_emails", context_emails)
           ; ("context_prefetched", `Bool context_prefetched)
+          ; ("context_ready", `Bool context_ready)
           ])))
 
 let update_task
@@ -674,6 +717,7 @@ let update_task
     ?(notes : string option)
     ?(context_emails_json : string option)
     ?(context_prefetched : bool option)
+    ?(context_ready : bool option)
     () : (bool, string) result =
   let escape_literal (s : string) : string =
     let buf = Buffer.create (String.length s + 4) in
@@ -718,6 +762,9 @@ let update_task
   (match context_prefetched with
    | Some b -> add "context_prefetched" (if b then "TRUE" else "FALSE")
    | None -> ());
+  (match context_ready with
+   | Some b -> add "context_ready" (if b then "TRUE" else "FALSE")
+   | None -> ());
   if !set_parts = [] then Ok true
   else begin
     add "updated_at" (escape_literal (now_utc_iso8601 ()) ^ "::timestamptz");
@@ -733,13 +780,15 @@ let update_task
       | Error _ as e -> e)
   end
 
-let list_tasks ?(status_filter : string option) ?(email_ids : string list option)
+let list_tasks ?(statuses : string list option) ?(email_ids : string list option)
     ?(sort_by : string option) ?(limit : int option)
     () : (Yojson.Safe.t list, string) result =
   let wheres = ref [] in
-  (match status_filter with
-   | Some s -> wheres := Printf.sprintf "t.status = '%s'" s :: !wheres
-   | None -> ());
+  (match statuses with
+   | Some ss when ss <> [] ->
+       let quoted = List.map (Printf.sprintf "'%s'") ss in
+       wheres := Printf.sprintf "t.status IN (%s)" (String.concat ", " quoted) :: !wheres
+   | _ -> ());
   (match email_ids with
    | Some ids when ids <> [] ->
        let normed = List.map normalize_doc_id ids in
@@ -762,7 +811,8 @@ let list_tasks ?(status_filter : string option) ?(email_ids : string list option
            t.importance_score,
            COALESCE(TO_CHAR(t.deadline, 'YYYY-MM-DD'), ''),
            COALESCE(t.created_at::text, ''),
-           COALESCE(t.updated_at::text, '')
+           COALESCE(t.updated_at::text, ''),
+           t.context_ready
     FROM tasks t
     %s
     ORDER BY %s%s
@@ -770,16 +820,15 @@ let list_tasks ?(status_filter : string option) ?(email_ids : string list option
   let open Caqti_type in
   let rt = t2
     (t4 string string string string)
-    (t4 (option int) string string string)
+    (t2 (t4 (option int) string string string) bool)
   in
   let req = Caqti_request.Infix.(unit ->* rt) ~oneshot:true sql in
-  (* Also need linked email counts per task *)
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
     match C.collect_list req () with
     | Error _ as e -> e
     | Ok rows ->
         Ok (List.map (fun ((tid, title, description, status),
-                           (importance, deadline, created_at, updated_at)) ->
+                           ((importance, deadline, created_at, updated_at), context_ready)) ->
           `Assoc
             [ ("task_id", `String tid)
             ; ("title", `String title)
@@ -789,6 +838,7 @@ let list_tasks ?(status_filter : string option) ?(email_ids : string list option
             ; ("deadline", `String deadline)
             ; ("created_at", `String created_at)
             ; ("updated_at", `String updated_at)
+            ; ("context_ready", `Bool context_ready)
             ]) rows))
 
 let delete_task (task_id : string) : (bool, string) result =
@@ -801,17 +851,18 @@ let delete_task (task_id : string) : (bool, string) result =
     | Error _ as e -> e)
 
 let link_email_to_task ~(task_id : string) ~(doc_id : string) ~(role : string)
-    : (unit, string) result =
+    ?(compressed_body : string option) () : (unit, string) result =
   let doc_id = normalize_doc_id doc_id in
+  let cb = match compressed_body with Some s -> s | None -> "" in
   let sql = {|
-    INSERT INTO task_emails (task_id, doc_id, role)
-    VALUES ($1, $2, $3)
-    ON CONFLICT (task_id, doc_id) DO UPDATE SET role = EXCLUDED.role
+    INSERT INTO task_emails (task_id, doc_id, role, compressed_body)
+    VALUES ($1, $2, $3, $4)
+    ON CONFLICT (task_id, doc_id) DO UPDATE SET role = EXCLUDED.role, compressed_body = EXCLUDED.compressed_body
   |} in
   let open Caqti_type in
-  let req = Caqti_request.Infix.(t3 string string string ->. unit) ~oneshot:true sql in
+  let req = Caqti_request.Infix.(t4 string string string string ->. unit) ~oneshot:true sql in
   use (fun (module C : Caqti_eio.CONNECTION) ->
-    C.exec req (task_id, doc_id, role))
+    C.exec req (task_id, doc_id, role, cb))
 
 let unlink_email_from_task ~(task_id : string) ~(doc_id : string)
     : (bool, string) result =
@@ -860,6 +911,17 @@ let find_tasks_for_email (doc_id : string)
             ; ("role", `String role)
             ]) rows))
 
+(* Remove trigger-role links for a doc_id, return affected task_ids *)
+let remove_trigger_links (doc_id : string)
+    : (string list, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  let sql = "DELETE FROM task_emails WHERE doc_id = $1 AND role = 'trigger' RETURNING task_id" in
+  let req = Caqti_request.Infix.(Caqti_type.string ->* Caqti_type.string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.collect_list req doc_id with
+    | Error _ as e -> e
+    | Ok ids -> Ok ids)
+
 (* Remove a doc_id from all task_emails rows, return affected task_ids *)
 let remove_email_from_all_tasks (doc_id : string)
     : (string list, string) result =
@@ -871,7 +933,7 @@ let remove_email_from_all_tasks (doc_id : string)
     | Error _ as e -> e
     | Ok ids -> Ok ids)
 
-(* Delete tasks that have no remaining task_emails rows *)
+(* Delete tasks that have no remaining trigger emails *)
 let delete_orphan_tasks (task_ids : string list)
     : (string list, string) result =
   if task_ids = [] then Ok []
@@ -879,7 +941,7 @@ let delete_orphan_tasks (task_ids : string list)
     let placeholders = List.mapi (fun i _ -> Printf.sprintf "$%d" (i + 1)) task_ids in
     let sql = Printf.sprintf
       {|DELETE FROM tasks WHERE task_id IN (%s)
-        AND NOT EXISTS (SELECT 1 FROM task_emails te WHERE te.task_id = tasks.task_id)
+        AND NOT EXISTS (SELECT 1 FROM task_emails te WHERE te.task_id = tasks.task_id AND te.role = 'trigger')
         RETURNING task_id|}
       (String.concat ", " placeholders) in
     (* Use oneshot with dynamic SQL since param count varies *)
@@ -888,7 +950,7 @@ let delete_orphan_tasks (task_ids : string list)
       | [a] ->
           let req = Caqti_request.Infix.(Caqti_type.string ->* Caqti_type.string) ~oneshot:true
             {|DELETE FROM tasks WHERE task_id = $1
-              AND NOT EXISTS (SELECT 1 FROM task_emails te WHERE te.task_id = tasks.task_id)
+              AND NOT EXISTS (SELECT 1 FROM task_emails te WHERE te.task_id = tasks.task_id AND te.role = 'trigger')
               RETURNING task_id|} in
           (match C.collect_list req a with Error _ as e -> e | Ok ids -> Ok ids)
       | [a; b] ->
@@ -900,7 +962,7 @@ let delete_orphan_tasks (task_ids : string list)
           let deleted = ref [] in
           let single_sql =
             {|DELETE FROM tasks WHERE task_id = $1
-              AND NOT EXISTS (SELECT 1 FROM task_emails te WHERE te.task_id = tasks.task_id)
+              AND NOT EXISTS (SELECT 1 FROM task_emails te WHERE te.task_id = tasks.task_id AND te.role = 'trigger')
               RETURNING task_id|} in
           let single_req = Caqti_request.Infix.(Caqti_type.string ->? Caqti_type.string) ~oneshot:true single_sql in
           List.iter (fun tid ->
@@ -929,7 +991,7 @@ let auto_complete_tasks_for_email (doc_id : string)
             {|SELECT COUNT(*) = 0 FROM task_emails te
               JOIN emails e ON e.doc_id = te.doc_id
               WHERE te.task_id = $1 AND te.role = 'trigger'
-                AND (e.metadata->>'processed')::boolean IS NOT TRUE|} in
+                AND e.processed IS NOT TRUE|} in
           let check_req = Caqti_request.Infix.(Caqti_type.string ->! Caqti_type.bool) ~oneshot:true check_sql in
           (match C.find check_req tid with
           | Ok true ->
@@ -946,16 +1008,6 @@ let auto_complete_tasks_for_email (doc_id : string)
         ) task_ids;
         Ok (List.rev !completed))
 
-(* Get the text of the first chunk for a doc_id (for body preview) *)
-let get_first_chunk_text (doc_id : string)
-    : (string option, string) result =
-  let doc_id = normalize_doc_id doc_id in
-  let sql = "SELECT chunk_text FROM email_chunks WHERE doc_id = $1 ORDER BY chunk_index ASC LIMIT 1" in
-  let req = Caqti_request.Infix.(Caqti_type.string ->? Caqti_type.string) ~oneshot:true sql in
-  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
-    match C.find_opt req doc_id with
-    | Error _ as e -> e
-    | Ok v -> Ok v)
 
 (* Get the first chunk embedding for a doc_id as a float list *)
 let get_doc_embedding (doc_id : string)
@@ -1025,9 +1077,187 @@ let task_trigger_doc_ids (task_id : string)
     | Error _ as e -> e
     | Ok ids -> Ok ids)
 
+(* Delete context and style task_emails rows for a task (keeps triggers) *)
+let delete_task_context_and_style (task_id : string)
+    : (int, string) result =
+  let sql = "DELETE FROM task_emails WHERE task_id = $1 AND role IN ('context', 'style') RETURNING doc_id" in
+  let req = Caqti_request.Infix.(Caqti_type.string ->* Caqti_type.string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.collect_list req task_id with
+    | Error _ as e -> e
+    | Ok ids -> Ok (List.length ids))
+
+(* Find user's sent emails to a given recipient.
+   sender_emails: list of the user's email addresses (extracted from whoami).
+   recipient: the target email address or name to match in to/cc fields.
+   Returns doc_ids of matching emails, most recent first. *)
+let find_style_emails ~(sender_emails : string list) ~(recipient : string)
+    ~(limit : int) () : (string list, string) result =
+  if sender_emails = [] then Ok []
+  else
+    let sender_clauses = List.mapi (fun i _addr ->
+      Printf.sprintf "sender ILIKE $%d" (i + 1)
+    ) sender_emails in
+    let sender_where = String.concat " OR " sender_clauses in
+    let recip_idx = List.length sender_emails + 1 in
+    let recip_pattern = Printf.sprintf "%%%s%%" recipient in
+    let limit_idx = recip_idx + 1 in
+    let sql = Printf.sprintf
+      {|SELECT doc_id FROM emails
+        WHERE (%s)
+          AND (recipient ILIKE $%d OR cc ILIKE $%d)
+        ORDER BY email_date DESC NULLS LAST
+        LIMIT $%d|}
+      sender_where recip_idx recip_idx limit_idx
+    in
+    (* Dynamic param count — use oneshot with manual binding.
+       For simplicity, limit to max 4 sender emails (4 + recip + limit = 6 params) *)
+    let sender_patterns = List.map (fun addr -> Printf.sprintf "%%%s%%" addr) sender_emails in
+    match sender_patterns with
+    | [a] ->
+        let open Caqti_type in
+        let req = Caqti_request.Infix.(t3 string string int ->* string) ~oneshot:true sql in
+        use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+          match C.collect_list req (a, recip_pattern, limit) with
+          | Error _ as e -> e | Ok ids -> Ok ids)
+    | [a; b] ->
+        let open Caqti_type in
+        let req = Caqti_request.Infix.(t2 (t2 string string) (t2 string int) ->* string) ~oneshot:true sql in
+        use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+          match C.collect_list req ((a, b), (recip_pattern, limit)) with
+          | Error _ as e -> e | Ok ids -> Ok ids)
+    | [a; b; c] ->
+        let open Caqti_type in
+        let req = Caqti_request.Infix.(t2 (t3 string string string) (t2 string int) ->* string) ~oneshot:true sql in
+        use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+          match C.collect_list req ((a, b, c), (recip_pattern, limit)) with
+          | Error _ as e -> e | Ok ids -> Ok ids)
+    | [a; b; c; d] ->
+        let open Caqti_type in
+        let req = Caqti_request.Infix.(t2 (t4 string string string string) (t2 string int) ->* string) ~oneshot:true sql in
+        use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+          match C.collect_list req ((a, b, c, d), (recip_pattern, limit)) with
+          | Error _ as e -> e | Ok ids -> Ok ids)
+    | _ ->
+        (* More than 4 sender emails — use just the first 4 *)
+        Ok []
+
+(* Find tasks needing evidence upload: prefetched but not ready,
+   with task_emails rows that have empty compressed_body (role != 'trigger').
+   Returns list of (task_id, doc_ids_needing_bodies). *)
+let tasks_needing_evidence ?(limit : int = 3) ()
+    : ((string * string list) list, string) result =
+  let sql = {|
+    SELECT t.task_id, te.doc_id
+    FROM tasks t
+    JOIN task_emails te ON te.task_id = t.task_id
+    WHERE t.context_prefetched = TRUE
+      AND t.context_ready = FALSE
+      AND t.status IN ('open', 'in_progress')
+      AND te.role IN ('context', 'style')
+      AND te.compressed_body = ''
+    ORDER BY t.created_at ASC
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(unit ->* t2 string string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.collect_list req () with
+    | Error _ as e -> e
+    | Ok rows ->
+        (* Group doc_ids by task_id, limit to `limit` tasks *)
+        let tbl : (string, string list) Hashtbl.t = Hashtbl.create 16 in
+        let order = ref [] in
+        List.iter (fun (tid, did) ->
+          if not (Hashtbl.mem tbl tid) then order := tid :: !order;
+          let cur = match Hashtbl.find_opt tbl tid with Some l -> l | None -> [] in
+          Hashtbl.replace tbl tid (cur @ [did])
+        ) rows;
+        let tasks = List.rev !order in
+        let tasks = if List.length tasks > limit then
+          let rec take n acc = function
+            | [] -> List.rev acc
+            | _ when n <= 0 -> List.rev acc
+            | x :: xs -> take (n - 1) (x :: acc) xs
+          in take limit [] tasks
+        else tasks in
+        Ok (List.map (fun tid ->
+          (tid, match Hashtbl.find_opt tbl tid with Some l -> l | None -> [])
+        ) tasks))
+
+(* Update compressed_body for a task_email row *)
+let update_task_email_body ~(task_id : string) ~(doc_id : string)
+    ~(compressed_body : string) : (unit, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  let sql = {|
+    UPDATE task_emails SET compressed_body = $3
+    WHERE task_id = $1 AND doc_id = $2
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(t3 string string string ->. unit) ~oneshot:true sql in
+  use (fun (module C : Caqti_eio.CONNECTION) ->
+    C.exec req (task_id, doc_id, compressed_body))
+
+(* Get all task_emails with their compressed bodies for a task, grouped by role *)
+let get_task_emails_with_bodies (task_id : string)
+    : ((string * string * string) list, string) result =
+  let sql = {|
+    SELECT te.doc_id, te.role, te.compressed_body
+    FROM task_emails te
+    WHERE te.task_id = $1
+    ORDER BY te.role, te.added_at
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(string ->* t3 string string string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.collect_list req task_id with
+    | Error _ as e -> e
+    | Ok rows -> Ok rows)
+
+(* Get the best available body text preview for a doc_id from task_emails *)
+let get_body_preview (doc_id : string) : (string option, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  let sql = {|
+    SELECT compressed_body FROM task_emails
+    WHERE doc_id = $1 AND compressed_body <> ''
+    ORDER BY LENGTH(compressed_body) DESC
+    LIMIT 1
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(string ->? string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.find_opt req doc_id with
+    | Error _ as e -> e
+    | Ok v -> Ok v)
+
+(* Find tasks where all evidence bodies are uploaded but first message not yet generated.
+   context_prefetched=true, context_ready=false, no empty compressed_body on context/style rows. *)
+let tasks_ready_for_generation ?(limit : int = 1) ()
+    : ((string * string) list, string) result =
+  let sql = {|
+    SELECT t.task_id, t.title
+    FROM tasks t
+    WHERE t.context_prefetched = TRUE
+      AND t.context_ready = FALSE
+      AND t.status IN ('open', 'in_progress')
+      AND NOT EXISTS (
+        SELECT 1 FROM task_emails te
+        WHERE te.task_id = t.task_id
+          AND te.role IN ('context', 'style')
+          AND te.compressed_body = ''
+      )
+    ORDER BY t.created_at ASC
+    LIMIT $1
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(int ->* t2 string string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.collect_list req limit with
+    | Error _ as e -> e
+    | Ok rows -> Ok rows)
+
 let task_knn ~(embedding : float list) ~(top_k : int)
     ?(status_filter : string option)
-    () : ((string * string * string * float) list, string) result =
+    () : ((string * string * string * int option * string * float) list, string) result =
   let vec = float_list_to_pgvector embedding in
   let where_clause = match status_filter with
     | Some s -> Printf.sprintf "WHERE t.status = '%s'" s
@@ -1035,6 +1265,8 @@ let task_knn ~(embedding : float list) ~(top_k : int)
   in
   let sql = Printf.sprintf {|
     SELECT t.task_id, t.title, t.description,
+           t.importance_score,
+           COALESCE(TO_CHAR(t.deadline, 'YYYY-MM-DD'), ''),
            t.embedding <=> $1::vector AS distance
     FROM tasks t
     %s
@@ -1043,9 +1275,317 @@ let task_knn ~(embedding : float list) ~(top_k : int)
     LIMIT $2
   |} where_clause in
   let open Caqti_type in
-  let rt = t4 string string string float in
+  let rt = t2 (t4 string string string (option int)) (t2 string float) in
   let req = Caqti_request.Infix.(t2 string int ->* rt) ~oneshot:true sql in
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
     match C.collect_list req (vec, top_k) with
     | Error _ as e -> e
-    | Ok rows -> Ok rows)
+    | Ok rows -> Ok (List.map (fun ((tid, title, desc, imp), (dl, dist)) ->
+        (tid, title, desc, imp, dl, dist)) rows))
+
+(* Find tasks with raw [DRAFT markers in conversation but empty drafts array *)
+let tasks_needing_draft_migration ()
+    : (string list, string) result =
+  let sql = {|
+    SELECT task_id FROM tasks
+    WHERE drafts = '[]'::jsonb
+      AND conversation::text LIKE '%[DRAFT %'
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(unit ->* string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    C.collect_list req ())
+
+(* Delete all tasks that have no trigger emails at all *)
+let cleanup_orphan_tasks ()
+    : (string list, string) result =
+  let sql = {|
+    DELETE FROM tasks
+    WHERE NOT EXISTS (
+      SELECT 1 FROM task_emails te
+      WHERE te.task_id = tasks.task_id AND te.role = 'trigger'
+    )
+    AND status IN ('open', 'in_progress')
+    RETURNING task_id
+  |} in
+  let req = Caqti_request.Infix.(Caqti_type.unit ->* Caqti_type.string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    C.collect_list req ())
+
+(* ---------- memory CRUD ---------- *)
+
+let create_memory
+    ~(memory_id : string) ~(text : string)
+    ?(rule : string option)
+    ?(source_task_id : string option)
+    () : (unit, string) result =
+  let sql = {|
+    INSERT INTO memories (memory_id, text, rule, source_task_id)
+    VALUES ($1, $2, $3::jsonb, $4)
+  |} in
+  let open Caqti_type in
+  let pt = t4 string string (option string) (option string) in
+  let req = Caqti_request.Infix.(pt ->. unit) ~oneshot:true sql in
+  use (fun (module C : Caqti_eio.CONNECTION) ->
+    C.exec req (memory_id, text, rule, source_task_id))
+
+let get_memory (memory_id : string)
+    : (Yojson.Safe.t option, string) result =
+  let sql = {|
+    SELECT m.memory_id, m.text, m.rule::text, m.source_task_id,
+           m.enabled, COALESCE(m.created_at::text, ''),
+           COALESCE(m.updated_at::text, '')
+    FROM memories m WHERE m.memory_id = $1
+  |} in
+  let open Caqti_type in
+  let rt = t2
+    (t4 string string (option string) (option string))
+    (t3 bool string string)
+  in
+  let req = Caqti_request.Infix.(string ->? rt) ~oneshot:true sql in
+  (* Also fetch linked emails *)
+  let emails_sql = "SELECT doc_id FROM memory_emails WHERE memory_id = $1" in
+  let emails_req = Caqti_request.Infix.(string ->* string) ~oneshot:true emails_sql in
+  (* And templates *)
+  let templates_sql = "SELECT id, template_text FROM memory_templates WHERE memory_id = $1" in
+  let templates_req = Caqti_request.Infix.(string ->* t2 int string) ~oneshot:true templates_sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.find_opt req memory_id with
+    | Error _ as e -> e
+    | Ok None -> Ok None
+    | Ok (Some ((mid, text, rule_str, source_task_id), (enabled, created_at, updated_at))) ->
+        let rule_json = match rule_str with
+          | Some s -> (try Yojson.Safe.from_string s with _ -> `Null)
+          | None -> `Null
+        in
+        let emails = match C.collect_list emails_req mid with
+          | Ok ids -> `List (List.map (fun id -> `String id) ids)
+          | Error _ -> `List []
+        in
+        let templates = match C.collect_list templates_req mid with
+          | Ok rows -> `List (List.map (fun (id, txt) ->
+              `Assoc [("id", `Int id); ("template_text", `String txt)]) rows)
+          | Error _ -> `List []
+        in
+        Ok (Some (`Assoc
+          [ ("memory_id", `String mid)
+          ; ("text", `String text)
+          ; ("rule", rule_json)
+          ; ("source_task_id", match source_task_id with Some s -> `String s | None -> `Null)
+          ; ("enabled", `Bool enabled)
+          ; ("created_at", `String created_at)
+          ; ("updated_at", `String updated_at)
+          ; ("linked_emails", emails)
+          ; ("templates", templates)
+          ])))
+
+let update_memory
+    ~(memory_id : string)
+    ?(text : string option)
+    ?(rule : string option option)
+    ?(enabled : bool option)
+    () : (bool, string) result =
+  let escape_literal (s : string) : string =
+    let buf = Buffer.create (String.length s + 4) in
+    Buffer.add_string buf "E'";
+    String.iter (fun c ->
+      match c with
+      | '\'' -> Buffer.add_string buf "''"
+      | '\\' -> Buffer.add_string buf "\\\\"
+      | _ -> Buffer.add_char buf c) s;
+    Buffer.add_char buf '\'';
+    Buffer.contents buf
+  in
+  let set_parts = ref [] in
+  let add field literal =
+    set_parts := Printf.sprintf "%s = %s" field literal :: !set_parts
+  in
+  (match text with Some t -> add "text" (escape_literal t) | None -> ());
+  (match rule with
+   | Some (Some r) -> add "rule" (escape_literal r ^ "::jsonb")
+   | Some None -> add "rule" "NULL"
+   | None -> ());
+  (match enabled with
+   | Some b -> add "enabled" (if b then "TRUE" else "FALSE")
+   | None -> ());
+  if !set_parts = [] then Ok true
+  else begin
+    add "updated_at" (escape_literal (now_utc_iso8601 ()) ^ "::timestamptz");
+    let sql = Printf.sprintf
+      "UPDATE memories SET %s WHERE memory_id = $1 RETURNING memory_id"
+      (String.concat ", " (List.rev !set_parts))
+    in
+    let req = Caqti_request.Infix.(Caqti_type.string ->? Caqti_type.string) ~oneshot:true sql in
+    use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+      match C.find_opt req memory_id with
+      | Ok (Some _) -> Ok true
+      | Ok None -> Ok false
+      | Error _ as e -> e)
+  end
+
+let delete_memory (memory_id : string) : (bool, string) result =
+  let sql = "DELETE FROM memories WHERE memory_id = $1 RETURNING memory_id" in
+  let req = Caqti_request.Infix.(Caqti_type.string ->? Caqti_type.string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.find_opt req memory_id with
+    | Ok (Some _) -> Ok true
+    | Ok None -> Ok false
+    | Error _ as e -> e)
+
+let list_memories ?(enabled_only : bool = false) ()
+    : (Yojson.Safe.t list, string) result =
+  let where = if enabled_only then "WHERE m.enabled = TRUE" else "" in
+  let sql = Printf.sprintf {|
+    SELECT m.memory_id, m.text, m.rule::text, m.source_task_id,
+           m.enabled, COALESCE(m.created_at::text, ''),
+           COALESCE(m.updated_at::text, '')
+    FROM memories m
+    %s
+    ORDER BY m.created_at DESC
+  |} where in
+  let open Caqti_type in
+  let rt = t2
+    (t4 string string (option string) (option string))
+    (t3 bool string string)
+  in
+  let req = Caqti_request.Infix.(unit ->* rt) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.collect_list req () with
+    | Error _ as e -> e
+    | Ok rows ->
+        Ok (List.map (fun ((mid, text, rule_str, source_task_id),
+                           (enabled, created_at, updated_at)) ->
+          let rule_json = match rule_str with
+            | Some s -> (try Yojson.Safe.from_string s with _ -> `Null)
+            | None -> `Null
+          in
+          `Assoc
+            [ ("memory_id", `String mid)
+            ; ("text", `String text)
+            ; ("rule", rule_json)
+            ; ("source_task_id", match source_task_id with Some s -> `String s | None -> `Null)
+            ; ("enabled", `Bool enabled)
+            ; ("created_at", `String created_at)
+            ; ("updated_at", `String updated_at)
+            ]) rows))
+
+let link_email_to_memory ~(memory_id : string) ~(doc_id : string)
+    : (unit, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  let sql = {|
+    INSERT INTO memory_emails (memory_id, doc_id)
+    VALUES ($1, $2)
+    ON CONFLICT DO NOTHING
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(t2 string string ->. unit) ~oneshot:true sql in
+  use (fun (module C : Caqti_eio.CONNECTION) ->
+    C.exec req (memory_id, doc_id))
+
+let insert_memory_template ~(memory_id : string)
+    ~(template_text : string) ~(embedding : float list)
+    : (unit, string) result =
+  let vec = float_list_to_pgvector embedding in
+  let sql = {|
+    INSERT INTO memory_templates (memory_id, template_text, embedding)
+    VALUES ($1, $2, $3::vector)
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(t3 string string string ->. unit) ~oneshot:true sql in
+  use (fun (module C : Caqti_eio.CONNECTION) ->
+    C.exec req (memory_id, template_text, vec))
+
+(* Retrieve memories whose symbolic rules match — returns all enabled memories
+   with non-NULL rules. The caller evaluates the rules in OCaml. *)
+let memories_with_rules ()
+    : ((string * string * string) list, string) result =
+  let sql = {|
+    SELECT memory_id, text, rule::text
+    FROM memories
+    WHERE enabled = TRUE AND rule IS NOT NULL
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(unit ->* t3 string string string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    C.collect_list req ())
+
+(* kNN search against memory_templates embeddings.
+   Returns (memory_id, distance) pairs sorted by distance. *)
+let memory_templates_knn ~(embedding : float list) ~(top_k : int)
+    () : ((string * float) list, string) result =
+  let vec = float_list_to_pgvector embedding in
+  let sql = {|
+    SELECT mt.memory_id, mt.embedding <=> $1::vector AS distance
+    FROM memory_templates mt
+    JOIN memories m ON m.memory_id = mt.memory_id
+    WHERE m.enabled = TRUE
+    ORDER BY mt.embedding <=> $1::vector ASC
+    LIMIT $2
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(t2 string int ->* t2 string float) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    C.collect_list req (vec, top_k))
+
+(* kNN search against email_chunks that are linked to memories via memory_emails.
+   Returns (memory_id, distance) pairs sorted by distance. *)
+let memory_emails_knn ~(embedding : float list) ~(top_k : int)
+    () : ((string * float) list, string) result =
+  let vec = float_list_to_pgvector embedding in
+  let sql = {|
+    SELECT me.memory_id, MIN(ec.embedding <=> $1::vector) AS distance
+    FROM memory_emails me
+    JOIN email_chunks ec ON ec.doc_id = me.doc_id
+    JOIN memories m ON m.memory_id = me.memory_id
+    WHERE m.enabled = TRUE
+    GROUP BY me.memory_id
+    ORDER BY distance ASC
+    LIMIT $2
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(t2 string int ->* t2 string float) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    C.collect_list req (vec, top_k))
+
+(* kNN search against task embeddings for tasks linked to memories via source_task_id.
+   Returns (memory_id, distance) pairs sorted by distance. *)
+let memory_tasks_knn ~(embedding : float list) ~(top_k : int)
+    () : ((string * float) list, string) result =
+  let vec = float_list_to_pgvector embedding in
+  let sql = {|
+    SELECT m.memory_id, t.embedding <=> $1::vector AS distance
+    FROM memories m
+    JOIN tasks t ON t.task_id = m.source_task_id
+    WHERE m.enabled = TRUE
+      AND t.embedding IS NOT NULL
+    ORDER BY t.embedding <=> $1::vector ASC
+    LIMIT $2
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(t2 string int ->* t2 string float) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    C.collect_list req (vec, top_k))
+
+(* Get the text of a memory by id *)
+let memory_text (memory_id : string) : (string option, string) result =
+  let sql = "SELECT text FROM memories WHERE memory_id = $1" in
+  let req = Caqti_request.Infix.(Caqti_type.string ->? Caqti_type.string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    C.find_opt req memory_id)
+
+(* Database statistics: row count + total size per table *)
+let db_stats () : ((string * int * string) list, string) result =
+  let sql = {|
+    SELECT
+      t.tablename,
+      COALESCE(s.n_live_tup, 0)::int,
+      pg_size_pretty(pg_total_relation_size(quote_ident(t.tablename)::regclass))
+    FROM pg_tables t
+    LEFT JOIN pg_stat_user_tables s ON s.relname = t.tablename
+    WHERE t.schemaname = 'public'
+    ORDER BY pg_total_relation_size(quote_ident(t.tablename)::regclass) DESC
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(unit ->* t3 string int string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    C.collect_list req ())

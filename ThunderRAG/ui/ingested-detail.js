@@ -254,6 +254,34 @@ async function load() {
           </div>
         </div>`;
       }
+
+      // Propose tasks debug — only for single-email view
+      if (isSingle && data && data.propose_tasks_debug && data.propose_tasks_debug !== null) {
+        const ptd = data.propose_tasks_debug;
+        let ptHtml = `<div class="card"><div class="label">Task Proposal LLM Call</div>`;
+        if (ptd.model) {
+          ptHtml += `<div style="font-size:12px; color:var(--label); margin-bottom:8px;">Model: ${esc(ptd.model)}</div>`;
+        }
+        if (Array.isArray(ptd.messages)) {
+          ptHtml += `<div style="margin-bottom:8px;"><div class="label" style="margin-bottom:4px;">LLM Input Messages</div>`;
+          for (const msg of ptd.messages) {
+            const role = msg.role || "unknown";
+            const content = msg.content || "";
+            ptHtml += `<div style="margin-bottom:6px;">
+              <span style="font-size:11px; font-weight:bold; text-transform:uppercase; color:var(--label);">${esc(role)}</span>
+              <pre style="margin:2px 0 0 0; font-size:12px; white-space:pre-wrap; word-break:break-word; background:var(--bg); padding:6px; border-radius:4px; border:1px solid var(--border);">${esc(content)}</pre>
+            </div>`;
+          }
+          ptHtml += `</div>`;
+        }
+        if (ptd.raw_response) {
+          ptHtml += `<div><div class="label" style="margin-bottom:4px;">Raw LLM Response</div>
+            <pre style="margin:0; font-size:12px; white-space:pre-wrap; word-break:break-word; background:var(--bg); padding:6px; border-radius:4px; border:1px solid var(--border);">${esc(ptd.raw_response)}</pre>
+          </div>`;
+        }
+        ptHtml += `</div>`;
+        sectionHtml += ptHtml;
+      }
     } catch (e) {
       sectionHtml += `<div class="card"><div class="label">Error</div><div class="value">${esc(e.message)}</div></div>`;
     }

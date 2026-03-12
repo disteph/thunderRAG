@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>LLM Call Debug</title>
+  <style>
+    :root {
+      --bg: #1e1e2e;
+      --surface: #252536;
+      --border: #3a3a50;
+      --text: #cdd6f4;
+      --text-dim: #8888aa;
+      --accent: #89b4fa;
+      --green: #a6e3a1;
+      --red: #f38ba8;
+      --yellow: #f9e2af;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 20px;
+      line-height: 1.5;
+    }
+    h1 { font-size: 18px; margin-bottom: 16px; color: var(--accent); }
+    h2 {
+      font-size: 14px;
+      color: var(--yellow);
+      margin: 20px 0 8px;
+      padding-bottom: 4px;
+      border-bottom: 1px solid var(--border);
+    }
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .meta { color: var(--text-dim); font-size: 12px; margin-bottom: 12px; }
+    .meta span { margin-right: 16px; }
+    .meta .label { color: var(--accent); }
+
+    /* Message list */
+    .message {
+      margin-bottom: 10px;
+      border-left: 3px solid var(--border);
+      padding: 8px 12px;
+    }
+    .message.system { border-left-color: var(--yellow); }
+    .message.user { border-left-color: var(--accent); }
+    .message.assistant { border-left-color: var(--green); }
+    .message .role {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .message.system .role { color: var(--yellow); }
+    .message.user .role { color: var(--accent); }
+    .message.assistant .role { color: var(--green); }
+    .message .content {
+      font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    .message .content.collapsed {
+      max-height: 120px;
+      overflow: hidden;
+      position: relative;
+    }
+    .message .content.collapsed::after {
+      content: "";
+      display: block;
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 40px;
+      background: linear-gradient(transparent, var(--surface));
+    }
+    .toggle-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-top: 4px;
+    }
+    .toggle-btn:hover { color: var(--text); border-color: var(--text-dim); }
+
+    /* Raw response */
+    .raw-response {
+      font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 600px;
+      overflow-y: auto;
+    }
+
+    /* Copy button */
+    .copy-btn {
+      float: right;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      font-size: 11px;
+      padding: 2px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .copy-btn:hover { color: var(--text); border-color: var(--text-dim); }
+
+    .empty-state {
+      color: var(--text-dim);
+      text-align: center;
+      padding: 40px;
+      font-style: italic;
+    }
+
+    /* Char count badge */
+    .char-count {
+      font-size: 10px;
+      color: var(--text-dim);
+      margin-left: 8px;
+    }
+  </style>
+</head>
+<body>
+  <h1>LLM Call Debug Inspector</h1>
+  <div id="content"><div class="empty-state">No debug data found.</div></div>
+  <script src="llm-debug.js"></script>
+</body>
+</html>

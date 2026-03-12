@@ -193,8 +193,9 @@ const ingestColumnHandler = {
       const st = ingestStatusCache.get(mid);
       if (!st) return "";
       if (!st.ingested) return "";
-      if (st.partial) return st.processed ? "\u25EF\u2713" : "\u25EF";
-      return st.processed ? "\u25CF\u2713" : "\u25CF";
+      const disc = st.partial ? "\u25CB" : "\u25CF";
+      const suffix = (st.trigger_active ? "\u26A1" : "") + (st.processed ? "\u2713" : "");
+      return disc + suffix;
     } catch (_e) {
       return "";
     }
@@ -325,8 +326,9 @@ function registerIngestColumn() {
             const st = ingestStatusCache.get(mid);
             if (!st) return "";
             if (!st.ingested) return "";
-            if (st.partial) return st.processed ? "\u25EF\u2713" : "\u25EF";
-            return st.processed ? "\u25CF\u2713" : "\u25CF";
+            const disc = st.partial ? "\u25CB" : "\u25CF";
+            const suffix = (st.trigger_active ? "\u26A1" : "") + (st.processed ? "\u2713" : "");
+            return disc + suffix;
           },
         });
         cachedThreadPaneColumns = ThreadPaneColumns;
@@ -345,9 +347,9 @@ function registerIngestColumn() {
               /* --- ThunderRAG column header: show 🛢 instead of "ThunderRAG" --- */
               th#${INGEST_COL_ID},
               [is="tree-view-table-header-cell"]#${INGEST_COL_ID} {
-                max-width: 32px !important;
-                min-width: 32px !important;
-                width: 32px !important;
+                max-width: 48px !important;
+                min-width: 48px !important;
+                width: 48px !important;
               }
               th#${INGEST_COL_ID} button,
               [is="tree-view-table-header-cell"]#${INGEST_COL_ID} button {
@@ -363,9 +365,9 @@ function registerIngestColumn() {
               /* --- ThunderRAG column cells: fixed narrow width --- */
               td.${INGEST_COL_ID}-column,
               [data-column-id="${INGEST_COL_ID}"] {
-                max-width: 32px !important;
-                min-width: 32px !important;
-                width: 32px !important;
+                max-width: 48px !important;
+                min-width: 48px !important;
+                width: 48px !important;
                 text-align: center !important;
               }
             `;
@@ -1963,10 +1965,10 @@ var ragFilterAction = class extends ExtensionCommon.ExtensionAPI {
             const obj = JSON.parse(cacheJson);
             for (const [k, v] of Object.entries(obj)) {
               if (v && typeof v === "object") {
-                ingestStatusCache.set(k, { ingested: !!v.ingested, processed: !!v.processed, partial: !!v.partial, reply_by: v.reply_by || "" });
+                ingestStatusCache.set(k, { ingested: !!v.ingested, processed: !!v.processed, partial: !!v.partial, trigger_active: !!v.trigger_active, reply_by: v.reply_by || "" });
               } else {
                 // Legacy boolean format fallback.
-                ingestStatusCache.set(k, { ingested: !!v, processed: false, partial: false, reply_by: "" });
+                ingestStatusCache.set(k, { ingested: !!v, processed: false, partial: false, trigger_active: false, reply_by: "" });
               }
             }
             // Refresh the column so it repaints with the new cache data.

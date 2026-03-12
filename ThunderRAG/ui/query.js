@@ -266,7 +266,7 @@ function renderSourcesInto(container, sources) {
   }
 }
 
-function setAssistantMessage(bubble, answer, sources, retrievalInfo) {
+function setAssistantMessage(bubble, answer, sources, retrievalInfo, llmCalls) {
   /*
     Renders a single assistant "bubble" with three pieces:
     - A debug-only collapsible triangle (no label) that expands the full sources list.
@@ -418,6 +418,31 @@ function setAssistantMessage(bubble, answer, sources, retrievalInfo) {
     }
   }
   bubble.appendChild(answerEl);
+
+  // Debug icon for inspecting the LLM call
+  if (Array.isArray(llmCalls) && llmCalls.length > 0) {
+    // Find the "chat" call (the main answer generation), or use last entry
+    const chatCall = llmCalls.find(c => c.label === "chat") || llmCalls[llmCalls.length - 1];
+    if (chatCall) {
+      const debugBtn = document.createElement("span");
+      debugBtn.className = "llm-debug-icon";
+      debugBtn.title = "Inspect LLM call";
+      debugBtn.textContent = "\uD83D\uDD0D";
+      debugBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        localStorage.setItem("llm_debug_data", JSON.stringify({
+          label: chatCall.label,
+          model: chatCall.model,
+          messages: chatCall.messages,
+          raw_response: chatCall.response,
+        }));
+        const url = browser.runtime.getURL("ui/llm-debug.html");
+        browser.tabs.create({ url });
+      });
+      answerEl.style.position = "relative";
+      answerEl.appendChild(debugBtn);
+    }
+  }
 
   // Render cited sources below the answer (always visible, no collapse), renumbered.
   if (citedOriginal.length > 0) {
@@ -714,12 +739,13 @@ async function onAsk() {
 
       const answer = String(final?.answer || "");
       const sources = Array.isArray(final?.sources) ? final.sources : srcs;
+      const llmCalls = Array.isArray(final?.llm_calls) ? final.llm_calls : [];
       // Merge folder info from TB validation into server-returned sources
       for (const s of sources) {
         const did = String(s?.doc_id || "");
         if (did && folderByDocId[did]) s.folder = folderByDocId[did];
       }
-      setAssistantMessage(assistant.bubble, answer, sources, retrievalInfo);
+      setAssistantMessage(assistant.bubble, answer, sources, retrievalInfo, llmCalls);
       return;
     } else {
       const answer = res?.answer || "";
