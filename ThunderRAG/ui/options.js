@@ -3,6 +3,15 @@ const STORAGE_KEY = "ragServerBase";
 const TOPK_KEY = "ragDefaultTopK";
 const DEFAULT_TOPK = 20;
 
+/* Voice settings keys & defaults */
+const VOICE_KEYS = {
+  voiceEnableSTT:  { key: "voiceEnableSTT",  default: false },
+  voiceVADSilence: { key: "voiceVADSilence",  default: 0.7 },
+  voiceStopWord:   { key: "voiceStopWord",    default: "over" },
+  voiceEnableTTS:  { key: "voiceEnableTTS",   default: false },
+  voiceAutoPlay:   { key: "voiceAutoPlay",    default: false },
+};
+
 function normalizeUrl(s) {
   const trimmed = (s || "").trim();
   if (!trimmed) return DEFAULT_SERVER_URL;
@@ -73,6 +82,14 @@ const SETTINGS_SCHEMA = [
   { section: "RAG — query" },
   { key: "rag.query.include_unrehydrated_metadata", path: ["rag","query","include_unrehydrated_metadata"], label: "Include unrehydrated metadata", type: "bool" },
   { key: "rag.query.rewrite", path: ["rag","query","rewrite"], label: "Query rewrite", type: "bool" },
+
+  { section: "Voice" },
+  { key: "voice.piper_model", path: ["voice","piper_model"], label: "Piper TTS model path", type: "text",
+    hint: "Path to .onnx voice model file (~ expanded). Leave empty to disable TTS." },
+  { key: "voice.piper_bin", path: ["voice","piper_bin"], label: "Piper binary path", type: "text",
+    hint: "Path to piper executable (~ expanded)." },
+  { key: "voice.whisper_url", path: ["voice","whisper_url"], label: "Whisper server URL", type: "text",
+    hint: "URL of the Whisper.cpp STT server." },
 
   { section: "Debug" },
   { key: "debug.ollama_embed", path: ["debug","ollama_embed"], label: "Debug: Ollama embed", type: "bool" },
@@ -463,6 +480,27 @@ async function init() {
     await browser.storage.local.set({ [TOPK_KEY]: v });
     statusMsg("Top-K saved locally.");
   });
+
+  /* ---- Voice settings (local) ---- */
+  {
+    const stored = await browser.storage.local.get(Object.keys(VOICE_KEYS));
+    for (const [id, spec] of Object.entries(VOICE_KEYS)) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      const val = stored[id] != null ? stored[id] : spec.default;
+      if (el.type === "checkbox") el.checked = !!val;
+      else el.value = val;
+      const save = async () => {
+        let v;
+        if (el.type === "checkbox") v = el.checked;
+        else if (el.type === "number") v = parseFloat(el.value) || spec.default;
+        else v = el.value;
+        await browser.storage.local.set({ [id]: v });
+        statusMsg("Voice setting saved.");
+      };
+      el.addEventListener("change", save);
+    }
+  }
 
   /* ---- Server-side settings & prompts ---- */
 

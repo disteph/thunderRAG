@@ -456,6 +456,11 @@ function setAssistantMessage(bubble, answer, sources, retrievalInfo, llmCalls) {
     bubble.appendChild(citedContainer);
   }
 
+  // Speaker button for TTS
+  if (String(answer || "").trim()) {
+    addSpeakerButton(bubble, normalizeUnicodeWhitespace(String(answer || "")));
+  }
+
   bubble.__rag = {
     details,
     summaryProgress,
@@ -746,10 +751,18 @@ async function onAsk() {
         if (did && folderByDocId[did]) s.folder = folderByDocId[did];
       }
       setAssistantMessage(assistant.bubble, answer, sources, retrievalInfo, llmCalls);
+      // Auto-play TTS
+      if (typeof Voice !== "undefined" && Voice.getSettings().voiceAutoPlay && answer.trim()) {
+        Voice.speakText(normalizeUnicodeWhitespace(answer));
+      }
       return;
     } else {
       const answer = res?.answer || "";
       setAssistantMessage(assistant.bubble, answer, srcs);
+      // Auto-play TTS
+      if (typeof Voice !== "undefined" && Voice.getSettings().voiceAutoPlay && answer.trim()) {
+        Voice.speakText(normalizeUnicodeWhitespace(answer));
+      }
     }
   } catch (e) {
     stopProgressPolling();
@@ -832,8 +845,14 @@ async function loadDefaultTopK() {
 const isEmbedded = (window !== window.top);
 
 /* Initialize the UI: restore saved settings from localStorage and wire up event listeners. */
-function init() {
+async function init() {
   loadDefaultTopK();
+
+  // Initialize voice module
+  if (typeof Voice !== "undefined") {
+    await Voice.init();
+    setupQueryVoice();
+  }
 
   // When embedded, hide the topbar (models are controlled by the parent)
   if (isEmbedded) {
@@ -922,6 +941,71 @@ function init() {
     document.removeEventListener("keydown", onFirstKey, true);
   }
   document.addEventListener("keydown", onFirstKey, true);
+}
+
+/* ── Voice helpers (query page) ── */
+
+function setupQueryVoice() {
+  if (typeof Voice === "undefined") return;
+  const s = Voice.getSettings();
+
+  // Add mic button to composer if STT enabled
+  if (s.voiceEnableSTT) {
+    const composerRow = document.querySelector(".composer-row");
+    if (composerRow) {
+      const micBtn = document.createElement("button");
+      micBtn.className = "voice-mic-btn";
+      micBtn.id = "queryMicBtn";
+      micBtn.title = "Voice input";
+      micBtn.textContent = "\uD83C\uDF99\uFE0F";
+      composerRow.insertBefore(micBtn, $("askBtn"));
+      micBtn.addEventListener("click", () => toggleQueryMic(micBtn));
+    }
+  }
+}
+
+function toggleQueryMic(micBtn) {
+  if (typeof Voice === "undefined") return;
+  const questionEl = $("question");
+  if (Voice.isMicActive()) {
+    Voice.stopMic().then((text) => {
+      micBtn.classList.remove("recording");
+      micBtn.textContent = "\uD83C\uDF99\uFE0F";
+      if (text && text.trim()) {
+        questionEl.value = text.trim();
+        onAsk();
+      }
+    });
+  } else {
+    micBtn.classList.add("recording");
+    micBtn.textContent = "\u23F9";
+    Voice.startMic({
+      inputEl: questionEl,
+      onTranscript: (_text, _isFinal) => {},
+      onAutoSubmit: (fullText) => {
+        micBtn.classList.remove("recording");
+        micBtn.textContent = "\uD83C\uDF99\uFE0F";
+        if (fullText && fullText.trim()) {
+          questionEl.value = fullText.trim();
+          onAsk();
+        }
+      },
+    });
+  }
+}
+
+function addSpeakerButton(bubble, text) {
+  if (typeof Voice === "undefined") return;
+  if (!Voice.getSettings().voiceEnableTTS) return;
+  const btn = document.createElement("button");
+  btn.className = "voice-speak-btn";
+  btn.title = "Read aloud";
+  btn.textContent = "\uD83D\uDD0A";
+  btn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    Voice.speakText(text, btn);
+  });
+  bubble.appendChild(btn);
 }
 
 init();

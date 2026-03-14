@@ -203,6 +203,45 @@
     <strong>Mark processed:</strong> <code id="endpointMarkProcessed">http://localhost:8080/admin/mark_processed</code>
   </div>
 
+  <!-- ===== Section 1b: Voice settings (stored locally) ===== -->
+  <h2>Voice (STT / TTS)</h2>
+  <div class="hint" style="margin-bottom:12px;">Voice uses the RAG-o-Mail server above. STT requires a Whisper.cpp server (configured in server settings below). TTS requires Piper (configured in server settings below). When disabled, voice buttons are hidden from the chat UI.</div>
+
+  <div class="field">
+    <div class="field-row">
+      <input type="checkbox" id="voiceEnableSTT" />
+      <label class="inline" for="voiceEnableSTT">Enable speech-to-text (STT)</label>
+    </div>
+    <div class="hint">Requires a Whisper.cpp server (see voice.whisper_url in server settings below).</div>
+  </div>
+
+  <div class="field">
+    <label for="voiceVADSilence">VAD silence duration (seconds)</label>
+    <input id="voiceVADSilence" type="number" min="0.1" max="5" step="0.1" style="width:100px; max-width:100px;" />
+    <div class="hint">How long a silence pause triggers end-of-utterance. Default: 0.7</div>
+  </div>
+
+  <div class="field">
+    <label for="voiceStopWord">Stop word</label>
+    <input id="voiceStopWord" type="text" placeholder="over" style="max-width:200px;" />
+    <div class="hint">Say this word to auto-submit. Leave empty to disable.</div>
+  </div>
+
+  <div class="field">
+    <div class="field-row">
+      <input type="checkbox" id="voiceEnableTTS" />
+      <label class="inline" for="voiceEnableTTS">Enable text-to-speech (TTS)</label>
+    </div>
+    <div class="hint">Requires Piper CLI (see voice.piper_model / voice.piper_bin in server settings below).</div>
+  </div>
+
+  <div class="field">
+    <div class="field-row">
+      <input type="checkbox" id="voiceAutoPlay" />
+      <label class="inline" for="voiceAutoPlay">Auto-play TTS on assistant responses</label>
+    </div>
+  </div>
+
   <!-- ===== Section 2: RAG-o-Mail server settings (settings.json) ===== -->
   <h2>RAG-o-Mail settings</h2>
   <div class="hint" style="margin-bottom:12px;">These settings are stored on the server in <code>~/.rag-o-mail/settings.json</code>.</div>

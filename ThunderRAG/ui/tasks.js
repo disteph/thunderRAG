@@ -92,6 +92,12 @@ async function init() {
   await fetchPauseStatus();
   setInterval(fetchPauseStatus, 30000);
 
+  // Initialize voice module
+  if (typeof Voice !== "undefined") {
+    await Voice.init();
+    setupVoiceAutoPlayToggle();
+  }
+
   // Load models into the left-pane dropdowns
   await fetchModels();
 
@@ -784,6 +790,20 @@ function renderMidPane() {
       bubble.style.position = "relative";
       bubble.appendChild(debugBtn);
     }
+    // Speaker button for assistant messages (TTS)
+    if (role === "assistant" && typeof Voice !== "undefined" && Voice.getSettings().voiceEnableTTS) {
+      const speakBtn = document.createElement("button");
+      speakBtn.className = "voice-speak-btn";
+      speakBtn.title = "Read aloud";
+      speakBtn.textContent = "\uD83D\uDD0A";
+      const msgText = stripMarkers(content);
+      speakBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        Voice.speakText(msgText, speakBtn);
+      });
+      bubble.style.position = "relative";
+      bubble.appendChild(speakBtn);
+    }
     row.appendChild(bubble);
     chat.appendChild(row);
   }
@@ -804,8 +824,10 @@ function renderMidPane() {
   if (activeTask.status !== "done" && activeTask.status !== "dismissed") {
     const composer = document.createElement("div");
     composer.className = "mid-composer";
+    const showMic = typeof Voice !== "undefined" && Voice.getSettings().voiceEnableSTT;
     composer.innerHTML = `
       <textarea id="chatInput" rows="1" placeholder="Type a message…"></textarea>
+      ${showMic ? '<button class="voice-mic-btn" id="micBtn" title="Voice input">🎤</button>' : ''}
       <button id="sendBtn">Send</button>
     `;
     pane.appendChild(composer);
@@ -819,6 +841,13 @@ function renderMidPane() {
         sendMessage(input);
       }
     });
+
+    // Mic button: toggle STT recording
+    const micBtn = composer.querySelector("#micBtn");
+    if (micBtn) {
+      micBtn.addEventListener("click", () => toggleMic(micBtn, input));
+    }
+
     requestAnimationFrame(() => input.focus());
   }
 }
@@ -886,6 +915,14 @@ async function sendMessage(inputEl) {
 
     // Server has persisted the updated conversation; reload full task
     await selectTask(activeTaskId);
+
+    // Auto-play TTS on the latest assistant message
+    if (typeof Voice !== "undefined" && Voice.getSettings().voiceAutoPlay && activeTask?.conversation?.length) {
+      const last = activeTask.conversation[activeTask.conversation.length - 1];
+      if (last.role === "assistant") {
+        Voice.speakText(stripMarkers(last.content));
+      }
+    }
 
     // Process side effects
     if (data.side_effects) {
@@ -1716,8 +1753,16 @@ async function fetchPauseStatus() {
 function updatePauseButtons() {
   const tb = document.getElementById("pauseTasksBtn");
   const ib = document.getElementById("pauseIngestBtn");
-  if (tb) tb.classList.toggle("paused", pauseState.tasks_paused);
-  if (ib) ib.classList.toggle("paused", pauseState.ingest_paused);
+  if (tb) {
+    tb.classList.toggle("paused", pauseState.tasks_paused);
+    const sub = tb.querySelector(".pause-sub");
+    if (sub) sub.textContent = pauseState.tasks_paused ? "off" : "on";
+  }
+  if (ib) {
+    ib.classList.toggle("paused", pauseState.ingest_paused);
+    const sub = ib.querySelector(".pause-sub");
+    if (sub) sub.textContent = pauseState.ingest_paused ? "off" : "on";
+  }
 }
 
 async function togglePause(which) {
@@ -1739,6 +1784,74 @@ async function togglePause(which) {
   } catch (e) {
     console.error("[pause.toggle]", e);
   }
+}
+
+/* ── Voice helpers ── */
+
+function toggleMic(micBtn, inputEl) {
+  if (typeof Voice === "undefined") return;
+  if (Voice.isMicActive()) {
+    // Stop recording and submit whatever was accumulated
+    Voice.stopMic().then((text) => {
+      micBtn.classList.remove("recording");
+      micBtn.textContent = "\uD83C\uDF99\uFE0F";
+      if (text && text.trim()) {
+        inputEl.value = text.trim();
+        sendMessage(inputEl);
+      }
+    });
+  } else {
+    micBtn.classList.add("recording");
+    micBtn.textContent = "\u23F9";
+    Voice.startMic({
+      inputEl,
+      onTranscript: (_text, _isFinal) => {
+        // Text already written to inputEl by Voice module
+      },
+      onAutoSubmit: (fullText) => {
+        micBtn.classList.remove("recording");
+        micBtn.textContent = "\uD83C\uDF99\uFE0F";
+        if (fullText && fullText.trim()) {
+          inputEl.value = fullText.trim();
+          sendMessage(inputEl);
+        }
+      },
+    });
+  }
+}
+
+function setupVoiceAutoPlayToggle() {
+  if (typeof Voice === "undefined") return;
+  const s = Voice.getSettings();
+  if (!s.voiceEnableTTS) return;
+
+  const models = document.querySelector(".left-models");
+  if (!models) return;
+
+  const row = document.createElement("div");
+  row.className = "model-row";
+  row.style.justifyContent = "flex-start";
+  row.style.gap = "6px";
+
+  const label = document.createElement("span");
+  label.className = "model-label";
+  label.textContent = "TTS";
+
+  const btn = document.createElement("button");
+  btn.className = "voice-autoplay-btn" + (s.voiceAutoPlay ? " active" : "");
+  btn.title = "Toggle auto-play TTS on assistant responses";
+  btn.textContent = s.voiceAutoPlay ? "\uD83D\uDD0A Auto-play" : "\uD83D\uDD07 Auto-play";
+  btn.addEventListener("click", async () => {
+    const current = Voice.getSettings().voiceAutoPlay;
+    const next = !current;
+    await browser.storage.local.set({ voiceAutoPlay: next });
+    btn.classList.toggle("active", next);
+    btn.textContent = next ? "\uD83D\uDD0A Auto-play" : "\uD83D\uDD07 Auto-play";
+  });
+
+  row.appendChild(label);
+  row.appendChild(btn);
+  models.appendChild(row);
 }
 
 /* ── Boot ── */

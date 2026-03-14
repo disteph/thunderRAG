@@ -138,6 +138,9 @@ let memory_max_chars              = ref 3000
 let memory_knn_top_k              = ref 10
 let memory_template_count         = ref 3
 let memory_rule_max_retries       = ref 3
+let voice_piper_model             = ref ""
+let voice_piper_bin               = ref "piper"
+let voice_whisper_url             = ref "http://localhost:8178"
 
 (* Read settings.json into all config refs.
    Call once at startup after setting [config_dir], and again on /admin/reload. *)
@@ -200,6 +203,17 @@ let load_settings () : unit =
   memory_knn_top_k       := si [ "memory"; "knn_top_k" ]   ~default:10;
   memory_template_count  := si [ "memory"; "template_count" ] ~default:3;
   memory_rule_max_retries := si [ "memory"; "rule_max_retries" ] ~default:3;
+  let expand_tilde s =
+    let len = String.length s in
+    if len >= 2 && s.[0] = '~' && s.[1] = '/' then
+      Filename.concat (rag_home_dir ()) (String.sub s 2 (len - 2))
+    else if len = 1 && s.[0] = '~' then
+      rag_home_dir ()
+    else s
+  in
+  voice_piper_model   := expand_tilde (ss [ "voice"; "piper_model" ]   ~default:"");
+  voice_piper_bin     := expand_tilde (ss [ "voice"; "piper_bin" ]     ~default:"piper");
+  voice_whisper_url   := ss [ "voice"; "whisper_url" ]   ~default:"http://localhost:8178";
   Printf.printf "[config] loaded from %s (db=%s)\n%!" (settings_path ()) !pg_database
 
 (* Serialize all current settings to JSON matching the settings.json structure. *)
@@ -254,6 +268,11 @@ let current_settings_json () : Yojson.Safe.t =
         ; ("knn_top_k", `Int !memory_knn_top_k)
         ; ("template_count", `Int !memory_template_count)
         ; ("rule_max_retries", `Int !memory_rule_max_retries)
+        ])
+    ; ("voice", `Assoc
+        [ ("piper_model", `String !voice_piper_model)
+        ; ("piper_bin", `String !voice_piper_bin)
+        ; ("whisper_url", `String !voice_whisper_url)
         ])
     ; ("debug", `Assoc
         [ ("ollama_embed", `Bool !rag_debug_ollama_embed)

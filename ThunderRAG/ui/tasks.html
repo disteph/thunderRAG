@@ -101,14 +101,13 @@
       }
       .pause-btn:hover { opacity: 1; }
       .pause-btn .pause-label { font-weight: 600; }
-      .pause-btn .pause-sub { display: none; font-size: 9px; opacity: 0.85; }
+      .pause-btn .pause-sub { font-size: 9px; opacity: 0.85; }
       .pause-btn.paused {
         background: color-mix(in srgb, orange 25%, Canvas);
         border-color: color-mix(in srgb, orange 50%, transparent);
         color: color-mix(in srgb, orange 60%, CanvasText);
         opacity: 1;
       }
-      .pause-btn.paused .pause-sub { display: block; }
       .left-toolbar select {
         font-size: 11px;
         padding: 2px 4px;
@@ -800,6 +799,43 @@
         border-color: AccentColor;
         font-weight: 600;
       }
+      /* Voice buttons */
+      .voice-mic-btn, .voice-speak-btn {
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-size: 16px;
+        padding: 4px 6px;
+        border-radius: 6px;
+        opacity: 0.6;
+        transition: opacity 0.15s, background 0.15s;
+      }
+      .voice-mic-btn:hover, .voice-speak-btn:hover { opacity: 1; }
+      .voice-mic-btn.recording {
+        opacity: 1;
+        color: #d00;
+        animation: micPulse 1s infinite;
+      }
+      @keyframes micPulse {
+        0%, 100% { opacity: 0.7; }
+        50% { opacity: 1; }
+      }
+      .voice-autoplay-btn {
+        background: none;
+        border: 1px solid rgba(127,127,127,0.3);
+        cursor: pointer;
+        font-size: 13px;
+        padding: 2px 8px;
+        border-radius: 6px;
+        opacity: 0.6;
+        transition: opacity 0.15s;
+      }
+      .voice-autoplay-btn:hover { opacity: 1; }
+      .voice-autoplay-btn.active {
+        opacity: 1;
+        border-color: AccentColor;
+        background: rgba(100,100,255,0.1);
+      }
     </style>
   </head>
   <body>
@@ -808,8 +844,8 @@
         <div class="left-toolbar">
           <h2 id="titleLink" title="DB Stats">ThunderRAG</h2>
           <button class="nav-btn" id="memoriesBtn" title="Memories">🧠 Memories</button>
-          <button class="pause-btn" id="pauseTasksBtn" title="Pause/resume task daemon (triage, context, first message)"><span class="pause-label">Tasks</span><span class="pause-sub">paused</span></button>
-          <button class="pause-btn" id="pauseIngestBtn" title="Pause/resume async ingestion daemon"><span class="pause-label">Ingest</span><span class="pause-sub">paused</span></button>
+          <button class="pause-btn" id="pauseTasksBtn" title="Pause/resume task daemon (triage, context, first message)"><span class="pause-label">Tasks</span><span class="pause-sub">on</span></button>
+          <button class="pause-btn" id="pauseIngestBtn" title="Pause/resume async ingestion daemon"><span class="pause-label">Ingest</span><span class="pause-sub">on</span></button>
         </div>
         <div class="left-models">
           <div class="model-row"><span class="model-label">Chat</span><select id="chatModel" title="Chat model"><option>(loading…)</option></select></div>
@@ -845,6 +881,7 @@
         <div class="empty-state">Compose form will appear here</div>
       </div>
     </div>
+    <script src="voice.js"></script>
     <script src="tasks.js"></script>
   </body>
 </html>

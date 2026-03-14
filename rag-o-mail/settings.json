@@ -44,6 +44,11 @@
     "template_count": 3,
     "rule_max_retries": 3
   },
+  "voice": {
+    "piper_model": "~/.local/share/piper/en_US-lessac-medium.onnx",
+    "piper_bin": "piper",
+    "whisper_url": "http://localhost:8178"
+  },
   "debug": {
     "ollama_embed": true,
     "ollama_chat": true,

@@ -9,7 +9,8 @@ The Thunderbird side of [ThunderRAG](../README.md): a UI layer that connects Thu
 - **Chat / Q&A** — Click the toolbar button to open a chat panel. Ask natural-language questions about your email; the server retrieves relevant emails and generates answers.
 - **Reply drafting** — Right-click → *Draft reply*. The LLM interviews you with short questions, then produces a complete draft you can edit, save, or send.
 - **Ingestion status** — Custom column (●) in the message list shows which emails are ingested. Context menu items for de-ingesting, viewing metadata, and marking emails as processed.
-- **Settings UI** — Preferences page for configuring the server URL, top-K, and all RAG-o-Mail server settings (models, chunking, attachments, prompts).
+- **Voice (STT / TTS)** — Server-side mic recording with speech-to-text (Whisper) and text-to-speech (Piper). Voice buttons appear in the chat UI when enabled in Preferences.
+- **Settings UI** — Preferences page for configuring the server URL, top-K, voice toggles, and all RAG-o-Mail server settings (models, chunking, voice paths, prompts).
 
 ## UI Pages
 

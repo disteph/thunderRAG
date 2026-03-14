@@ -3322,6 +3322,217 @@ let extract_and_compress_email ~client ~sw ~(raw : string) ~(doc_id : string)
     let body = "NEW CONTENT:\n" ^ new_body_capped ^ quoted_section ^ att_section in
     (body, md))
 
+(*
+  Voice: server-side TTS (Piper) and STT (sox mic recording + Whisper)
+
+  getUserMedia doesn't work in Thunderbird extension pages, so mic
+  recording is done server-side via sox/rec.  The mic_worker runs in a
+  background Thread, reads raw PCM from the rec pipe, performs VAD
+  (RMS threshold), and transcribes speech segments via the Whisper
+  server.  Session state is protected by a stdlib Mutex.
+*)
+
+type voice_session = {
+  mutable text : string;
+  mutable done_ : bool;
+  mutable stop : bool;
+  ts : float;
+}
+
+let voice_sessions : (string, voice_session) Hashtbl.t = Hashtbl.create 16
+let voice_mu = Mutex.create ()
+
+let voice_cleanup_old () =
+  let now = Unix.gettimeofday () in
+  Mutex.lock voice_mu;
+  let expired = Hashtbl.fold (fun k v acc -> if now -. v.ts > 300. then k :: acc else acc) voice_sessions [] in
+  List.iter (Hashtbl.remove voice_sessions) expired;
+  Mutex.unlock voice_mu
+
+let voice_sample_rate = 16000
+let voice_chunk_samples = 4096
+let voice_chunk_bytes = voice_chunk_samples * 2
+
+let voice_raw_to_wav (raw : bytes) : bytes =
+  let n = Bytes.length raw in
+  let h = Bytes.create 44 in
+  let w16 off v = Bytes.set_int16_le h off v in
+  let w32 off v = Bytes.set_int32_le h off (Int32.of_int v) in
+  Bytes.blit_string "RIFF" 0 h 0 4;
+  w32 4 (36 + n);
+  Bytes.blit_string "WAVE" 0 h 8 4;
+  Bytes.blit_string "fmt " 0 h 12 4;
+  w32 16 16;
+  w16 20 1;
+  w16 22 1;
+  w32 24 voice_sample_rate;
+  w32 28 (voice_sample_rate * 2);
+  w16 32 2;
+  w16 34 16;
+  Bytes.blit_string "data" 0 h 36 4;
+  w32 40 n;
+  Bytes.cat h raw
+
+let voice_rms (buf : bytes) (len : int) : float =
+  let n = len / 2 in
+  if n = 0 then 0.0
+  else begin
+    let sum = ref 0.0 in
+    for i = 0 to n - 1 do
+      let v = Bytes.get_int16_le buf (i * 2) in
+      let f = Float.of_int v in
+      sum := !sum +. f *. f
+    done;
+    sqrt (!sum /. Float.of_int n)
+  end
+
+let voice_transcribe_wav (wav_path : string) : string =
+  let cmd = Printf.sprintf "curl -s -X POST %s/inference -F file=@%s -F response_format=json"
+    (Filename.quote !voice_whisper_url) (Filename.quote wav_path) in
+  match run_shell_capture_stdout cmd with
+  | None -> ""
+  | Some raw ->
+      try
+        match Yojson.Safe.from_string raw with
+        | `Assoc kv ->
+            (match List.assoc_opt "text" kv with
+            | Some (`String s) -> String.trim s
+            | _ -> "")
+        | _ -> ""
+      with _ -> ""
+
+let voice_mic_worker (sid : string) (silence_sec : float) (stop_word : string) : unit =
+  Printf.printf "[voice] mic_worker started for %s\n%!" sid;
+  let ic =
+    try Some (Unix.open_process_in
+      (Printf.sprintf "rec -q -t raw -r %d -c 1 -b 16 -e signed-integer --endian little - 2>/dev/null"
+        voice_sample_rate))
+    with _ -> None
+  in
+  match ic with
+  | None ->
+      Printf.eprintf "[voice] ERROR: 'rec' (sox) not found\n%!";
+      Mutex.lock voice_mu;
+      (match Hashtbl.find_opt voice_sessions sid with
+      | Some s -> s.text <- "[error: sox/rec not installed]"; s.done_ <- true
+      | None -> ());
+      Mutex.unlock voice_mu
+  | Some ic ->
+      let silence_chunks = max 1 (int_of_float (silence_sec *. Float.of_int voice_sample_rate /. Float.of_int voice_chunk_samples)) in
+      let silence_threshold = 500.0 in
+      let accumulated = Buffer.create 256 in
+      let speaking = ref false in
+      let silence_count = ref 0 in
+      let audio_buf = Buffer.create (voice_chunk_bytes * 20) in
+      let chunk = Bytes.create voice_chunk_bytes in
+      let should_stop () =
+        Mutex.lock voice_mu;
+        let r = match Hashtbl.find_opt voice_sessions sid with
+          | None -> true
+          | Some s -> s.stop in
+        Mutex.unlock voice_mu;
+        r
+      in
+      let transcribe_segment () =
+        if Buffer.length audio_buf > voice_chunk_bytes then begin
+          let raw = Buffer.to_bytes audio_buf in
+          let wav = voice_raw_to_wav raw in
+          let dur = Float.of_int (Bytes.length raw) /. Float.of_int (voice_sample_rate * 2) in
+          Printf.printf "[voice] Transcribing %.1fs segment...\n%!" dur;
+          let tmp = Filename.temp_file "voice_seg" ".wav" in
+          let oc = open_out_bin tmp in
+          output_bytes oc wav;
+          close_out oc;
+          let text = voice_transcribe_wav tmp in
+          (try Sys.remove tmp with _ -> ());
+          if text <> "" then begin
+            if Buffer.length accumulated > 0 then Buffer.add_char accumulated ' ';
+            Buffer.add_string accumulated text;
+            let acc = Buffer.contents accumulated in
+            Mutex.lock voice_mu;
+            (match Hashtbl.find_opt voice_sessions sid with
+            | Some s -> s.text <- acc
+            | None -> ());
+            Mutex.unlock voice_mu;
+            Printf.printf "[voice] Transcript so far: %s\n%!" acc;
+            (* Check stop word — case-insensitive, ignoring trailing punctuation *)
+            if stop_word <> "" then begin
+              let strip_trailing_punct s =
+                let len = ref (String.length s) in
+                while !len > 0 && (let c = s.[!len - 1] in c = '.' || c = ',' || c = '!' || c = '?' || c = ';' || c = ':') do
+                  decr len
+                done;
+                String.sub s 0 !len
+              in
+              let trimmed_lower = strip_trailing_punct (String.trim (String.lowercase_ascii acc)) in
+              let sw_lower = String.lowercase_ascii stop_word in
+              let sw_len = String.length sw_lower in
+              let tl_len = String.length trimmed_lower in
+              if tl_len >= sw_len &&
+                 String.sub trimmed_lower (tl_len - sw_len) sw_len = sw_lower then begin
+                (* Remove stop word (and any trailing punct) from original text *)
+                let orig_trimmed = String.trim acc in
+                let orig_stripped = strip_trailing_punct orig_trimmed in
+                let trimmed = String.trim (String.sub orig_stripped 0 (String.length orig_stripped - sw_len)) in
+                Mutex.lock voice_mu;
+                (match Hashtbl.find_opt voice_sessions sid with
+                | Some s -> s.text <- trimmed; s.done_ <- true
+                | None -> ());
+                Mutex.unlock voice_mu;
+                Printf.printf "[voice] Stop word detected, done.\n%!"
+              end
+            end
+          end
+        end
+      in
+      (try
+        let running = ref true in
+        while !running && not (should_stop ()) do
+          let n = try input ic chunk 0 voice_chunk_bytes with End_of_file -> 0 in
+          if n < voice_chunk_bytes then
+            running := false
+          else begin
+            let rms = voice_rms chunk n in
+            if rms > silence_threshold then begin
+              speaking := true;
+              silence_count := 0;
+              Buffer.add_bytes audio_buf (Bytes.sub chunk 0 n)
+            end else if !speaking then begin
+              Buffer.add_bytes audio_buf (Bytes.sub chunk 0 n);
+              incr silence_count;
+              if !silence_count >= silence_chunks then begin
+                transcribe_segment ();
+                (* Check if stop word triggered done *)
+                let is_done =
+                  Mutex.lock voice_mu;
+                  let d = match Hashtbl.find_opt voice_sessions sid with
+                    | Some s -> s.done_ | None -> true in
+                  Mutex.unlock voice_mu;
+                  d
+                in
+                if is_done then running := false;
+                Buffer.clear audio_buf;
+                speaking := false;
+                silence_count := 0
+              end
+            end
+          end
+        done;
+        (* Transcribe remaining audio *)
+        if Buffer.length audio_buf > voice_chunk_bytes * 2 then begin
+          transcribe_segment ()
+        end
+      with e ->
+        Printf.eprintf "[voice] mic_worker error: %s\n%!" (Printexc.to_string e));
+      ignore (Unix.close_process_in ic);
+      let final = Buffer.contents accumulated in
+      Mutex.lock voice_mu;
+      (match Hashtbl.find_opt voice_sessions sid with
+      | Some s -> s.text <- final; s.done_ <- true
+      | None -> ());
+      Mutex.unlock voice_mu;
+      Printf.printf "[voice] mic_worker finished for %s: '%s'\n%!" sid final
+
 let handler ~client ~sw ~clock _socket request body =
   (*
     HTTP routing
@@ -6499,6 +6710,137 @@ let handler ~client ~sw ~clock _socket request body =
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
           ~body:(Printf.sprintf "task/chat error: %s\n" (Printexc.to_string e)) ())
+
+  (* ===================================================================
+     Voice endpoints: TTS (Piper) and STT (sox mic + Whisper)
+     =================================================================== *)
+
+  | `POST, "/synthesize" ->
+      let raw = read_all body in
+      let text =
+        try match Yojson.Safe.from_string raw with
+          | `Assoc kv -> (match List.assoc_opt "text" kv with Some (`String s) -> String.trim s | _ -> "")
+          | _ -> ""
+        with _ -> ""
+      in
+      if text = "" then
+        Cohttp_eio.Server.respond_string ~status:`Bad_request
+          ~body:{|{"error":"empty text"}|} ~headers:json_headers ()
+      else if String.trim !voice_piper_model = "" then
+        Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+          ~body:{|{"error":"voice.piper_model not configured in settings.json"}|} ~headers:json_headers ()
+      else begin
+        let tmp = Filename.temp_file "piper_tts" ".wav" in
+        let cmd = Printf.sprintf "printf '%%s' %s | %s --model %s --output_file %s 2>&1"
+          (Filename.quote text) (Filename.quote !voice_piper_bin)
+          (Filename.quote !voice_piper_model) (Filename.quote tmp) in
+        let ok = match run_shell_capture_stdout cmd with Some _ -> true | None -> false in
+        if ok && Sys.file_exists tmp then begin
+          let ic = open_in_bin tmp in
+          let n = in_channel_length ic in
+          let wav = Bytes.create n in
+          really_input ic wav 0 n;
+          close_in ic;
+          (try Sys.remove tmp with _ -> ());
+          let wav_headers = Http.Header.of_list
+            [ ("content-type", "audio/wav")
+            ; ("content-length", string_of_int n)
+            ; ("access-control-allow-origin", "*")
+            ; ("connection", "close") ] in
+          Cohttp_eio.Server.respond_string ~status:`OK
+            ~body:(Bytes.to_string wav) ~headers:wav_headers ()
+        end else begin
+          (try Sys.remove tmp with _ -> ());
+          Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+            ~body:{|{"error":"piper failed"}|} ~headers:json_headers ()
+        end
+      end
+
+  | `POST, path when starts_with "/mic/start/" path ->
+      let after = String.sub path 11 (String.length path - 11) in
+      let sid, query_str = match String.index_opt after '?' with
+        | Some qi -> (String.sub after 0 qi,
+                     String.sub after (qi + 1) (String.length after - qi - 1))
+        | None -> (after, "")
+      in
+      let param key default =
+        let prefix = key ^ "=" in
+        let parts = String.split_on_char '&' query_str in
+        match List.find_opt (fun p -> starts_with prefix p) parts with
+        | Some p -> String.sub p (String.length prefix) (String.length p - String.length prefix)
+        | None -> default
+      in
+      let silence = (try float_of_string (param "silence" "0.7") with _ -> 0.7) in
+      let stop_word = Uri.pct_decode (param "stop_word" "over") in
+
+      voice_cleanup_old ();
+
+      (* Stop any existing session with this ID *)
+      Mutex.lock voice_mu;
+      (match Hashtbl.find_opt voice_sessions sid with
+      | Some s when not s.done_ -> s.stop <- true
+      | _ -> ());
+      (* Create new session *)
+      Hashtbl.replace voice_sessions sid
+        { text = ""; done_ = false; stop = false; ts = Unix.gettimeofday () };
+      Mutex.unlock voice_mu;
+
+      (* Start recording in background thread *)
+      ignore (Thread.create (fun () -> voice_mic_worker sid silence stop_word) ());
+
+      Cohttp_eio.Server.respond_string ~status:`OK
+        ~body:(Printf.sprintf {|{"ok":true,"session":"%s"}|} (String.escaped sid))
+        ~headers:json_headers ()
+
+  | `POST, path when starts_with "/mic/stop/" path ->
+      let sid = let s = String.sub path 10 (String.length path - 10) in
+        match String.index_opt s '?' with Some qi -> String.sub s 0 qi | None -> s in
+
+      (* Signal stop *)
+      Mutex.lock voice_mu;
+      (match Hashtbl.find_opt voice_sessions sid with
+      | Some s -> s.stop <- true
+      | None -> ());
+      Mutex.unlock voice_mu;
+
+      (* Wait briefly for worker to finish (up to 10s) *)
+      let rec wait_done n =
+        if n <= 0 then ()
+        else begin
+          Unix.sleepf 0.5;
+          Mutex.lock voice_mu;
+          let done_ = match Hashtbl.find_opt voice_sessions sid with
+            | Some s -> s.done_ | None -> true in
+          Mutex.unlock voice_mu;
+          if not done_ then wait_done (n - 1)
+        end
+      in
+      wait_done 20;
+
+      Mutex.lock voice_mu;
+      let text = match Hashtbl.find_opt voice_sessions sid with
+        | Some s -> s.text | None -> "" in
+      Mutex.unlock voice_mu;
+
+      Cohttp_eio.Server.respond_string ~status:`OK
+        ~body:(Printf.sprintf {|{"text":%s,"done":true}|}
+          (Yojson.Safe.to_string (`String text)))
+        ~headers:json_headers ()
+
+  | `GET, path when starts_with "/mic/result/" path ->
+      let sid = let s = String.sub path 12 (String.length path - 12) in
+        match String.index_opt s '?' with Some qi -> String.sub s 0 qi | None -> s in
+      Mutex.lock voice_mu;
+      let (text, done_) = match Hashtbl.find_opt voice_sessions sid with
+        | Some s -> (s.text, s.done_)
+        | None -> ("", false) in
+      Mutex.unlock voice_mu;
+
+      Cohttp_eio.Server.respond_string ~status:`OK
+        ~body:(Printf.sprintf {|{"text":%s,"done":%s}|}
+          (Yojson.Safe.to_string (`String text))
+          (if done_ then "true" else "false"))
+        ~headers:json_headers ()
 
   | `POST, _ ->
       Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"not found\n" ()

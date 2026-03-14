@@ -55,6 +55,12 @@ Thunderbird add-ons run in a sandboxed JavaScript environment with limited capab
 - **[OCaml](https://ocaml.org/)** 5.x with [opam](https://opam.ocaml.org/) (to build the server)
 - **[libpg_query](https://github.com/pganalyze/libpg_query)** (used to validate LLM-generated SQL fragments)
 
+**Optional (voice features):**
+
+- **[Whisper.cpp](https://github.com/ggerganov/whisper.cpp)** — local speech-to-text server
+- **[Piper](https://github.com/rhasspy/piper)** — local text-to-speech CLI
+- **[SoX](https://sox.sourceforge.net/)** — audio recording utility (`rec` command for server-side mic capture)
+
 ## Installation
 
 ### 1. Install system dependencies
@@ -65,6 +71,11 @@ Thunderbird add-ons run in a sandboxed JavaScript environment with limited capab
 ```bash
 brew install postgresql@17 pgvector libpg_query ollama
 brew services start postgresql@17
+
+# Optional: voice features (STT / TTS)
+brew install sox whisper-cpp
+pipx install piper-tts
+pipx inject piper-tts pathvalidate   # fix missing dependency
 ```
 
 **Apple Silicon note:** add this to your `~/.zshrc` so the OCaml linker can find PostgreSQL:
@@ -90,6 +101,10 @@ sudo apt install postgresql postgresql-server-dev-17
 
 # Ollama
 curl -fsSL https://ollama.com/install.sh | sh
+
+# Optional: voice features (STT / TTS)
+sudo apt install sox
+# Whisper.cpp and Piper: see their GitHub repos for Linux install instructions
 ```
 
 </details>
@@ -107,6 +122,10 @@ sudo systemctl enable --now postgresql
 
 # Ollama
 curl -fsSL https://ollama.com/install.sh | sh
+
+# Optional: voice features (STT / TTS)
+sudo dnf install sox
+# Whisper.cpp and Piper: see their GitHub repos for Linux install instructions
 ```
 
 </details>
@@ -127,14 +146,48 @@ psql -d rag-o-mail -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
 Or use `make setup-db` from the repository root.
 
-### 3. Pull Ollama models
+### 3. Set up voice models (optional)
+
+If you want speech-to-text (STT) and text-to-speech (TTS):
+
+```bash
+# Download a Whisper model (base.en is a good default, ~141 MB)
+mkdir -p ~/.local/share/whisper
+wget -O ~/.local/share/whisper/ggml-base.en.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+
+# Download a Piper voice model
+mkdir -p ~/.local/share/piper
+wget -O ~/.local/share/piper/en_US-lessac-medium.onnx \
+  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
+wget -O ~/.local/share/piper/en_US-lessac-medium.onnx.json \
+  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
+```
+
+Configure the paths in the add-on's Preferences → Voice section (server settings), or edit `~/.rag-o-mail/settings.json` directly:
+
+```json
+"voice": {
+  "piper_model": "~/.local/share/piper/en_US-lessac-medium.onnx",
+  "piper_bin": "piper",
+  "whisper_url": "http://localhost:8178"
+}
+```
+
+Start the Whisper server before using STT:
+
+```bash
+whisper-server --model ~/.local/share/whisper/ggml-base.en.bin --port 8178
+```
+
+### 4. Pull Ollama models
 
 ```bash
 ollama pull nomic-embed-text    # embedding model (required)
 ollama pull llama3              # chat model (or any model you prefer)
 ```
 
-### 4. Build the server
+### 5. Build the server
 
 ```bash
 # Install OCaml toolchain (first time only)
@@ -150,7 +203,7 @@ Or from the repository root: `make ocaml`
 
 See the [server README](rag-o-mail/README.md) for the full list of configuration options, environment variables, and HTTP endpoints.
 
-### 5. Install the Thunderbird add-on
+### 6. Install the Thunderbird add-on
 
 ```bash
 make xpi    # produces ThunderRAG/dist/thunderRAG.xpi
@@ -162,7 +215,7 @@ Then in Thunderbird:
 2. Click the gear icon → **Install Add-on From File…**
 3. Select `ThunderRAG/dist/thunderRAG.xpi`
 
-### 6. Configure the add-on
+### 7. Configure the add-on
 
 Open the add-on's **Preferences** page (Add-ons → ThunderRAG → Preferences):
 

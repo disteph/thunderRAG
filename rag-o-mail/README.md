@@ -123,6 +123,19 @@ Final answer generation.
 | `/admin/ingested_status` | POST | Check ingestion + processed status for a batch of message IDs |
 | `/admin/extract_body` | POST | Re-extract body text from raw RFC822 (with optional LLM summarization) |
 
+### Voice (TTS / STT)
+
+Server-side text-to-speech (via Piper CLI) and speech-to-text (via sox mic recording + Whisper server). These endpoints exist because `getUserMedia` does not work in Thunderbird extension pages.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/synthesize` | POST | TTS: pipes text through Piper CLI, returns WAV audio. Body: `{ "text": "..." }` |
+| `/mic/start/<session_id>` | POST | Start server-side mic recording via `rec` (sox). Query params: `silence` (VAD seconds), `stop_word` |
+| `/mic/stop/<session_id>` | POST | Stop recording, wait for final transcription, return `{ "text": "...", "done": true }` |
+| `/mic/result/<session_id>` | GET | Poll current transcription progress: `{ "text": "...", "done": false }` |
+
+Requires: **sox** (`rec` command), **Piper** CLI, and a running **Whisper.cpp** server.
+
 ## Module Structure
 
 ```
@@ -219,6 +232,9 @@ The only environment variables are for file paths:
 | `rag.attachments.max_attachments` | `4` | Max attachments to process per email |
 | `rag.attachments.max_chars` | `1500` | Max chars per attachment summary |
 | `rag.attachments.max_bytes` | `5000000` | Max raw bytes per attachment to process |
+| `voice.piper_model` | `""` | Path to Piper `.onnx` voice model (`~` expanded) |
+| `voice.piper_bin` | `"piper"` | Path to Piper executable (`~` expanded) |
+| `voice.whisper_url` | `"http://localhost:8178"` | URL of the Whisper.cpp STT server |
 | `debug.ollama_embed` | `false` | Print Ollama embedding request JSON |
 | `debug.ollama_chat` | `false` | Print Ollama chat request/response JSON (full prompts) |
 | `debug.retrieval` | `false` | Print retrieval queries, scores, and merged source summaries |
