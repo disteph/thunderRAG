@@ -58,7 +58,57 @@
         opacity: 0.7;
         font-weight: 600;
         flex: 1;
+        cursor: pointer;
+        user-select: none;
       }
+      .left-toolbar h2:hover { opacity: 1; }
+      .left-toolbar .nav-btn {
+        font-size: 11px;
+        padding: 0 8px;
+        height: 34px;
+        border-radius: 4px;
+        border: 1px solid rgba(127,127,127,0.25);
+        background: Field;
+        color: FieldText;
+        cursor: pointer;
+        white-space: nowrap;
+        display: flex;
+        align-items: center;
+      }
+      .left-toolbar .nav-btn:hover { background: rgba(127,127,127,0.1); }
+      .left-toolbar .nav-btn.active {
+        background: AccentColor;
+        color: AccentColorText;
+        border-color: AccentColor;
+      }
+      .pause-btn {
+        font-size: 10px;
+        padding: 0 7px;
+        height: 34px;
+        min-width: 42px;
+        border-radius: 4px;
+        border: 1px solid rgba(127,127,127,0.25);
+        background: Field;
+        color: FieldText;
+        cursor: pointer;
+        opacity: 0.6;
+        transition: opacity 0.15s, background 0.15s, border-color 0.15s;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        line-height: 1.2;
+      }
+      .pause-btn:hover { opacity: 1; }
+      .pause-btn .pause-label { font-weight: 600; }
+      .pause-btn .pause-sub { display: none; font-size: 9px; opacity: 0.85; }
+      .pause-btn.paused {
+        background: color-mix(in srgb, orange 25%, Canvas);
+        border-color: color-mix(in srgb, orange 50%, transparent);
+        color: color-mix(in srgb, orange 60%, CanvasText);
+        opacity: 1;
+      }
+      .pause-btn.paused .pause-sub { display: block; }
       .left-toolbar select {
         font-size: 11px;
         padding: 2px 4px;
@@ -158,6 +208,21 @@
       }
       .task-item:hover {
         background: rgba(127,127,127,0.08);
+      }
+      .task-item.dragging {
+        opacity: 0.4;
+      }
+      .task-item.drop-above {
+        border-top: 2px solid AccentColor;
+      }
+      .task-item.drop-below {
+        border-bottom: 2px solid AccentColor;
+      }
+      .task-item[draggable="true"] {
+        cursor: grab;
+      }
+      .task-item[draggable="true"]:active {
+        cursor: grabbing;
       }
       .task-item.selected {
         background: color-mix(in srgb, AccentColor 15%, Canvas);
@@ -522,6 +587,7 @@
       }
       .mh-email-row .email-link {
         flex: 1;
+        min-width: 0;
         color: AccentColor;
         text-decoration: none;
         cursor: pointer;
@@ -531,6 +597,14 @@
         text-overflow: ellipsis;
       }
       .mh-email-row .email-link:hover { text-decoration: underline; }
+      .email-date {
+        flex-shrink: 0;
+        font-family: "SF Mono", "Menlo", "Consolas", monospace;
+        font-size: 10px;
+        opacity: 0.55;
+        white-space: nowrap;
+        padding: 0 4px;
+      }
       .email-tank-icon {
         cursor: pointer;
         font-size: 12px;
@@ -732,7 +806,10 @@
     <div id="app">
       <div class="left-pane">
         <div class="left-toolbar">
-          <h2>ThunderRAG</h2>
+          <h2 id="titleLink" title="DB Stats">ThunderRAG</h2>
+          <button class="nav-btn" id="memoriesBtn" title="Memories">🧠 Memories</button>
+          <button class="pause-btn" id="pauseTasksBtn" title="Pause/resume task daemon (triage, context, first message)"><span class="pause-label">Tasks</span><span class="pause-sub">paused</span></button>
+          <button class="pause-btn" id="pauseIngestBtn" title="Pause/resume async ingestion daemon"><span class="pause-label">Ingest</span><span class="pause-sub">paused</span></button>
         </div>
         <div class="left-models">
           <div class="model-row"><span class="model-label">Chat</span><select id="chatModel" title="Chat model"><option>(loading…)</option></select></div>
@@ -742,16 +819,11 @@
         <div id="generalChatItem" class="task-item active" data-id="general">
           <div class="ti-title">💬 General chat</div>
         </div>
-        <div id="memoriesItem" class="task-item" data-id="memories">
-          <div class="ti-title">🧠 Memories</div>
-        </div>
-        <div id="dbStatsItem" class="task-item" data-id="dbstats">
-          <div class="ti-title">📊 DB Stats</div>
-        </div>
         <div class="left-tasks-header">
           <span class="lth-label">Tasks</span>
           <select id="sortBy">
             <option value="updated_at">Recent</option>
+            <option value="manual">Manual</option>
             <option value="deadline">Deadline</option>
             <option value="importance">Importance</option>
           </select>

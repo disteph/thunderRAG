@@ -463,6 +463,8 @@ async function processIngestQueue() {
 
     console.log(`[ThunderRAG] ingestQueue: processing ${queue.length} item(s)`);
 
+    // Collect raw RFC822 from TB for all queued items, then batch-submit.
+    const items = [];
     for (const item of queue) {
       try {
         const headerMessageId = (item.headerMessageId || "").trim();
@@ -474,29 +476,47 @@ async function processIngestQueue() {
 
         const messageId = await resolveHeaderMessageId(headerMessageId);
         const rfc822 = await getDecryptedRfc822ForIngest(messageId, headerMessageId);
-
-        const bytes = new TextEncoder().encode(rfc822);
-        const blob = new Blob([bytes], { type: "message/rfc822" });
-        const headers = new Headers();
-        headers.set("Content-Type", "message/rfc822");
-        const mid = headerMessageId;
-        headers.set("X-Thunderbird-Message-Id", mid.startsWith("<") ? mid : "<" + mid + ">");
-
-        const resp = await fetch(endpoint, { method: "POST", headers, body: blob });
-        if (resp.ok) {
-          console.log(`[ThunderRAG] ingestQueue: success for ${headerMessageId}`);
-          notifyTasksChanged();
-        } else {
-          console.warn(`[ThunderRAG] ingestQueue: POST ${resp.status} for ${headerMessageId}`);
-        }
+        const mid = headerMessageId.startsWith("<") ? headerMessageId : "<" + headerMessageId + ">";
+        items.push({ doc_id: mid, raw: rfc822, _endpoint: endpoint });
       } catch (e) {
-        console.warn(`[ThunderRAG] ingestQueue: failed for ${item.headerMessageId}: ${e}`);
+        console.warn(`[ThunderRAG] ingestQueue: failed to fetch ${item.headerMessageId}: ${e}`);
       }
-      // Always dequeue — retrying indefinitely would be worse than skipping.
+      // Always dequeue from TB-side queue — retrying indefinitely would be worse than skipping.
       try {
         await browser.ragFilterAction.completeIngestItem(item.id);
       } catch (_e) {
         // ignore
+      }
+    }
+
+    if (items.length === 0) return;
+
+    // Group by endpoint (normally all the same, but be safe).
+    const byEndpoint = {};
+    for (const item of items) {
+      const ep = item._endpoint;
+      if (!byEndpoint[ep]) byEndpoint[ep] = [];
+      byEndpoint[ep].push({ doc_id: item.doc_id, raw: item.raw });
+    }
+
+    for (const [endpoint, batch] of Object.entries(byEndpoint)) {
+      // Derive server base from the endpoint (strip /ingest path).
+      const base = endpoint.replace(/\/ingest\/?$/, "");
+      try {
+        const resp = await fetch(`${base}/ingest/batch`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: batch }),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          console.log(`[ThunderRAG] ingestQueue: batch queued ${data.queued || 0} item(s)`);
+          notifyTasksChanged();
+        } else {
+          console.warn(`[ThunderRAG] ingestQueue: batch POST ${resp.status}`);
+        }
+      } catch (e) {
+        console.warn(`[ThunderRAG] ingestQueue: batch POST error: ${e}`);
       }
     }
   } catch (e) {
@@ -660,6 +680,73 @@ function debugLog(...args)  { console.log(...args);  _debugPost("/debug/stdout",
 function debugWarn(...args) { console.warn(...args); _debugPost("/debug/stderr", args); }
 
 /*
+  Email deletion listener.
+
+  When emails are permanently deleted or moved to Trash in Thunderbird,
+  notify the OCaml server so it can clean up DB references (task_emails,
+  memory_emails, propose_tasks_log, email_chunks) and dismiss tasks that
+  lose all their trigger emails.
+*/
+async function notifyEmailDeleted(headerMessageId) {
+  if (!headerMessageId) return;
+  const mid = headerMessageId.startsWith("<") ? headerMessageId : `<${headerMessageId}>`;
+  try {
+    const base = await getServerBase();
+    const resp = await fetch(`${base}/admin/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: mid }),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.existed) {
+        debugLog(`[email-delete] cleaned up ${mid}` +
+          (data.dismissed_tasks?.length ? `, dismissed tasks: ${data.dismissed_tasks.join(", ")}` : ""));
+      }
+    }
+  } catch (_e) {
+    // Server may not be running — silently ignore
+  }
+}
+
+// Permanent deletion (e.g. emptying Trash)
+if (browser.messages?.onDeleted) {
+  browser.messages.onDeleted.addListener((messages) => {
+    let changed = false;
+    for (const msg of messages.messages || []) {
+      if (msg.headerMessageId) {
+        notifyEmailDeleted(msg.headerMessageId);
+        changed = true;
+      }
+    }
+    if (changed) {
+      refreshIngestStatusForFolder();
+      notifyTasksChanged();
+    }
+  });
+}
+
+// Move to Trash (normal "Delete" key in Thunderbird)
+if (browser.messages?.onMoved) {
+  browser.messages.onMoved.addListener((originalMessages, movedMessages) => {
+    let changed = false;
+    for (const msg of movedMessages.messages || []) {
+      const folderType = msg.folder?.type || "";
+      if (folderType === "trash") {
+        if (msg.headerMessageId) {
+          notifyEmailDeleted(msg.headerMessageId);
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      refreshIngestStatusForFolder();
+      notifyTasksChanged();
+    }
+  });
+}
+
+/*
   Context menu items for the message list pane.
 
   - "Ingest selected emails": sends selected messages through the same
@@ -809,36 +896,53 @@ async function handleIngestSelected() {
   }
 
   const serverBase = await getServerBase();
-  const endpoint = `${serverBase}/ingest`;
-  debugLog(`[ingestSelected] endpoint=${endpoint} count=${allMessages.length}`);
-  let ok = 0, fail = 0;
+  debugLog(`[ingestSelected] collecting ${allMessages.length} message(s) for batch ingest`);
 
+  // Phase 1: collect raw RFC822 from TB (local, fast).
+  const items = [];
+  let fetchFail = 0;
   for (const msg of allMessages) {
     try {
       const headerMessageId = msg.headerMessageId || "";
-      if (!headerMessageId) { fail++; continue; }
+      if (!headerMessageId) { fetchFail++; continue; }
       const mid = headerMessageId.startsWith("<") ? headerMessageId : `<${headerMessageId}>`;
-
       const rfc822 = await getDecryptedRfc822ForIngest(msg.id, headerMessageId);
-      const bytes = new TextEncoder().encode(rfc822);
-      const blob = new Blob([bytes], { type: "message/rfc822" });
-      const headers = new Headers();
-      headers.set("Content-Type", "message/rfc822");
-      headers.set("X-Thunderbird-Message-Id", mid);
-
-      const resp = await fetch(endpoint, { method: "POST", headers, body: blob });
-      const respText = await resp.text();
-      debugLog(`[ingestSelected] ${mid} -> ${resp.status} ${respText.slice(0, 200)}`);
-      if (resp.ok) { ok++; } else { fail++; }
+      items.push({ doc_id: mid, raw: rfc822 });
     } catch (e) {
-      debugWarn(`[ingestSelected] failed for ${msg.headerMessageId}: ${e}`);
-      fail++;
+      debugWarn(`[ingestSelected] failed to fetch ${msg.headerMessageId}: ${e}`);
+      fetchFail++;
     }
   }
 
-  debugLog(`[ingestSelected] done: ${ok} ok, ${fail} failed out of ${allMessages.length}`);
+  if (items.length === 0) {
+    debugLog(`[ingestSelected] no messages to ingest (${fetchFail} fetch failures)`);
+    return;
+  }
 
-  // Refresh the ingestion status cache for the affected messages.
+  // Phase 2: POST batch to server — returns immediately, daemon processes async.
+  // Chunk into batches of 50 to avoid oversized requests.
+  const BATCH_SIZE = 50;
+  let totalQueued = 0;
+  for (let i = 0; i < items.length; i += BATCH_SIZE) {
+    const batch = items.slice(i, i + BATCH_SIZE);
+    try {
+      const resp = await fetch(`${serverBase}/ingest/batch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: batch }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        totalQueued += data.queued || 0;
+      } else {
+        debugWarn(`[ingestSelected] batch POST failed: ${resp.status}`);
+      }
+    } catch (e) {
+      debugWarn(`[ingestSelected] batch POST error: ${e}`);
+    }
+  }
+
+  debugLog(`[ingestSelected] queued ${totalQueued}/${items.length} (${fetchFail} fetch failures)`);
   refreshIngestStatusForFolder();
 }
 

@@ -477,6 +477,36 @@ async function init() {
   document.getElementById("savePromptsBtn").addEventListener("click", savePromptsToServer);
   document.getElementById("resetPromptsBtn").addEventListener("click", resetPromptsToDefaults);
 
+  /* ---- Pipeline prompt-tag click → scroll to prompt editor ---- */
+  document.getElementById("pipelines-section").addEventListener("click", async (e) => {
+    const tag = e.target.closest(".pl-prompt-tag[data-prompt]");
+    if (!tag) return;
+    const key = tag.dataset.prompt;
+    if (!key) return;
+
+    /* 1. Open the Prompts section */
+    const promptsSection = document.getElementById("prompts-section");
+    if (!promptsSection.open) {
+      promptsSection.open = true;
+      /* If prompts haven't loaded yet, load them now */
+      if (!promptsLoaded) {
+        await loadPrompts();
+      }
+    }
+
+    /* 2. Wait a tick for rendering, then scroll to the textarea */
+    requestAnimationFrame(() => {
+      const textarea = document.getElementById("prompt-" + key);
+      if (textarea) {
+        textarea.scrollIntoView({ behavior: "smooth", block: "center" });
+        textarea.classList.remove("prompt-flash");
+        void textarea.offsetWidth; /* force reflow to restart animation */
+        textarea.classList.add("prompt-flash");
+        textarea.focus();
+      }
+    });
+  });
+
   updateEndpointUrls(serverUrl);
   fetchAndRender();
 }

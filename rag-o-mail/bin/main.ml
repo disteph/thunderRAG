@@ -726,11 +726,12 @@ let propose_tasks ~client ~sw ~(whoami : string)
         "Given an email, propose tasks the user needs to do in response. " ^
         "Respond with ONLY a JSON object: {\"tasks\": [{\"title\": \"short task title\", " ^
         "\"description\": \"what needs to be done\", \"importance\": <int 0-100>, " ^
-        "\"deadline\": \"YYYY-MM-DD or none\"}]}. " ^
-        "The tasks array should contain 0 or more task proposals. " ^
+        "\"deadline\": \"YYYY-MM-DD\"}]}. " ^
         "Only propose tasks for emails that require user action. " ^
         "Newsletters, notifications, and FYI emails should have an empty tasks array. " ^
-        "In 90%+ of cases, the answer is 0 or 1 tasks." ^ memories_section)
+        "In 90%+ of cases, the answer is 0 or 1 tasks. " ^
+        "Every task MUST have a deadline. If no explicit deadline, guess based on urgency cues and professional norms. " ^
+        "Use the email Date as reference." ^ memories_section)
       ~vars:[("{{user_identity}}", user_identity); ("{{user_memories}}", memories_text)]
   in
   let user_msg =
@@ -810,6 +811,12 @@ let notify_prefetch : (unit -> unit) ref = ref (fun () -> ())
    Counter rather than boolean so concurrent requests don't cancel each other. *)
 let high_priority_count = Atomic.make 0
 
+(* Pause flags — toggled via /admin/pause, reset on restart.
+   tasks_paused  = true → daemon Phases 0-2 (triage, context, first msg) are skipped
+   ingest_paused = true → daemon Phase -1 (async ingestion) is also skipped *)
+let tasks_paused  = Atomic.make false
+let ingest_paused = Atomic.make false
+
 let with_high_priority f =
   Atomic.incr high_priority_count;
   Fun.protect f ~finally:(fun () -> Atomic.decr high_priority_count)
@@ -835,14 +842,47 @@ let generate_task_id () =
   4. Create or update accordingly, link the triggering email
 *)
 let process_task_proposals ~client ~sw ~(doc_id : string)
-    ~(body_text : string) ~(proposals : task_proposal list) () : unit =
+    ~(body_text : string) ~(email_date : string)
+    ~(proposals : task_proposal list) () : unit =
   if not !task_auto_create then ()
   else if proposals = [] then ()
   else
   let ndoc = Rag_lib.Pg.normalize_doc_id doc_id in
   Printf.printf "[process_task_proposals] doc_id=%s proposals=%d\n%!" ndoc (List.length proposals);
+  (* Fallback deadline: email_date + 3 business days (skip weekends) *)
+  let fallback_deadline =
+    let parse_date s =
+      try Scanf.sscanf s "%d-%d-%d" (fun y m d -> Some (y, m, d))
+      with _ -> try Scanf.sscanf s "%d-%d-%dT" (fun y m d -> Some (y, m, d))
+      with _ -> None
+    in
+    match parse_date (String.trim email_date) with
+    | None -> ""
+    | Some (y, m, d) ->
+        let tm = Unix.{ tm_sec = 0; tm_min = 0; tm_hour = 12;
+                        tm_mday = d; tm_mon = m - 1; tm_year = y - 1900;
+                        tm_wday = 0; tm_yday = 0; tm_isdst = false } in
+        let t, _ = Unix.mktime tm in
+        (* Add 3 business days *)
+        let rec add_bdays t n =
+          if n <= 0 then t
+          else
+            let t' = t +. 86400.0 in
+            let tm' = Unix.localtime t' in
+            if tm'.Unix.tm_wday = 0 || tm'.Unix.tm_wday = 6
+            then add_bdays t' n  (* weekend — advance without counting *)
+            else add_bdays t' (n - 1)
+        in
+        let t' = add_bdays t 3 in
+        let tm' = Unix.localtime t' in
+        Printf.sprintf "%04d-%02d-%02d" (tm'.Unix.tm_year + 1900) (tm'.Unix.tm_mon + 1) tm'.Unix.tm_mday
+  in
   let top_k = !task_dedup_top_k in
   List.iter (fun (tp : task_proposal) ->
+    let tp = if tp.tp_deadline = "" && fallback_deadline <> "" then begin
+      Printf.printf "[process_task_proposals] no deadline for '%s', using fallback %s\n%!" tp.tp_title fallback_deadline;
+      { tp with tp_deadline = fallback_deadline }
+    end else tp in
     (try
       let embed_text = Printf.sprintf "%s\n%s" tp.tp_title tp.tp_description in
       (* 1. Embed the proposal *)
@@ -1261,6 +1301,21 @@ let session_tbl_mu : Eio.Mutex.t = Eio.Mutex.create ()
 
 let pending_tbl : (string, pending_query) Hashtbl.t = Hashtbl.create 64
 let pending_tbl_mu : Eio.Mutex.t = Eio.Mutex.create ()
+
+(* Pending task-chat retrieval: caches state between [RETRIEVE] detection and
+   body upload + re-prompt.  Keyed by request_id. *)
+type pending_task_retrieval =
+  { task_id : string
+  ; user_message : string
+  ; chat_model : string
+  ; message_ids : string list            (* doc_ids the LLM selected for rehydration *)
+  ; sources_json : Yojson.Safe.t         (* full kNN results for debug *)
+  ; evidence_by_id : (string, string) Hashtbl.t  (* doc_id -> compressed_body, filled by /task/chat_bodies *)
+  ; created_at : float
+  } [@@warning "-69"]
+
+let task_retrieval_tbl : (string, pending_task_retrieval) Hashtbl.t = Hashtbl.create 16
+let task_retrieval_mu : Eio.Mutex.t = Eio.Mutex.create ()
 
 (* Progress tracking for the query UI — lightweight phase labels keyed by session_id. *)
 let progress_tbl : (string, string) Hashtbl.t = Hashtbl.create 64
@@ -2023,64 +2078,14 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
             (resp, Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
         | Ok () ->
             Printf.printf "[ingest.ok] doc_id=%s chunks=%d\n%!" ndoc (List.length embedded_chunks);
-            (* --- Memory retrieval + task proposal (replaces triage) --- *)
-            if !task_auto_create && !memory_enabled then begin
-              (* Average embeddings of all NEW CONTENT chunks for memory kNN *)
-              let new_content_embs = List.filter_map (fun (_, sec, emb) ->
-                if sec = "new_content" then Some emb else None
-              ) embedded_chunks in
-              let repr_embedding =
-                match new_content_embs with
-                | [] ->
-                    (* Fallback: first chunk of any section *)
-                    (match embedded_chunks with (_, _, emb) :: _ -> emb | [] -> [])
-                | [single] -> single
-                | many ->
-                    let n = float_of_int (List.length many) in
-                    let dim = List.length (List.hd many) in
-                    let sums = Array.make dim 0.0 in
-                    List.iter (fun emb ->
-                      List.iteri (fun i v -> sums.(i) <- sums.(i) +. v) emb
-                    ) many;
-                    l2_normalize (Array.to_list (Array.map (fun s -> s /. n) sums))
-              in
-              let memories_text, _matched_memories =
-                if repr_embedding <> [] then
-                  retrieve_and_format_memories
-                    ~sender:from_ ~recipient:to_ ~cc:cc_ ~bcc:bcc_
-                    ~subject ~date:date_ ~attachments
-                    ~embedding:repr_embedding ()
-                else
-                  (* No embeddings — symbolic only *)
-                  let sym = retrieve_memories_symbolic
-                    ~sender:from_ ~recipient:to_ ~cc:cc_ ~bcc:bcc_
-                    ~subject ~date:date_ ~attachments () in
-                  let buf = Buffer.create 256 in
-                  List.iter (fun (mid, text) ->
-                    Buffer.add_string buf (Printf.sprintf "- [%s] %s\n" mid text)
-                  ) sym;
-                  (Buffer.contents buf, sym)
-              in
-              let (task_proposals, pt_debug) = propose_tasks ~client ~sw ~whoami
-                ~from_ ~to_ ~cc_ ~bcc_ ~subject ~date_ ~body_text
-                ~memories_text in
-              (match pt_debug with
-              | Some dbg -> ignore (Rag_lib.Pg.set_propose_tasks_debug doc_id (Yojson.Safe.to_string dbg))
-              | None -> ());
-              if task_proposals <> [] then
-                process_task_proposals ~client ~sw ~doc_id ~body_text:new_body_capped
-                  ~proposals:task_proposals ()
-            end else if !task_auto_create then begin
-              (* Memory disabled — propose tasks without memories *)
-              let (task_proposals, pt_debug) = propose_tasks ~client ~sw ~whoami
-                ~from_ ~to_ ~cc_ ~bcc_ ~subject ~date_ ~body_text
-                ~memories_text:"" in
-              (match pt_debug with
-              | Some dbg -> ignore (Rag_lib.Pg.set_propose_tasks_debug doc_id (Yojson.Safe.to_string dbg))
-              | None -> ());
-              if task_proposals <> [] then
-                process_task_proposals ~client ~sw ~doc_id ~body_text:new_body_capped
-                  ~proposals:task_proposals ()
+            (* Enqueue for async triage by the daemon (propose_tasks + process_task_proposals) *)
+            if !task_auto_create then begin
+              (match Rag_lib.Pg.enqueue_triage ~doc_id ~body_text ~compressed_body:new_body_capped () with
+              | Ok () ->
+                  Printf.printf "[ingest.enqueue] doc_id=%s queued for triage\n%!" ndoc;
+                  !notify_prefetch ()
+              | Error e ->
+                  Printf.eprintf "[ingest.enqueue] error for %s: %s\n%!" ndoc e)
             end;
             let resp = Http.Response.make ~status:`OK () in
             (resp, {|{"ok":true}|})))
@@ -3219,6 +3224,7 @@ let select_relevant_sources ~client ~sw ~(resolved_question : string)
    If the raw content already fits within budget, no LLM compression is applied. *)
 let extract_and_compress_email ~client ~sw ~(raw : string) ~(doc_id : string)
     ~(budget : int) ?(cached_md : Yojson.Safe.t option) ?summarize_model
+    ?(include_quoted : bool = true) ?(include_attachments : bool = true)
     ?(llm_log : Yojson.Safe.t list ref option) () : (string * Yojson.Safe.t) =
   let _, md_from_raw = ingest_text_of_raw ~doc_id ~raw in
   let md =
@@ -3244,8 +3250,8 @@ let extract_and_compress_email ~client ~sw ~(raw : string) ~(doc_id : string)
   in
   let parts = extract_body_parts raw in
   let new_body = String.trim parts.new_text |> sanitize_utf8 in
-  let quoted_raw = String.trim parts.quoted_text |> sanitize_utf8 in
-  let att_texts = extract_attachment_texts_raw ~raw in
+  let quoted_raw = if include_quoted then String.trim parts.quoted_text |> sanitize_utf8 else "" in
+  let att_texts = if include_attachments then extract_attachment_texts_raw ~raw else [] in
   let total_raw =
     String.length new_body + String.length quoted_raw
     + List.fold_left (fun a (fn, t) -> a + String.length fn + String.length t + 30) 0 att_texts
@@ -3268,7 +3274,9 @@ let extract_and_compress_email ~client ~sw ~(raw : string) ~(doc_id : string)
     let body = "NEW CONTENT:\n" ^ new_body ^ quoted_section ^ att_section in
     (body, md))
   else (
-    let new_content_budget = budget * 2 / 3 in
+    let new_content_budget =
+      if include_quoted then budget * 2 / 3
+      else budget in
     let quoted_budget = budget / 3 in
     let new_body_capped =
       summarize_to_fit ~client ~sw
@@ -3365,14 +3373,36 @@ let handler ~client ~sw ~clock _socket request body =
       Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
   | `GET, "/admin/db_stats" ->
       (match Rag_lib.Pg.db_stats () with
-      | Ok rows ->
-          let json = `Assoc [ ("tables", `List (List.map (fun (name, count, size) ->
+      | Ok (rows, total_size) ->
+          let json = `Assoc [ ("tables", `List (List.map (fun (name, count, size, desc, cat) ->
             `Assoc [ ("name", `String name)
                    ; ("rows", `Int count)
-                   ; ("size", `String size) ]
-          ) rows)) ] in
+                   ; ("size", `String size)
+                   ; ("description", `String desc)
+                   ; ("category", `String cat) ]
+          ) rows)); ("total_size", `String total_size) ] in
           Cohttp_eio.Server.respond_string ~status:`OK
             ~body:(Yojson.Safe.to_string json) ~headers:json_headers ()
+      | Error e ->
+          Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+            ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped e)) ~headers:json_headers ())
+
+  | `POST, "/admin/clear_tasks" ->
+      (match Rag_lib.Pg.clear_tasks () with
+      | Ok () ->
+          Printf.printf "[admin] cleared all task tables\n%!";
+          Cohttp_eio.Server.respond_string ~status:`OK
+            ~body:{|{"ok":true}|} ~headers:json_headers ()
+      | Error e ->
+          Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+            ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped e)) ~headers:json_headers ())
+
+  | `POST, "/admin/clear_memories" ->
+      (match Rag_lib.Pg.clear_memories () with
+      | Ok () ->
+          Printf.printf "[admin] cleared all memory tables\n%!";
+          Cohttp_eio.Server.respond_string ~status:`OK
+            ~body:{|{"ok":true}|} ~headers:json_headers ()
       | Error e ->
           Cohttp_eio.Server.respond_string ~status:`Internal_server_error
             ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped e)) ~headers:json_headers ())
@@ -3527,17 +3557,106 @@ let handler ~client ~sw ~clock _socket request body =
       let headers = parse_headers raw in
       let doc_id = doc_id_of_ingest request headers raw in
 
-      let whoami = String.trim !whoami in
-      if whoami = "" then
+      if Atomic.get ingest_paused then begin
+        (* Ingestion paused — queue for later processing instead of dropping *)
+        (match Rag_lib.Pg.enqueue_ingest ~doc_id ~raw () with
+        | Ok () ->
+            Printf.printf "[ingest] paused — queued doc_id=%s for later\n%!" doc_id;
+            Cohttp_eio.Server.respond_string ~status:`OK
+              ~body:(Printf.sprintf {|{"ok":true,"queued":true,"doc_id":"%s"}|} (String.escaped doc_id))
+              ~headers:json_headers ()
+        | Error msg ->
+            Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+              ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped msg))
+              ~headers:json_headers ())
+      end else begin
+        let whoami = String.trim !whoami in
+        if whoami = "" then
+          Cohttp_eio.Server.respond_string ~status:`Bad_request
+            ~body:{|{"error":"whoami is required for ingestion. Set it in settings.json."}|}
+            ~headers:json_headers ()
+        else
+        let resp, resp_body =
+          forward_ingest_raw ~client ~sw ~log:true ~whoami ~doc_id ~headers ~raw
+        in
+        let status = Http.Response.status resp in
+        Cohttp_eio.Server.respond_string ~status ~body:resp_body ~headers:json_headers ()
+      end
+
+  (*
+    Batch ingestion endpoint (async).
+
+    Accepts a JSON array of { doc_id, raw } objects.  Each is enqueued into the
+    ingest_queue table and will be processed by the background daemon (Phase -1).
+    Returns immediately with the number of items queued.
+  *)
+  | `POST, "/ingest/batch" ->
+      let raw_body = read_all body in
+      (try
+        let json = Yojson.Safe.from_string raw_body in
+        let items = match json with
+          | `Assoc kv ->
+              (match List.assoc_opt "items" kv with
+              | Some (`List items) -> items | _ -> [])
+          | `List items -> items
+          | _ -> []
+        in
+        let queued = ref 0 in
+        let errors = ref [] in
+        List.iter (fun item ->
+          let kv = match item with `Assoc kv -> kv | _ -> [] in
+          let doc_id = match List.assoc_opt "doc_id" kv with
+            | Some (`String s) -> String.trim s | _ -> "" in
+          let raw = match List.assoc_opt "raw" kv with
+            | Some (`String s) -> s | _ -> "" in
+          if doc_id = "" || raw = "" then
+            errors := "missing doc_id or raw" :: !errors
+          else begin
+            match Rag_lib.Pg.enqueue_ingest ~doc_id ~raw () with
+            | Ok () -> incr queued
+            | Error e -> errors := e :: !errors
+          end
+        ) items;
+        Printf.printf "[ingest/batch] queued %d item(s)\n%!" !queued;
+        if !queued > 0 then !notify_prefetch ();
+        let json = `Assoc
+          [ ("ok", `Bool true)
+          ; ("queued", `Int !queued)
+          ; ("errors", `List (List.map (fun e -> `String e) (List.rev !errors)))
+          ] in
+        Cohttp_eio.Server.respond_string ~status:`OK
+          ~body:(Yojson.Safe.to_string json) ~headers:json_headers ()
+      with e ->
         Cohttp_eio.Server.respond_string ~status:`Bad_request
-          ~body:{|{"error":"whoami is required for ingestion. Set it in settings.json."}|}
-          ~headers:json_headers ()
-      else
-      let resp, resp_body =
-        forward_ingest_raw ~client ~sw ~log:true ~whoami ~doc_id ~headers ~raw
-      in
-      let status = Http.Response.status resp in
-      Cohttp_eio.Server.respond_string ~status ~body:resp_body ~headers:json_headers ()
+          ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped (Printexc.to_string e)))
+          ~headers:json_headers ())
+
+  | `GET, "/ingest/status" ->
+      (match Rag_lib.Pg.ingest_queue_status () with
+      | Ok (pending, processing, done_, errored) ->
+          let json = `Assoc
+            [ ("pending", `Int pending)
+            ; ("processing", `Int processing)
+            ; ("done", `Int done_)
+            ; ("error", `Int errored)
+            ; ("total", `Int (pending + processing + done_ + errored))
+            ] in
+          Cohttp_eio.Server.respond_string ~status:`OK
+            ~body:(Yojson.Safe.to_string json) ~headers:json_headers ()
+      | Error e ->
+          Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+            ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
+            ~headers:json_headers ())
+
+  | `POST, "/ingest/clear_done" ->
+      (match Rag_lib.Pg.clear_finished_ingests () with
+      | Ok () ->
+          Cohttp_eio.Server.respond_string ~status:`OK
+            ~body:{|{"ok":true}|} ~headers:json_headers ()
+      | Error e ->
+          Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+            ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
+            ~headers:json_headers ())
 
   (*
     Evidence upload endpoint (phase 2)
@@ -4631,10 +4750,10 @@ let handler ~client ~sw ~clock _socket request body =
         try
           let json = Yojson.Safe.from_string delete_body in
           match json with
-          | `Assoc kv -> (
-              match List.assoc_opt "id" kv with
-              | Some (`String s) -> String.trim s
-              | _ -> "")
+          | `Assoc kv ->
+              let get k = match List.assoc_opt k kv with Some (`String s) -> String.trim s | _ -> "" in
+              let v = get "id" in
+              if v <> "" then v else get "doc_id"
           | _ -> ""
         with _ -> ""
       in
@@ -4643,26 +4762,24 @@ let handler ~client ~sw ~clock _socket request body =
           ~body:{|{"error":"missing id"}|} ~headers:json_headers ()
       else (
         match Rag_lib.Pg.delete_email doc_id with
-        | Ok () ->
-            (* Clean up task links for this email *)
-            (match Rag_lib.Pg.remove_email_from_all_tasks doc_id with
-            | Ok affected_task_ids ->
-                if affected_task_ids <> [] then begin
-                  Printf.printf "[admin.delete] unlinked %s from %d task(s)\n%!"
-                    doc_id (List.length affected_task_ids);
-                  (* Delete tasks that now have no trigger emails *)
-                  (match Rag_lib.Pg.delete_orphan_tasks affected_task_ids with
-                  | Ok deleted ->
-                      List.iter (fun tid ->
-                        Printf.printf "[admin.delete] deleted orphan task %s\n%!" tid
-                      ) deleted
-                  | Error e ->
-                      Printf.eprintf "[admin.delete] orphan cleanup error: %s\n%!" e)
-                end
-            | Error e ->
-                Printf.eprintf "[admin.delete] task unlink error: %s\n%!" e);
+        | Ok (existed, triggerless_task_ids) ->
+            (* Dismiss tasks that lost all trigger emails *)
+            let dismissed = List.filter_map (fun task_id ->
+              match Rag_lib.Pg.update_task ~task_id ~status:"dismissed" () with
+              | Ok true ->
+                  Printf.printf "[admin.delete] dismissed task %s (no triggers left)\n%!" task_id;
+                  Some task_id
+              | _ -> None
+            ) triggerless_task_ids in
+            Printf.printf "[admin.delete] doc_id=%s existed=%b dismissed=%d tasks\n%!"
+              doc_id existed (List.length dismissed);
+            let json = `Assoc
+              [ ("ok", `Bool true)
+              ; ("existed", `Bool existed)
+              ; ("dismissed_tasks", `List (List.map (fun s -> `String s) dismissed))
+              ] in
             Cohttp_eio.Server.respond_string ~status:`OK
-              ~body:{|{"ok":true}|} ~headers:json_headers ()
+              ~body:(Yojson.Safe.to_string json) ~headers:json_headers ()
         | Error e ->
             Printf.eprintf "[admin.delete.error] %s\n%!" e;
             Cohttp_eio.Server.respond_string ~status:`Internal_server_error
@@ -4822,6 +4939,39 @@ let handler ~client ~sw ~clock _socket request body =
          Cohttp_eio.Server.respond_string ~status:`Bad_request
            ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String msg) ]))
            ~headers:json_headers ())
+
+  | `GET, "/admin/pause" ->
+      let json = `Assoc
+        [ ("tasks_paused", `Bool (Atomic.get tasks_paused))
+        ; ("ingest_paused", `Bool (Atomic.get ingest_paused))
+        ] in
+      Cohttp_eio.Server.respond_string ~status:`OK
+        ~body:(Yojson.Safe.to_string json) ~headers:json_headers ()
+
+  | `POST, "/admin/pause" ->
+      let raw = read_all body in
+      (try
+        let json = Yojson.Safe.from_string raw in
+        let kv = match json with `Assoc kv -> kv | _ -> [] in
+        (match List.assoc_opt "tasks" kv with
+        | Some (`Bool b) -> Atomic.set tasks_paused b
+        | _ -> ());
+        (match List.assoc_opt "ingest" kv with
+        | Some (`Bool b) -> Atomic.set ingest_paused b
+        | _ -> ());
+        Printf.printf "[admin.pause] tasks_paused=%b ingest_paused=%b\n%!"
+          (Atomic.get tasks_paused) (Atomic.get ingest_paused);
+        let json = `Assoc
+          [ ("ok", `Bool true)
+          ; ("tasks_paused", `Bool (Atomic.get tasks_paused))
+          ; ("ingest_paused", `Bool (Atomic.get ingest_paused))
+          ] in
+        Cohttp_eio.Server.respond_string ~status:`OK
+          ~body:(Yojson.Safe.to_string json) ~headers:json_headers ()
+      with e ->
+        Cohttp_eio.Server.respond_string ~status:`Bad_request
+          ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped (Printexc.to_string e)))
+          ~headers:json_headers ())
 
   | `POST, "/admin/reload" ->
       (try
@@ -5123,6 +5273,40 @@ let handler ~client ~sw ~clock _socket request body =
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
           ~body:(Printf.sprintf "task/delete error: %s\n" (Printexc.to_string e)) ())
 
+  | `POST, "/task/reorder" ->
+      let raw = read_all body in
+      (try
+        let json = Yojson.Safe.from_string raw in
+        let kv = match json with `Assoc kv -> kv | _ -> [] in
+        let pairs =
+          match List.assoc_opt "order" kv with
+          | Some (`List xs) ->
+              List.filter_map (fun item ->
+                match item with
+                | `Assoc ikv ->
+                    let tid = match List.assoc_opt "task_id" ikv with Some (`String s) -> String.trim s | _ -> "" in
+                    let ord = match List.assoc_opt "sort_order" ikv with Some (`Int n) -> Some n | _ -> None in
+                    (match tid, ord with
+                     | "", _ | _, None -> None
+                     | t, Some n -> Some (t, n))
+                | _ -> None
+              ) xs
+          | _ -> []
+        in
+        if pairs = [] then
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing or empty order array\n" ()
+        else
+          (match Rag_lib.Pg.reorder_tasks pairs with
+          | Ok () ->
+              let body = `Assoc [ ("status", `String "ok") ] |> Yojson.Safe.to_string in
+              Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
+          | Error e ->
+              let body = `Assoc [ ("error", `String e) ] |> Yojson.Safe.to_string in
+              Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ())
+      with e ->
+        Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+          ~body:(Printf.sprintf "task/reorder error: %s\n" (Printexc.to_string e)) ())
+
   (* ===================================================================
      Memory system endpoints
      =================================================================== *)
@@ -5405,7 +5589,7 @@ let handler ~client ~sw ~clock _socket request body =
             (* 9. Create new tasks *)
             if task_proposals <> [] then
               process_task_proposals ~client ~sw ~doc_id:ndoc ~body_text
-                ~proposals:task_proposals ();
+                ~email_date:date_ ~proposals:task_proposals ();
             Printf.printf "[email.recompute_tasks] doc_id=%s proposals=%d\n%!" ndoc (List.length task_proposals);
             let result = `Assoc
               [ ("status", `String "ok")
@@ -5446,9 +5630,14 @@ let handler ~client ~sw ~clock _socket request body =
           ~body:"missing X-Task-Id or X-Thunderbird-Message-Id header\n" ()
       else begin
         let raw = read_all body in
-        Printf.printf "[task/evidence] task=%s doc=%s raw=%d bytes\n%!" task_id doc_id (String.length raw);
+        let role = match Rag_lib.Pg.get_task_email_role ~task_id ~doc_id with
+          | Ok (Some r) -> r | _ -> "context"
+        in
+        Printf.printf "[task/evidence] task=%s doc=%s role=%s raw=%d bytes\n%!" task_id doc_id role (String.length raw);
         let budget = 4000 in
-        let (compressed, _md) = extract_and_compress_email ~client ~sw ~raw ~doc_id ~budget () in
+        let include_quoted = role <> "style" in
+        let (compressed, _md) = extract_and_compress_email ~client ~sw ~raw ~doc_id ~budget
+          ~include_quoted ~include_attachments:false () in
         (match Rag_lib.Pg.update_task_email_body ~task_id ~doc_id ~compressed_body:compressed with
         | Ok () ->
             let body = `Assoc [ ("ok", `Bool true); ("task_id", `String task_id); ("doc_id", `String doc_id)
@@ -5498,6 +5687,40 @@ let handler ~client ~sw ~clock _socket request body =
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
           ~body:(Printf.sprintf "task/evidence_done error: %s\n" (Printexc.to_string e)) ())
 
+  (* POST /task/chat_bodies — Upload a raw RFC822 body for a [RETRIEVE]-selected email.
+     Content-Type: message/rfc822
+     Headers: X-Request-Id, X-Thunderbird-Message-Id (= doc_id)
+     Server compresses the body and caches it in the pending_task_retrieval. *)
+  | `POST, "/task/chat_bodies" ->
+      let hdrs = Http.Request.headers request in
+      let req_id = Http.Header.get hdrs "x-request-id" |> Option.value ~default:"" |> String.trim in
+      let doc_id = Http.Header.get hdrs "x-thunderbird-message-id" |> Option.value ~default:"" |> String.trim in
+      if req_id = "" || doc_id = "" then
+        Cohttp_eio.Server.respond_string ~status:`Bad_request
+          ~body:"missing X-Request-Id or X-Thunderbird-Message-Id header\n" ()
+      else begin
+        let raw = read_all body in
+        Printf.printf "[task/chat_bodies] req=%s doc=%s raw=%d bytes\n%!" req_id doc_id (String.length raw);
+        let budget = 4000 in
+        let (compressed, _md) = extract_and_compress_email ~client ~sw ~raw ~doc_id ~budget
+          ~include_quoted:true ~include_attachments:false () in
+        (* Store in the pending retrieval cache *)
+        let found = Eio.Mutex.use_rw ~protect:true task_retrieval_mu (fun () ->
+          match Hashtbl.find_opt task_retrieval_tbl req_id with
+          | Some tr ->
+              Hashtbl.replace tr.evidence_by_id doc_id compressed;
+              true
+          | None -> false)
+        in
+        if found then
+          let body = `Assoc [ ("ok", `Bool true); ("doc_id", `String doc_id)
+                            ; ("compressed_chars", `Int (String.length compressed)) ] |> Yojson.Safe.to_string in
+          Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
+        else
+          Cohttp_eio.Server.respond_string ~status:`Not_found
+            ~body:"request_id not found in retrieval cache\n" ()
+      end
+
   (*
     /task/chat — Continue (or start) a task conversation.
 
@@ -5505,8 +5728,9 @@ let handler ~client ~sw ~clock _socket request body =
     calls LLM, parses structured markers, applies side effects (drafts,
     score updates, new tasks, etc.), saves updated state, returns response.
 
-    Request: { task_id, user_message, chat_model? }
+    Request: { task_id, user_message, chat_model?, request_id? }
     Response: { message, task (updated), side_effects[] }
+             OR { status: "retrieval", request_id, message_ids } when [RETRIEVE] triggers
   *)
   | `POST, "/task/chat" ->
       let raw_req = read_all body in
@@ -5517,11 +5741,21 @@ let handler ~client ~sw ~clock _socket request body =
         let task_id = get_str "task_id" in
         let user_message = get_str "user_message" in
         let chat_model = get_str "chat_model" in
+        let request_id = get_str "request_id" in
         if task_id = "" then
           Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing task_id\n" ()
-        else if user_message = "" then
+        else if user_message = "" && request_id = "" then
           Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing user_message\n" ()
         else
+        (* For completion calls (request_id provided), recover user_message from cache *)
+        let user_message =
+          if request_id <> "" && user_message = "" then
+            match Eio.Mutex.use_rw ~protect:true task_retrieval_mu (fun () ->
+              Hashtbl.find_opt task_retrieval_tbl request_id) with
+            | Some tr -> tr.user_message
+            | None -> user_message
+          else user_message
+        in
         (* 1. Load task from DB *)
         match Rag_lib.Pg.get_task task_id with
         | Error e ->
@@ -5540,11 +5774,6 @@ let handler ~client ~sw ~clock _socket request body =
               | Some (`List ms) -> ms
               | _ -> []
             in
-            let emails =
-              match List.assoc_opt "emails" task_kv with
-              | Some (`List es) -> es
-              | _ -> []
-            in
             (* Trigger email doc_ids for auto-filling in_reply_to in drafts *)
             let trigger_doc_ids =
               match Rag_lib.Pg.task_trigger_doc_ids task_id with
@@ -5558,13 +5787,12 @@ let handler ~client ~sw ~clock _socket request body =
               | _ -> []
             in
 
-            (* 2. Build email context — use pre-fetched compressed bodies when available *)
-            let context_ready = task_str "context_ready" = "true" in
+            (* 2. Build email context — always try compressed bodies from task_emails.
+               Trigger email bodies are stored at task creation time; context/style
+               bodies are populated later by the prefetch daemon. *)
             let task_email_bodies =
-              if context_ready then
-                match Rag_lib.Pg.get_task_emails_with_bodies task_id with
-                | Ok rows -> rows | Error _ -> []
-              else []
+              match Rag_lib.Pg.get_task_emails_with_bodies task_id with
+              | Ok rows -> rows | Error _ -> []
             in
             let email_aliases = ref [] in
             let alias_idx = ref 0 in
@@ -5577,58 +5805,96 @@ let handler ~client ~sw ~clock _socket request body =
                   let dkv = match detail with `Assoc kv -> kv | _ -> [] in
                   let md = match List.assoc_opt "metadata" dkv with Some (`Assoc m) -> m | _ -> [] in
                   let ms k = match List.assoc_opt k md with Some (`String s) -> s | _ -> "" in
-                  (ms "from", ms "to", ms "subject", ms "date")
+                  let date = ms "date" in
+                  let date = if String.trim date = "" then ms "ingested_at" else date in
+                  (ms "from", ms "to", ms "subject", date)
               | _ -> ("", "", "", "")
             in
-            if context_ready && task_email_bodies <> [] then begin
-              (* Use pre-fetched compressed bodies from task_emails *)
-              List.iter (fun (doc_id, role, compressed_body) ->
-                if not (Hashtbl.mem seen_doc_ids doc_id) then begin
-                  Hashtbl.replace seen_doc_ids doc_id true;
-                  let (from, to_, subject, date) = md_of_doc_id doc_id in
-                  if role = "style" then begin
-                    (* Style emails go to a separate section *)
-                    let body_str = if String.trim compressed_body = "" then "(no body)" else String.trim compressed_body in
-                    style_context_lines := (Printf.sprintf "---\nFrom: %s\nTo: %s\nSubject: %s\nDate: %s\n%s"
-                      from to_ subject date body_str) :: !style_context_lines
-                  end else begin
-                    incr alias_idx;
-                    let alias = Printf.sprintf "E%d" !alias_idx in
-                    email_aliases := (alias, doc_id) :: !email_aliases;
-                    let body_str = if String.trim compressed_body = "" then "" else "\n" ^ String.trim compressed_body in
-                    email_context_lines := (Printf.sprintf "%s (role=%s): From: %s | To: %s | Subject: %s | Date: %s%s"
-                      alias role from to_ subject date body_str) :: !email_context_lines
-                  end
+            let clean_body ~is_style (body : string) : string =
+              let lines = String.split_on_char '\n' body in
+              let buf = Buffer.create (String.length body) in
+              let in_quoted = ref false in
+              List.iter (fun line ->
+                let trimmed = String.trim line in
+                if trimmed = "NEW CONTENT:" then ()
+                else if String.length trimmed >= 15
+                     && String.sub trimmed 0 14 = "QUOTED CONTEXT" then
+                  in_quoted := true
+                else if String.length trimmed >= 12
+                     && String.sub trimmed 0 12 = "ATTACHMENTS:" then
+                  in_quoted := false
+                else if is_style && !in_quoted then ()
+                else begin
+                  if Buffer.length buf > 0 then Buffer.add_char buf '\n';
+                  Buffer.add_string buf line
                 end
-              ) task_email_bodies
-            end else begin
-              (* Fallback: metadata-only from linked emails + context_doc_ids *)
-              let add_email_line doc_id role =
-                if not (Hashtbl.mem seen_doc_ids doc_id) then begin
-                  Hashtbl.replace seen_doc_ids doc_id true;
+              ) lines;
+              String.trim (Buffer.contents buf)
+            in
+            (* Process all task_email_bodies rows (these have role info) *)
+            List.iter (fun (doc_id, role, compressed_body) ->
+              if not (Hashtbl.mem seen_doc_ids doc_id) then begin
+                Hashtbl.replace seen_doc_ids doc_id true;
+                let (from, to_, subject, date) = md_of_doc_id doc_id in
+                let body_str = clean_body ~is_style:(role = "style") compressed_body in
+                if role = "style" then begin
+                  let body_part = if body_str = "" then "(body not yet available)" else body_str in
+                  style_context_lines := (Printf.sprintf "---\nFrom: %s\nTo: %s\nSubject: %s\nDate: %s\n\n%s"
+                    from to_ subject date body_part) :: !style_context_lines
+                end else begin
                   incr alias_idx;
                   let alias = Printf.sprintf "E%d" !alias_idx in
                   email_aliases := (alias, doc_id) :: !email_aliases;
-                  let (from, to_, subject, date) = md_of_doc_id doc_id in
-                  let md_line = if from <> "" then
-                    Printf.sprintf "%s (role=%s): From: %s | To: %s | Subject: %s | Date: %s"
-                      alias role from to_ subject date
-                  else
-                    Printf.sprintf "%s (role=%s): doc_id=%s (metadata unavailable)" alias role doc_id
-                  in
-                  email_context_lines := md_line :: !email_context_lines
+                  let body_part = if body_str = "" then "\n(body not yet available)" else "\n\n" ^ body_str in
+                  email_context_lines := (Printf.sprintf "%s [%s]:\nFrom: %s\nTo: %s\nSubject: %s\nDate: %s%s"
+                    alias role from to_ subject date body_part) :: !email_context_lines
                 end
-              in
-              List.iter (fun ej ->
-                let ekv = match ej with `Assoc kv -> kv | _ -> [] in
-                let estr k = match List.assoc_opt k ekv with Some (`String s) -> s | _ -> "" in
-                add_email_line (estr "doc_id") (estr "role")
-              ) emails;
-              List.iter (fun did -> add_email_line did "context") context_doc_ids
-            end;
+              end
+            ) task_email_bodies;
+            (* Also pick up any context_doc_ids not already covered *)
+            List.iter (fun did ->
+              if not (Hashtbl.mem seen_doc_ids did) then begin
+                Hashtbl.replace seen_doc_ids did true;
+                incr alias_idx;
+                let alias = Printf.sprintf "E%d" !alias_idx in
+                email_aliases := (alias, did) :: !email_aliases;
+                let (from, to_, subject, date) = md_of_doc_id did in
+                let md_line = if from <> "" then
+                  Printf.sprintf "%s [context]:\nFrom: %s\nTo: %s\nSubject: %s\nDate: %s\n(body not yet available)"
+                    alias from to_ subject date
+                else
+                  Printf.sprintf "%s [context]: doc_id=%s (metadata unavailable)" alias did
+                in
+                email_context_lines := md_line :: !email_context_lines
+              end
+            ) context_doc_ids;
             let email_context =
               if !email_context_lines = [] then "No emails linked to this task."
               else String.concat "\n" (List.rev !email_context_lines)
+            in
+            (* For completion calls, inject retrieved emails into the context *)
+            let email_context =
+              if request_id = "" then email_context
+              else
+                match Eio.Mutex.use_rw ~protect:true task_retrieval_mu (fun () ->
+                  Hashtbl.find_opt task_retrieval_tbl request_id) with
+                | None -> email_context
+                | Some tr ->
+                    let lines = ref [] in
+                    List.iter (fun doc_id ->
+                      let (from, to_, subject, date) = md_of_doc_id doc_id in
+                      incr alias_idx;
+                      let alias = Printf.sprintf "E%d" !alias_idx in
+                      email_aliases := (alias, doc_id) :: !email_aliases;
+                      let body = match Hashtbl.find_opt tr.evidence_by_id doc_id with
+                        | Some cb when String.trim cb <> "" -> "\n\n" ^ String.trim cb
+                        | _ -> "\n(body not available)"
+                      in
+                      lines := (Printf.sprintf "%s [retrieved]:\nFrom: %s\nTo: %s\nSubject: %s\nDate: %s%s"
+                        alias from to_ subject date body) :: !lines
+                    ) tr.message_ids;
+                    if !lines = [] then email_context
+                    else email_context ^ "\n\n" ^ String.concat "\n" (List.rev !lines)
             in
             let style_context =
               if !style_context_lines <> [] then
@@ -5685,7 +5951,7 @@ let handler ~client ~sw ~clock _socket request body =
             let user_identity = build_user_identity ~name:(get_str "user_name") ~email:!whoami () in
             let memories_section =
               if String.trim memories_text = "" then ""
-              else "\n\nUSER MEMORIES (persistent preferences — follow these):\n" ^ memories_text
+              else "USER MEMORIES (persistent preferences — follow these):\n" ^ memories_text
             in
             let system_prompt =
               get_prompt "task_interview"
@@ -5732,9 +5998,6 @@ let handler ~client ~sw ~clock _socket request body =
                 Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ()
             | Ok raw_resp ->
                 let resp_text = String.trim raw_resp in
-                let side_effects = ref [] in
-
-                (* 6. Parse structured markers *)
 
                 (* Helper: find substring *)
                 let find_sub s sub from =
@@ -5747,6 +6010,96 @@ let handler ~client ~sw ~clock _socket request body =
                   in
                   loop from
                 in
+
+                (* ── [RETRIEVE] marker: search the email archive ─────── *)
+                if request_id = "" && find_sub resp_text "[RETRIEVE]" 0 <> None then begin
+                  Printf.printf "[task_chat] [RETRIEVE] detected, running search pipeline\n%!";
+                  let ri_start = match find_sub resp_text "[RETRIEVE]" 0 with Some s -> s + 10 | None -> 0 in
+                  let ri_end = match find_sub resp_text "[/RETRIEVE]" ri_start with
+                    | Some e -> e | None -> String.length resp_text in
+                  let retrieve_raw = String.trim (String.sub resp_text ri_start (ri_end - ri_start)) in
+                  let retrieve_json = try Some (Yojson.Safe.from_string retrieve_raw) with _ -> None in
+                  let rget_str key = match retrieve_json with
+                    | Some (`Assoc kv) ->
+                        (match List.assoc_opt key kv with
+                         | Some (`String s) when String.trim s <> "" && String.trim s <> "..." -> Some (String.trim s)
+                         | _ -> None)
+                    | _ -> None
+                  in
+                  let question = match rget_str "question" with Some q -> q | None -> retrieve_raw in
+                  let filter = rget_str "filter" in
+                  let score_expr = rget_str "score_expr" in
+                  Printf.printf "[task_chat.retrieve] question=%s filter=%s\n%!"
+                    (truncate_chars question ~max_chars:120)
+                    (match filter with Some f -> f | None -> "(none)");
+                  (* Build search queries: original question + HyDE hypothetical *)
+                  let queries = ref [question] in
+                  (match retrieve_json with
+                  | Some j ->
+                      let hyp_from = (match rget_str "hyp_from" with Some f -> f | None -> "...") in
+                      let hyp_to   = (match rget_str "hyp_to"   with Some t -> t | None -> "...") in
+                      let hyp_subj = (match rget_str "hyp_subject" with Some s -> s | None -> "...") in
+                      let hyp_body = (match rget_str "hyp_body" with Some b -> b | None -> "...") in
+                      if hyp_subj <> "..." || hyp_body <> "..." then begin
+                        let hyp = Printf.sprintf "From: %s\nTo: %s\nSubject: %s\n\nNEW CONTENT:\n%s"
+                          hyp_from hyp_to hyp_subj hyp_body in
+                        queries := !queries @ [hyp]
+                      end
+                  | None -> ());
+                  (* Embed each query and search *)
+                  let top_k = 10 in
+                  let all_sources = List.concat (List.map (fun query_text ->
+                    match ollama_embed ~client ~sw ~task:Search_query
+                        ~label:"task_retrieve" ~text:query_text () with
+                    | Error msg ->
+                        Printf.eprintf "[task_chat.retrieve.embed.error] %s\n%!" msg; []
+                    | Ok v ->
+                        let emb = l2_normalize v in
+                        (match Rag_lib.Pg.query_knn ~embedding:emb ~top_k ?filter ?score_expr () with
+                        | Error msg ->
+                            Printf.eprintf "[task_chat.retrieve.knn.error] %s\n%!" msg;
+                            (* Fallback: retry without filter/score *)
+                            if filter <> None || score_expr <> None then
+                              (match Rag_lib.Pg.query_knn ~embedding:emb ~top_k () with
+                              | Ok (sources, _) -> sources | Error _ -> [])
+                            else []
+                        | Ok (sources, _sql) -> sources)
+                  ) !queries) in
+                  let sources_json = merge_multi_query_sources all_sources top_k in
+                  (* Select relevant sources *)
+                  let user_name = match !whoami with "" -> "" | w -> w in
+                  let sel_message_ids =
+                    select_relevant_sources ~client ~sw ~resolved_question:question
+                      ~user_name sources_json
+                  in
+                  Printf.printf "[task_chat.retrieve] %d queries -> %d sources -> %d selected\n%!"
+                    (List.length !queries)
+                    (match sources_json with `List l -> List.length l | _ -> 0)
+                    (List.length sel_message_ids);
+                  (* Cache retrieval state *)
+                  let req_id = fresh_request_id task_id question in
+                  let tr : pending_task_retrieval =
+                    { task_id; user_message; chat_model
+                    ; message_ids = sel_message_ids
+                    ; sources_json
+                    ; evidence_by_id = Hashtbl.create 16
+                    ; created_at = Unix.gettimeofday ()
+                    } in
+                  Eio.Mutex.use_rw ~protect:true task_retrieval_mu (fun () ->
+                    Hashtbl.replace task_retrieval_tbl req_id tr);
+                  (* Return retrieval response — TB must upload bodies then re-call *)
+                  let body = `Assoc
+                    [ ("status", `String "retrieval")
+                    ; ("request_id", `String req_id)
+                    ; ("message_ids", `List (List.map (fun s -> `String s) sel_message_ids))
+                    ; ("sources", sources_json)
+                    ] |> Yojson.Safe.to_string in
+                  Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
+                end else begin
+
+                let side_effects = ref [] in
+
+                (* 6. Parse structured markers *)
 
                 (* Parse [DRAFT ...] ... [/DRAFT] *)
                 let drafts = ref [] in
@@ -6016,10 +6369,27 @@ let handler ~client ~sw ~clock _socket request body =
                         let before = String.sub !t 0 di in
                         let after = if skip < String.length !t
                           then String.sub !t skip (String.length !t - skip) else "" in
-                        t := before ^ "*(See the draft in the right-hand pane.)*" ^ after;
+                        t := before ^ "See the draft in the right-hand pane." ^ after;
                         strip_drafts ()
                   in
                   strip_drafts ();
+                  (* Strip [RETRIEVE]...[/RETRIEVE] blocks *)
+                  let rec strip_retrieves () =
+                    match find_sub !t "[RETRIEVE]" 0 with
+                    | None -> ()
+                    | Some di ->
+                        let ei, skip =
+                          match find_sub !t "[/RETRIEVE]" di with
+                          | Some ei -> (ei, ei + 11)
+                          | None -> (String.length !t, String.length !t)
+                        in
+                        let before = String.sub !t 0 di in
+                        let after = if skip < String.length !t
+                          then String.sub !t skip (String.length !t - skip) else "" in
+                        t := before ^ after;
+                        strip_retrieves ()
+                  in
+                  strip_retrieves ();
                   (* Remove single-line markers *)
                   let lines = String.split_on_char '\n' !t in
                   let filtered = List.filter (fun line ->
@@ -6118,289 +6488,17 @@ let handler ~client ~sw ~clock _socket request body =
                   ; ("side_effects", `List (List.rev !side_effects))
                   ; ("is_done", `Bool is_done)
                   ] in
+                (* Clean up retrieval cache on completion calls *)
+                if request_id <> "" then
+                  Eio.Mutex.use_rw ~protect:true task_retrieval_mu (fun () ->
+                    Hashtbl.remove task_retrieval_tbl request_id);
+
                 Cohttp_eio.Server.respond_string ~status:`OK
-                  ~body:(Yojson.Safe.to_string resp_json) ~headers:json_headers ())
+                  ~body:(Yojson.Safe.to_string resp_json) ~headers:json_headers ()
+                end)
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
           ~body:(Printf.sprintf "task/chat error: %s\n" (Printexc.to_string e)) ())
-
-  (*
-    /reply/start — Initiate a reply-drafting conversation.
-
-    Receives the raw RFC822 email that the user wants to reply to.
-    1. Parses headers (from, to, subject, date) and body.
-    2. Retrieves context emails from the RAG DB — especially emails the
-       user has SENT to the same recipient — so the LLM can match tone.
-    3. Builds the reply_interview system prompt + a hidden first user
-       message containing the email and context.
-    4. Calls ollama_chat to get the LLM's first response (either
-       [NO_REPLY_NEEDED], a question, or a [DRAFT]).
-    5. Returns everything the client needs to continue the conversation.
-  *)
-  | `POST, "/reply/start" ->
-      let raw_req = read_all body in
-      (try
-        let json = Yojson.Safe.from_string raw_req in
-        let kv = match json with `Assoc kv -> kv | _ -> [] in
-        let get_str k = match List.assoc_opt k kv with Some (`String s) -> String.trim s | _ -> "" in
-        let email_raw = get_str "email_raw" in
-        let user_name = get_str "user_name" in
-        let chat_model = get_str "chat_model" in
-        if email_raw = "" then
-          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing email_raw\n" ()
-        else
-        (* 1. Parse email *)
-        let headers = parse_headers email_raw in
-        let parts = extract_body_parts email_raw in
-        let new_body = String.trim parts.new_text |> sanitize_utf8 in
-        let quoted_raw = String.trim parts.quoted_text |> sanitize_utf8 in
-        let quoted_capped =
-          if String.trim quoted_raw = "" then ""
-          else
-            truncate_lines quoted_raw ~max_lines:!rag_quoted_context_max_lines
-            |> truncate_chars ~max_chars:!rag_quoted_context_max_input_chars
-            |> String.trim
-        in
-        let body_text =
-          let ps = List.filter (fun s -> s <> "")
-            [ (if quoted_capped = "" then "" else "QUOTED CONTEXT:\n" ^ quoted_capped)
-            ; "NEW CONTENT:\n" ^ new_body
-            ] in
-          String.concat "\n\n" ps
-        in
-        let from_ = header_or_empty headers "from" |> decode_rfc2047 |> sanitize_utf8 in
-        let to_ = header_or_empty headers "to" |> decode_rfc2047 |> sanitize_utf8 in
-        let cc_ = header_or_empty headers "cc" |> decode_rfc2047 |> sanitize_utf8 in
-        let subject = header_or_empty headers "subject" |> decode_rfc2047 |> sanitize_utf8 in
-        let date_ = header_or_empty headers "date" |> decode_rfc2047 |> sanitize_utf8 in
-        let email_metadata = `Assoc
-          [ ("from", `String from_); ("to", `String to_); ("cc", `String cc_)
-          ; ("subject", `String subject); ("date", `String date_) ] in
-
-        (* 2. RAG retrieval for context: emails the user has sent to this sender *)
-        let context_summary =
-          let recipient_name =
-            (* Extract just the name/email from the From header for filtering *)
-            let f = String.trim from_ in
-            if String.length f > 0 then f else "unknown"
-          in
-          let whoami_str = String.trim !whoami in
-          let escaped_name = String.escaped recipient_name in
-          let filter_opt =
-            if whoami_str <> "" then
-              Some (Printf.sprintf "sender ILIKE '%%%s%%' AND (recipient ILIKE '%%%s%%' OR cc ILIKE '%%%s%%')"
-                (String.escaped whoami_str) escaped_name escaped_name)
-            else
-              Some (Printf.sprintf "(sender ILIKE '%%%s%%' OR recipient ILIKE '%%%s%%')" escaped_name escaped_name)
-          in
-          (* Build a hypothetical query about communication with this person *)
-          let query_text = Printf.sprintf "From: %s\nTo: %s\nSubject: %s\n\n%s"
-            from_ to_ subject (truncate_chars new_body ~max_chars:500) in
-          let context_lines = ref [] in
-          (match ollama_embed ~client ~sw ~task:Search_query ~label:"reply_context" ~text:query_text () with
-          | Error _ -> ()
-          | Ok v ->
-              let emb = l2_normalize v in
-              (match Rag_lib.Pg.query_knn ~embedding:emb ~top_k:5 ?filter:filter_opt () with
-              | Error msg -> Printf.eprintf "[reply.context.error] %s\n%!" msg
-              | Ok (sources, _sql) ->
-                  List.iter (fun src ->
-                    match src with
-                    | `Assoc skv ->
-                        let s_from = (match List.assoc_opt "from" skv with Some (`String s) -> s | _ -> "") in
-                        let s_to = (match List.assoc_opt "to" skv with Some (`String s) -> s | _ -> "") in
-                        let s_subj = (match List.assoc_opt "subject" skv with Some (`String s) -> s | _ -> "") in
-                        let s_date = (match List.assoc_opt "date" skv with Some (`String s) -> s | _ -> "") in
-                        let s_text = (match List.assoc_opt "text" skv with Some (`String s) -> s | _ -> "") in
-                        let excerpt = truncate_chars (String.trim s_text) ~max_chars:800 in
-                        context_lines := (Printf.sprintf "---\nFrom: %s\nTo: %s\nSubject: %s\nDate: %s\n%s"
-                          s_from s_to s_subj s_date excerpt) :: !context_lines
-                    | _ -> ()) sources));
-          String.concat "\n" (List.rev !context_lines)
-        in
-
-        (* 3. Build system prompt *)
-        let user_identity = build_user_identity ~name:user_name ~email:!whoami () in
-        let system_prompt =
-          get_prompt "reply_interview"
-            ~default:"You are an email reply assistant. Ask short yes/no questions then draft a reply."
-            ~vars:[
-              ("{{user_identity}}", user_identity);
-              ("{{datetime_local}}", now_local_string ());
-            ]
-        in
-
-        (* 4. Build hidden first user message *)
-        let first_user_msg =
-          let ctx_section =
-            if String.trim context_summary = "" then
-              "\n\nCONTEXT EMAILS: (none found)"
-            else
-              "\n\nCONTEXT EMAILS (written by the user to the same recipient — use for tone/style matching):\n" ^ context_summary
-          in
-          Printf.sprintf "Please help me draft a reply to the following email.\n\n\
-            EMAIL TO REPLY TO:\nFrom: %s\nTo: %s\nCc: %s\nSubject: %s\nDate: %s\n\n%s%s"
-            from_ to_ cc_ subject date_ body_text ctx_section
-        in
-
-        (* 5. Call LLM *)
-        let messages : Yojson.Safe.t list =
-          [ `Assoc [ ("role", `String "system"); ("content", `String system_prompt) ]
-          ; `Assoc [ ("role", `String "user"); ("content", `String first_user_msg) ]
-          ]
-        in
-        let effective_model = if chat_model <> "" then chat_model else !ollama_llm_model in
-        (match ollama_chat ~client ~sw ~label:"reply_start" ~model:effective_model ~messages () with
-        | Error msg ->
-            let body = `Assoc [ ("error", `String msg) ] |> Yojson.Safe.to_string in
-            Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ()
-        | Ok raw_resp ->
-            let resp_text = String.trim raw_resp in
-            (* Parse markers *)
-            let needs_reply = not (contains_substring ~sub:"[NO_REPLY_NEEDED]" resp_text) in
-            let has_draft = contains_substring ~sub:"[DRAFT]" resp_text
-                         && contains_substring ~sub:"[/DRAFT]" resp_text in
-            let draft_body, reply_type =
-              if has_draft then
-                let start_marker = "[DRAFT]" in
-                let end_marker = "[/DRAFT]" in
-                let s_len = String.length start_marker in
-                let rec find_sub s sub from =
-                  let sub_len = String.length sub in
-                  if from + sub_len > String.length s then None
-                  else if String.sub s from sub_len = sub then Some from
-                  else find_sub s sub (from + 1)
-                in
-                match find_sub resp_text start_marker 0, find_sub resp_text end_marker 0 with
-                | Some si, Some ei ->
-                    let draft = String.trim (String.sub resp_text (si + s_len) (ei - si - s_len)) in
-                    let after_end = ei + String.length end_marker in
-                    let rest = if after_end < String.length resp_text
-                      then String.trim (String.sub resp_text after_end (String.length resp_text - after_end))
-                      else "" in
-                    let rt =
-                      if contains_substring ~sub:"[REPLY_TYPE]" rest then
-                        let rt_marker = "[REPLY_TYPE]" in
-                        match find_sub rest rt_marker 0 with
-                        | Some ri ->
-                            let after_rt = ri + String.length rt_marker in
-                            let rt_val = if after_rt < String.length rest
-                              then String.trim (String.sub rest after_rt (String.length rest - after_rt))
-                              else "sender" in
-                            let rt_val = String.lowercase_ascii rt_val in
-                            if contains_substring ~sub:"all" rt_val then "all" else "sender"
-                        | None -> "sender"
-                      else "sender"
-                    in
-                    (draft, rt)
-                | _ -> ("", "sender")
-              else ("", "sender")
-            in
-            let done_ = has_draft || not needs_reply in
-            let resp_json = `Assoc (
-              [ ("message", `String resp_text)
-              ; ("needs_reply", `Bool needs_reply)
-              ; ("done", `Bool done_)
-              ; ("email_metadata", email_metadata)
-              ; ("system_prompt", `String system_prompt)
-              ; ("first_user_message", `String first_user_msg)
-              ]
-              @ (if draft_body <> "" then [ ("draft_body", `String draft_body) ] else [])
-              @ (if done_ && draft_body <> "" then [ ("reply_type", `String reply_type) ] else [])
-            ) in
-            Cohttp_eio.Server.respond_string ~status:`OK
-              ~body:(Yojson.Safe.to_string resp_json) ~headers:json_headers ())
-      with e ->
-        Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-          ~body:(Printf.sprintf "reply/start error: %s\n" (Printexc.to_string e)) ())
-
-  (*
-    /reply/chat — Continue a reply-drafting conversation.
-
-    Stateless: the client sends the full message history (including the
-    hidden first user message from /reply/start) plus the system prompt.
-    The server calls ollama_chat and parses the response for draft markers.
-  *)
-  | `POST, "/reply/chat" ->
-      let raw_req = read_all body in
-      (try
-        let json = Yojson.Safe.from_string raw_req in
-        let kv = match json with `Assoc kv -> kv | _ -> [] in
-        let get_str k = match List.assoc_opt k kv with Some (`String s) -> String.trim s | _ -> "" in
-        let system_prompt = get_str "system_prompt" in
-        let chat_model = get_str "chat_model" in
-        let conv_messages =
-          match List.assoc_opt "messages" kv with
-          | Some (`List ms) -> ms
-          | _ -> []
-        in
-        if system_prompt = "" || conv_messages = [] then
-          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing system_prompt/messages\n" ()
-        else
-        let messages : Yojson.Safe.t list =
-          (`Assoc [ ("role", `String "system"); ("content", `String system_prompt) ])
-          :: conv_messages
-        in
-        let effective_model = if chat_model <> "" then chat_model else !ollama_llm_model in
-        (match ollama_chat ~client ~sw ~label:"reply_chat" ~model:effective_model ~messages () with
-        | Error msg ->
-            let body = `Assoc [ ("error", `String msg) ] |> Yojson.Safe.to_string in
-            Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ()
-        | Ok raw_resp ->
-            let resp_text = String.trim raw_resp in
-            let needs_reply = not (contains_substring ~sub:"[NO_REPLY_NEEDED]" resp_text) in
-            let has_draft = contains_substring ~sub:"[DRAFT]" resp_text
-                         && contains_substring ~sub:"[/DRAFT]" resp_text in
-            let draft_body, reply_type =
-              if has_draft then
-                let start_marker = "[DRAFT]" in
-                let end_marker = "[/DRAFT]" in
-                let s_len = String.length start_marker in
-                let rec find_sub s sub from =
-                  let sub_len = String.length sub in
-                  if from + sub_len > String.length s then None
-                  else if String.sub s from sub_len = sub then Some from
-                  else find_sub s sub (from + 1)
-                in
-                match find_sub resp_text start_marker 0, find_sub resp_text end_marker 0 with
-                | Some si, Some ei ->
-                    let draft = String.trim (String.sub resp_text (si + s_len) (ei - si - s_len)) in
-                    let after_end = ei + String.length end_marker in
-                    let rest = if after_end < String.length resp_text
-                      then String.trim (String.sub resp_text after_end (String.length resp_text - after_end))
-                      else "" in
-                    let rt =
-                      if contains_substring ~sub:"[REPLY_TYPE]" rest then
-                        let rt_marker = "[REPLY_TYPE]" in
-                        match find_sub rest rt_marker 0 with
-                        | Some ri ->
-                            let after_rt = ri + String.length rt_marker in
-                            let rt_val = if after_rt < String.length rest
-                              then String.trim (String.sub rest after_rt (String.length rest - after_rt))
-                              else "sender" in
-                            let rt_val = String.lowercase_ascii rt_val in
-                            if contains_substring ~sub:"all" rt_val then "all" else "sender"
-                        | None -> "sender"
-                      else "sender"
-                    in
-                    (draft, rt)
-                | _ -> ("", "sender")
-              else ("", "sender")
-            in
-            let done_ = has_draft || not needs_reply in
-            let resp_json = `Assoc (
-              [ ("message", `String resp_text)
-              ; ("needs_reply", `Bool needs_reply)
-              ; ("done", `Bool done_)
-              ]
-              @ (if draft_body <> "" then [ ("draft_body", `String draft_body) ] else [])
-              @ (if done_ && draft_body <> "" then [ ("reply_type", `String reply_type) ] else [])
-            ) in
-            Cohttp_eio.Server.respond_string ~status:`OK
-              ~body:(Yojson.Safe.to_string resp_json) ~headers:json_headers ())
-      with e ->
-        Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-          ~body:(Printf.sprintf "reply/chat error: %s\n" (Printexc.to_string e)) ())
 
   | `POST, _ ->
       Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"not found\n" ()
@@ -6471,6 +6569,71 @@ let () =
   let prefetch_wake = Eio.Stream.create 10 in
   notify_prefetch := (fun () ->
     try Eio.Stream.add prefetch_wake () with _ -> ());
+  (* Phase 0: triage — run propose_tasks + process_task_proposals for queued emails *)
+  let triage_one_email ~client ~sw (doc_id : string) (body_text : string) (compressed_body : string) : unit =
+    Printf.printf "[daemon.triage] processing doc_id=%s\n%!" doc_id;
+    (* Get email metadata from DB *)
+    let from_, to_, cc_, bcc_, subject, date_, attachments =
+      match Rag_lib.Pg.get_email_detail doc_id with
+      | Ok (Some detail) ->
+          let md = match detail with
+            | `Assoc kv -> (match List.assoc_opt "metadata" kv with Some (`Assoc m) -> m | _ -> [])
+            | _ -> []
+          in
+          let ms k = match List.assoc_opt k md with Some (`String s) -> s | _ -> "" in
+          let atts = match List.assoc_opt "attachments" md with
+            | Some (`List items) -> List.filter_map (fun j ->
+                match j with `String s -> Some s | _ -> None) items
+            | _ -> []
+          in
+          (ms "from", ms "to", ms "cc", ms "bcc", ms "subject", ms "date", atts)
+      | _ ->
+          Printf.eprintf "[daemon.triage] no metadata for %s, skipping\n%!" doc_id;
+          ("", "", "", "", "", "", [])
+    in
+    if from_ = "" && to_ = "" && subject = "" then begin
+      Printf.eprintf "[daemon.triage] empty metadata for %s, deleting from queue\n%!" doc_id;
+      ignore (Rag_lib.Pg.delete_triage_entry doc_id)
+    end else begin
+      let whoami = String.trim !whoami in
+      (* Retrieve memories if enabled *)
+      let memories_text =
+        if not !memory_enabled then ""
+        else begin
+          let repr_embedding = match Rag_lib.Pg.get_doc_embedding doc_id with
+            | Ok (Some emb) -> emb | _ -> []
+          in
+          if repr_embedding <> [] then
+            let text, _ = retrieve_and_format_memories
+              ~sender:from_ ~recipient:to_ ~cc:cc_ ~bcc:bcc_
+              ~subject ~date:date_ ~attachments
+              ~embedding:repr_embedding () in
+            text
+          else begin
+            let sym = retrieve_memories_symbolic
+              ~sender:from_ ~recipient:to_ ~cc:cc_ ~bcc:bcc_
+              ~subject ~date:date_ ~attachments () in
+            let buf = Buffer.create 256 in
+            List.iter (fun (mid, text) ->
+              Buffer.add_string buf (Printf.sprintf "- [%s] %s\n" mid text)
+            ) sym;
+            Buffer.contents buf
+          end
+        end
+      in
+      let (task_proposals, pt_debug) = propose_tasks ~client ~sw ~whoami
+        ~from_ ~to_ ~cc_ ~bcc_ ~subject ~date_ ~body_text
+        ~memories_text in
+      (match pt_debug with
+      | Some dbg -> ignore (Rag_lib.Pg.set_propose_tasks_debug doc_id (Yojson.Safe.to_string dbg))
+      | None -> ());
+      if task_proposals <> [] then
+        process_task_proposals ~client ~sw ~doc_id ~body_text:compressed_body
+          ~email_date:date_ ~proposals:task_proposals ();
+      Printf.printf "[daemon.triage] doc_id=%s proposals=%d\n%!" doc_id (List.length task_proposals);
+      ignore (Rag_lib.Pg.delete_triage_entry doc_id)
+    end
+  in
   let prefetch_one_task ~client ~sw (task_id : string) (title : string) : unit =
     Printf.printf "[prefetch] starting for task %s: %s\n%!" task_id title;
     let trigger_doc_ids = match Rag_lib.Pg.task_trigger_doc_ids task_id with
@@ -6545,10 +6708,12 @@ let () =
         Printf.printf "[prefetch] task %s: stored %d context emails\n%!"
           task_id (List.length selected_doc_ids);
 
-        (* Style email selection: find user's sent emails to trigger recipients *)
+        (* Style email selection: find user's sent emails to trigger senders.
+           Only match against the 'from' field — the person(s) who wrote to you
+           and whom you're likely replying to. Cap at 4 total style emails. *)
+        let max_style = 4 in
         let user_emails = extract_email_addresses !whoami in
         if user_emails <> [] then begin
-          (* Gather recipients from trigger emails *)
           let recipients = ref [] in
           List.iter (fun did ->
             match Rag_lib.Pg.get_email_detail did with
@@ -6557,33 +6722,36 @@ let () =
                   | `Assoc kv -> (match List.assoc_opt "metadata" kv with Some (`Assoc m) -> m | _ -> [])
                   | _ -> []
                 in
-                let add_field key =
-                  let v = match List.assoc_opt key md with Some (`String s) -> s | _ -> "" in
-                  if String.trim v <> "" then
-                    let addrs = extract_email_addresses v in
-                    List.iter (fun addr ->
-                      if not (List.mem addr user_emails) && not (List.mem addr !recipients) then
-                        recipients := addr :: !recipients
-                    ) addrs
-                in
-                add_field "from"; add_field "to"; add_field "cc"
+                let v = match List.assoc_opt "from" md with Some (`String s) -> s | _ -> "" in
+                if String.trim v <> "" then
+                  let addrs = extract_email_addresses v in
+                  List.iter (fun addr ->
+                    if not (List.mem addr user_emails) && not (List.mem addr !recipients) then
+                      recipients := addr :: !recipients
+                  ) addrs
             | _ -> ()
           ) trigger_doc_ids;
           let recipients = List.rev !recipients in
           Printf.printf "[prefetch] task %s: %d recipients for style search\n%!"
             task_id (List.length recipients);
+          let style_count = ref 0 in
           List.iter (fun recip ->
-            match Rag_lib.Pg.find_style_emails ~sender_emails:user_emails ~recipient:recip ~limit:3 () with
-            | Ok style_ids ->
-                List.iter (fun did ->
-                  if not (Hashtbl.mem trigger_set did) then
-                    ignore (Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:did ~role:"style" ())
-                ) style_ids;
-                if style_ids <> [] then
-                  Printf.printf "[prefetch] task %s: %d style emails for %s\n%!"
-                    task_id (List.length style_ids) recip
-            | Error e ->
-                Printf.eprintf "[prefetch] style search error for %s: %s\n%!" recip e
+            if !style_count < max_style then begin
+              let per_recip_limit = max 1 (max_style - !style_count) in
+              match Rag_lib.Pg.find_style_emails ~sender_emails:user_emails ~recipient:recip ~limit:per_recip_limit () with
+              | Ok style_ids ->
+                  List.iter (fun did ->
+                    if !style_count < max_style && not (Hashtbl.mem trigger_set did) then begin
+                      ignore (Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:did ~role:"style" ());
+                      incr style_count
+                    end
+                  ) style_ids;
+                  if style_ids <> [] then
+                    Printf.printf "[prefetch] task %s: %d style emails for %s\n%!"
+                      task_id (List.length style_ids) recip
+              | Error e ->
+                  Printf.eprintf "[prefetch] style search error for %s: %s\n%!" recip e
+            end
           ) recipients
         end else
           Printf.printf "[prefetch] task %s: no email addresses in whoami, skipping style\n%!" task_id;
@@ -6608,47 +6776,77 @@ let () =
           (match List.assoc_opt "description" kv with Some (`String s) -> s | _ -> "")
       | _ -> ""
     in
-    (* Load all task_emails with compressed bodies *)
+    (* Load all task_emails with compressed bodies — same layout as /task/chat *)
     let task_emails = match Rag_lib.Pg.get_task_emails_with_bodies task_id with
       | Ok rows -> rows | Error _ -> []
     in
-    (* Build evidence sections by role *)
-    let trigger_lines = ref [] in
-    let context_lines = ref [] in
-    let style_lines = ref [] in
     let trigger_doc_ids = List.filter_map (fun (doc_id, role, _) ->
       if role = "trigger" then Some doc_id else None
     ) task_emails in
+    let alias_idx = ref 0 in
+    let email_context_lines = ref [] in
+    let style_context_lines = ref [] in
+    let md_of_doc_id doc_id =
+      match Rag_lib.Pg.get_email_detail doc_id with
+      | Ok (Some detail) ->
+          let dkv = match detail with `Assoc kv -> kv | _ -> [] in
+          let md = match List.assoc_opt "metadata" dkv with Some (`Assoc m) -> m | _ -> [] in
+          let ms k = match List.assoc_opt k md with Some (`String s) -> s | _ -> "" in
+          let date = ms "date" in
+          let date = if String.trim date = "" then ms "ingested_at" else date in
+          (ms "from", ms "to", ms "subject", date)
+      | _ -> ("", "", "", "")
+    in
+    (* Strip section headers (NEW CONTENT: / QUOTED CONTEXT:) from body text for prompt.
+       For style emails, also strip QUOTED CONTEXT entirely — only the user's own new
+       content is useful for style matching. *)
+    let clean_body ~is_style (body : string) : string =
+      let lines = String.split_on_char '\n' body in
+      let buf = Buffer.create (String.length body) in
+      let in_quoted = ref false in
+      List.iter (fun line ->
+        let trimmed = String.trim line in
+        if trimmed = "NEW CONTENT:" then ()
+        else if String.length trimmed >= 15
+             && String.sub trimmed 0 14 = "QUOTED CONTEXT" then
+          in_quoted := true
+        else if String.length trimmed >= 12
+             && String.sub trimmed 0 12 = "ATTACHMENTS:" then
+          in_quoted := false
+        else if is_style && !in_quoted then ()
+        else begin
+          if Buffer.length buf > 0 then Buffer.add_char buf '\n';
+          Buffer.add_string buf line
+        end
+      ) lines;
+      String.trim (Buffer.contents buf)
+    in
     List.iter (fun (doc_id, role, compressed_body) ->
-      let md_str = match Rag_lib.Pg.get_email_detail doc_id with
-        | Ok (Some detail) ->
-            let md = match detail with
-              | `Assoc kv -> (match List.assoc_opt "metadata" kv with Some (`Assoc m) -> m | _ -> [])
-              | _ -> []
-            in
-            let ms k = match List.assoc_opt k md with Some (`String s) -> s | _ -> "" in
-            Printf.sprintf "From: %s\nTo: %s\nSubject: %s\nDate: %s"
-              (ms "from") (ms "to") (ms "subject") (ms "date")
-        | _ -> Printf.sprintf "doc_id: %s" doc_id
-      in
-      let entry = Printf.sprintf "---\n%s\n%s" md_str
-        (if String.trim compressed_body = "" then "(no body)" else String.trim compressed_body)
-      in
-      match role with
-      | "trigger" -> trigger_lines := entry :: !trigger_lines
-      | "context" -> context_lines := entry :: !context_lines
-      | "style" -> style_lines := entry :: !style_lines
-      | _ -> ()
+      let (from, to_, subject, date) = md_of_doc_id doc_id in
+      let body_str = clean_body ~is_style:(role = "style") compressed_body in
+      if role = "style" then begin
+        let body_part = if body_str = "" then "(body not yet available)" else body_str in
+        style_context_lines := (Printf.sprintf "---\nFrom: %s\nTo: %s\nSubject: %s\nDate: %s\n\n%s"
+          from to_ subject date body_part) :: !style_context_lines
+      end else begin
+        incr alias_idx;
+        let alias = Printf.sprintf "E%d" !alias_idx in
+        let body_part = if body_str = "" then "\n(body not yet available)" else "\n\n" ^ body_str in
+        if body_str = "" then
+          Printf.eprintf "[prefetch.gen] task=%s email=%s role=%s has empty body\n%!" task_id doc_id role;
+        email_context_lines := (Printf.sprintf "%s [%s]:\nFrom: %s\nTo: %s\nSubject: %s\nDate: %s%s"
+          alias role from to_ subject date body_part) :: !email_context_lines
+      end
     ) task_emails;
-    let evidence_block =
-      let sections = ref [] in
-      if !trigger_lines <> [] then
-        sections := (Printf.sprintf "TRIGGER EMAILS:\n%s" (String.concat "\n" (List.rev !trigger_lines))) :: !sections;
-      if !context_lines <> [] then
-        sections := (Printf.sprintf "CONTEXT EMAILS:\n%s" (String.concat "\n" (List.rev !context_lines))) :: !sections;
-      if !style_lines <> [] then
-        sections := (Printf.sprintf "STYLE EMAILS (match this tone when drafting):\n%s" (String.concat "\n" (List.rev !style_lines))) :: !sections;
-      String.concat "\n\n" (List.rev !sections)
+    let email_context =
+      if !email_context_lines = [] then "No emails linked to this task."
+      else String.concat "\n" (List.rev !email_context_lines)
+    in
+    let style_context =
+      if !style_context_lines <> [] then
+        "\n\nSTYLE CONTEXT (emails you have sent to the same recipients — match this tone and style):\n"
+        ^ String.concat "\n" (List.rev !style_context_lines)
+      else ""
     in
     let user_identity = build_user_identity ~name:"" ~email:!whoami () in
     (* Retrieve memories for first message generation *)
@@ -6695,7 +6893,7 @@ let () =
     in
     let memories_section =
       if String.trim memories_text = "" then ""
-      else "\n\nUSER MEMORIES (persistent preferences — follow these):\n" ^ memories_text
+      else "USER MEMORIES (persistent preferences — follow these):\n" ^ memories_text
     in
     let system_prompt =
       get_prompt "task_first_message"
@@ -6706,15 +6904,16 @@ let () =
         ~vars:[
           ("{{user_identity}}", user_identity);
           ("{{datetime_local}}", now_local_string ());
+          ("{{task_title}}", title);
+          ("{{task_description}}", description);
+          ("{{email_context}}", email_context);
+          ("{{style_context}}", style_context);
           ("{{user_memories}}", memories_section);
         ]
     in
-    let user_msg = Printf.sprintf "Task: %s\nDescription: %s\n\n%s"
-      title description evidence_block
-    in
     let messages : Yojson.Safe.t list =
       [ `Assoc [ ("role", `String "system"); ("content", `String system_prompt) ]
-      ; `Assoc [ ("role", `String "user"); ("content", `String user_msg) ]
+      ; `Assoc [ ("role", `String "user"); ("content", `String "Generate the first message for this task.") ]
       ]
     in
     match ollama_chat ~client ~sw ~label:"task_first_msg" ~model:!ollama_triage_model ~messages () with
@@ -6790,13 +6989,19 @@ let () =
                 let before = String.sub !t 0 di in
                 let after = if skip < String.length !t
                   then String.sub !t skip (String.length !t - skip) else "" in
-                t := before ^ "*(See the draft in the right-hand pane.)*" ^ after;
+                t := before ^ "See the draft in the right-hand pane." ^ after;
                 strip ()
           in
           strip (); String.trim !t
         in
+        let first_msg_debug = `Assoc
+          [ ("model", `String !ollama_triage_model)
+          ; ("messages", `List messages)
+          ; ("raw_response", `String first_msg)
+          ] in
         let conv = `List [
-          `Assoc [ ("role", `String "assistant"); ("content", `String display_text) ]
+          `Assoc [ ("role", `String "assistant"); ("content", `String display_text)
+                 ; ("_llm_debug", first_msg_debug) ]
         ] |> Yojson.Safe.to_string in
         let drafts_json =
           if !drafts <> [] then Some (Yojson.Safe.to_string (`List (List.rev !drafts)))
@@ -6821,19 +7026,60 @@ let () =
         ignore (Eio.Stream.take_nonblocking prefetch_wake)
       with _ -> ());
       let did_work = ref false in
+      (* Phase -1: async ingestion — highest daemon priority, runs even during high-priority *)
+      (if Atomic.get ingest_paused then ()
+      else match Rag_lib.Pg.dequeue_ingest () with
+      | Ok (Some (doc_id, raw)) ->
+          did_work := true;
+          Printf.printf "[daemon.ingest] processing doc_id=%s (%d bytes)\n%!" doc_id (String.length raw);
+          let whoami = String.trim !whoami in
+          if whoami = "" then begin
+            Printf.eprintf "[daemon.ingest] skipping %s — whoami not set\n%!" doc_id;
+            ignore (Rag_lib.Pg.fail_ingest doc_id "whoami not configured")
+          end else begin
+            (try
+              let headers = parse_headers raw in
+              let resp, _resp_body =
+                forward_ingest_raw ~client ~sw ~log:true ~whoami ~doc_id ~headers ~raw
+              in
+              let code = Cohttp.Code.code_of_status (Http.Response.status resp) in
+              if code >= 200 && code < 300 then begin
+                Printf.printf "[daemon.ingest] ok doc_id=%s\n%!" doc_id;
+                ignore (Rag_lib.Pg.finish_ingest doc_id)
+              end else begin
+                Printf.eprintf "[daemon.ingest] failed doc_id=%s status=%d\n%!" doc_id code;
+                ignore (Rag_lib.Pg.fail_ingest doc_id (Printf.sprintf "HTTP %d" code))
+              end
+            with e ->
+              let msg = Printexc.to_string e in
+              Printf.eprintf "[daemon.ingest] error for %s: %s\n%!" doc_id msg;
+              ignore (Rag_lib.Pg.fail_ingest doc_id msg))
+          end
+      | _ -> ());
       (* Defer to high-priority work (ingestion, user queries/chat) *)
-      if Atomic.get high_priority_count > 0 then
+      if Atomic.get tasks_paused then ()
+      else if Atomic.get high_priority_count > 0 then
         Printf.printf "[prefetch] deferring — high-priority request active\n%!"
       else begin
-        (* Phase 1: kNN + selection for tasks needing prefetch *)
-        (match Rag_lib.Pg.tasks_needing_prefetch ~limit:1 () with
-        | Ok ((task_id, title) :: _) ->
+        (* Phase 0: triage — propose tasks for queued emails *)
+        (match Rag_lib.Pg.dequeue_triage () with
+        | Ok (Some (doc_id, body_text, compressed_body)) ->
             did_work := true;
-            (try prefetch_one_task ~client ~sw task_id title
+            (try triage_one_email ~client ~sw doc_id body_text compressed_body
             with e ->
-              Printf.eprintf "[prefetch] error processing %s: %s\n%!" task_id (Printexc.to_string e))
+              Printf.eprintf "[daemon.triage] error for %s: %s\n%!" doc_id (Printexc.to_string e);
+              ignore (Rag_lib.Pg.delete_triage_entry doc_id))
         | _ -> ());
-        (* Phase 3: generate first message for tasks with all evidence *)
+        (* Phase 1: kNN + selection for tasks needing prefetch *)
+        (if Atomic.get high_priority_count = 0 then
+          match Rag_lib.Pg.tasks_needing_prefetch ~limit:1 () with
+          | Ok ((task_id, title) :: _) ->
+              did_work := true;
+              (try prefetch_one_task ~client ~sw task_id title
+              with e ->
+                Printf.eprintf "[prefetch] error processing %s: %s\n%!" task_id (Printexc.to_string e))
+          | _ -> ());
+        (* Phase 2: generate first message for tasks with all evidence *)
         (if Atomic.get high_priority_count = 0 then
           match Rag_lib.Pg.tasks_ready_for_generation ~limit:1 () with
           | Ok ((task_id, title) :: _) ->
@@ -6939,7 +7185,7 @@ let () =
                       let before = String.sub !t 0 di in
                       let after = if skip < String.length !t
                         then String.sub !t skip (String.length !t - skip) else "" in
-                      t := before ^ "*(See the draft in the right-hand pane.)*" ^ after;
+                      t := before ^ "See the draft in the right-hand pane." ^ after;
                       strip ()
                 in
                 strip ();

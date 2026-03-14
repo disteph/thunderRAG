@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>ThunderRAG — Process Pipelines</title>
+<style>
+  :root {
+    --bg: #1e1e2e; --surface: #282840; --text: #e0e0e8; --muted: #9090a8;
+    --accent: #7c7cf0; --border: #3a3a54; --prompt-bg: #3d2e5e;
+    --prompt-text: #c9a0ff; --data-bg: #1a3040; --data-text: #6ec8e8;
+    --step-bg: #2a2a42; --arrow: #606080;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text);
+    padding: 24px 32px; line-height: 1.5;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 6px; }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 28px; }
+  h2 {
+    font-size: 1.1rem; margin: 32px 0 16px;
+    padding-bottom: 6px; border-bottom: 1px solid var(--border);
+  }
+  .pipeline {
+    display: flex; flex-direction: column; align-items: flex-start;
+    gap: 0; margin-bottom: 12px; padding: 16px;
+    background: var(--surface); border-radius: 8px;
+  }
+  .step {
+    display: flex; align-items: flex-start; gap: 10px; width: 100%;
+  }
+  .node {
+    background: var(--step-bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 14px; font-size: 0.85rem;
+    min-width: 180px; flex-shrink: 0;
+  }
+  .node.wide { min-width: 260px; }
+  .node-title { font-weight: 600; font-size: 0.88rem; margin-bottom: 2px; }
+  .node-desc { font-size: 0.78rem; color: var(--muted); }
+  .prompt-tag {
+    display: inline-block; background: var(--prompt-bg); color: var(--prompt-text);
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.72rem; padding: 2px 7px; border-radius: 3px;
+    margin-top: 4px; margin-right: 4px;
+  }
+  .data-tag {
+    display: inline-block; background: var(--data-bg); color: var(--data-text);
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.72rem; padding: 2px 7px; border-radius: 3px;
+    margin-top: 4px; margin-right: 4px;
+  }
+  .arrow {
+    display: flex; align-items: center; justify-content: center;
+    padding: 2px 0 2px 86px; color: var(--arrow); font-size: 1.1rem;
+    user-select: none;
+  }
+  .arrow::before { content: "▼"; }
+  .side-note {
+    font-size: 0.78rem; color: var(--muted); padding: 4px 0 0 12px;
+    flex: 1; line-height: 1.5;
+  }
+  .legend {
+    display: flex; gap: 20px; margin-bottom: 24px; font-size: 0.82rem;
+    flex-wrap: wrap;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-swatch {
+    width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0;
+  }
+  .columns { display: flex; gap: 24px; flex-wrap: wrap; }
+  .columns > .pipeline { flex: 1; min-width: 340px; }
+</style>
+</head>
+<body>
+
+<h1>ThunderRAG Process Pipelines</h1>
+<p class="subtitle">How emails flow through the system and where each <code>prompts.json</code> key is used.</p>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-swatch" style="background:var(--prompt-bg)"></div> LLM prompt (from prompts.json)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:var(--data-bg)"></div> Data store / artifact</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:var(--step-bg)"></div> Processing step</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>1. Email Ingestion</h2>
+<p style="color:var(--muted);font-size:0.82rem;margin-bottom:12px;">Two paths: <strong>Sync</strong> (<code>POST /ingest</code>) processes a single email inline and returns the result. <strong>Async batch</strong> (<code>POST /ingest/batch</code>) queues emails into <code>ingest_queue</code> and returns immediately — the daemon's Phase&nbsp;−1 processes them. The add-on uses the async path for multi-select and filter-action ingestion.</p>
+
+<div class="pipeline">
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Email arrives</div>
+      <div class="node-desc">Raw email (headers + body + attachments) from Thunderbird</div>
+    </div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Parse &amp; split body</div>
+      <div class="node-desc">Separate NEW CONTENT, QUOTED CONTEXT, and attachments</div>
+    </div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Compress quoted context</div>
+      <div class="node-desc">Summarize older thread history for embedding</div>
+      <span class="prompt-tag">compress_quoted_context_ingest</span>
+    </div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Compress new content</div>
+      <div class="node-desc">Summarize the sender's message if too long</div>
+      <span class="prompt-tag">compress_new_content_ingest</span>
+    </div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Compress attachments</div>
+      <div class="node-desc">Summarize each attached file</div>
+      <span class="prompt-tag">compress_attachment</span>
+    </div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Embed &amp; store</div>
+      <div class="node-desc">Chunk text, generate vector embeddings, store in PostgreSQL</div>
+      <span class="data-tag">emails table</span>
+      <span class="data-tag">email_chunks table</span>
+    </div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Enqueue for triage</div>
+      <div class="node-desc">Save body text to <code>triage_queue</code> for the background daemon to process</div>
+      <span class="data-tag">triage_queue table</span>
+    </div>
+    <div class="side-note">
+      Triage (task proposal) happens asynchronously in the daemon.
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>2. Background Daemon</h2>
+<p style="color:var(--muted);font-size:0.82rem;margin-bottom:12px;">Runs continuously in the background. <strong>Phase&nbsp;−1</strong> (async ingestion) runs at all times. Phases 0–2 <strong>defer</strong> whenever user queries or interactive requests are active (<code>high_priority_count &gt; 0</code>). Processes one item per loop iteration, then checks priority again.</p>
+
+<div class="pipeline">
+  <div class="step">
+    <div class="node wide" style="border-left: 3px solid #e8a838;">
+      <div class="node-title">Phase −1 — Async Ingestion</div>
+      <div class="node-desc">Dequeue a raw email from <code>ingest_queue</code>, run the full ingestion pipeline (parse → compress → embed → store → enqueue triage)</div>
+      <span class="data-tag">ingest_queue table</span>
+    </div>
+    <div class="side-note">
+      Highest daemon priority — runs even when <code>high_priority_count &gt; 0</code>. Populated by <code>POST /ingest/batch</code>. Progress via <code>GET /ingest/status</code>.
+    </div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide" style="border-left: 3px solid var(--accent);">
+      <div class="node-title">Phase 0 — Triage</div>
+      <div class="node-desc">Dequeue an email from <code>triage_queue</code>, propose tasks via LLM</div>
+      <span class="prompt-tag">propose_tasks</span>
+      <span class="data-tag">triage_queue table</span>
+    </div>
+    <div class="side-note">
+      Retrieves email metadata from DB + memories (if enabled). Outputs a <code>tasks[]</code> array with title, description, importance, deadline per task.
+    </div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Embed &amp; deduplicate</div>
+      <div class="node-desc">Compare each proposed task against existing tasks by vector similarity, then LLM dedup</div>
+      <span class="prompt-tag">task_dedup</span>
+    </div>
+    <div class="side-note">If a match is found, merges into the existing task with updated description/importance/deadline.</div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Create or merge task</div>
+      <div class="node-desc">Insert new task or update existing one in DB. Link triggering email.</div>
+      <span class="data-tag">tasks table</span>
+      <span class="data-tag">task_emails table</span>
+    </div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide" style="border-left: 3px solid var(--accent);">
+      <div class="node-title">Phase 1 — Context &amp; style selection</div>
+      <div class="node-desc">Find related emails by vector kNN search; find user's sent emails to trigger senders for tone matching</div>
+      <span class="prompt-tag">select_evidence</span>
+    </div>
+    <div class="side-note">Context: vector similarity to task + triggers, filtered by LLM relevance.<br/>Style: capped at 4 emails, only matches <code>from</code> field of trigger emails.</div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Upload &amp; compress bodies</div>
+      <div class="node-desc">Thunderbird uploads raw RFC822; server extracts &amp; compresses per role</div>
+      <span class="prompt-tag">compress_new_content_evidence</span>
+      <span class="prompt-tag">compress_quoted_context_evidence</span>
+    </div>
+    <div class="side-note">Trigger/context: NEW CONTENT + QUOTED CONTEXT (no attachments).<br/>Style: NEW CONTENT only (for tone matching).</div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide" style="border-left: 3px solid var(--accent);">
+      <div class="node-title">Phase 2 — Generate first message</div>
+      <div class="node-desc">Produce a tl;dr briefing + initial draft reply for the user</div>
+      <span class="prompt-tag">task_first_message</span>
+    </div>
+    <div class="side-note">
+      Sets <code>context_ready = true</code>. The task now appears fully loaded in the UI.
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>3. Query Chat (Email Q&amp;A)</h2>
+<p style="color:var(--muted);font-size:0.82rem;margin-bottom:12px;">The general-purpose email search and Q&amp;A conversation via <code>/query</code>.</p>
+
+<div class="pipeline">
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">User question</div>
+      <div class="node-desc">Free-text question about the email archive</div>
+    </div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Query rewrite + HyDE</div>
+      <div class="node-desc">Rewrite for retrieval: contextual rewrite, hypothetical email, SQL filter, resolved question</div>
+      <span class="prompt-tag">query_rewrite</span>
+      <span class="prompt-tag">query_rewrite_field</span>
+    </div>
+    <div class="side-note"><code>query_rewrite_field</code> is included only on multi-turn conversations (adds the <code>rewrite</code> field).</div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Vector search + SQL filter</div>
+      <div class="node-desc">Cosine similarity search with optional SQL WHERE and reranking</div>
+      <span class="data-tag">emails table (pgvector)</span>
+    </div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Select evidence</div>
+      <div class="node-desc">LLM decides which retrieved emails need full body loading</div>
+      <span class="prompt-tag">select_evidence</span>
+    </div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Load &amp; compress bodies</div>
+      <div class="node-desc">Fetch full email text, compress to fit context window</div>
+      <span class="prompt-tag">compress_new_content_evidence</span>
+      <span class="prompt-tag">compress_quoted_context_evidence</span>
+    </div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Generate answer</div>
+      <div class="node-desc">System prompt + history summary + tail + evidence emails + question</div>
+      <span class="prompt-tag">chat</span>
+      <span class="prompt-tag">chat_question_suffix</span>
+    </div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Summarize session</div>
+      <div class="node-desc">Rolling summary when conversation grows past threshold</div>
+      <span class="prompt-tag">conversation_summary</span>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>4. Task Chat (draft-then-refine)</h2>
+<p style="color:var(--muted);font-size:0.82rem;margin-bottom:12px;">Per-task conversation via <code>/task/chat</code>. The daemon produces a first draft; the LLM then asks targeted questions to refine it. Supports structured markers for side effects and <code>[RETRIEVE]</code> for on-demand archive search.</p>
+
+<div class="pipeline">
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">User message</div>
+      <div class="node-desc">Free-text input in the task conversation</div>
+    </div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Build prompt</div>
+      <div class="node-desc">System prompt + trigger/context/style emails + retrieved emails (if any) + memories + history summary + conversation tail</div>
+      <span class="prompt-tag">task_interview</span>
+    </div>
+    <div class="side-note">
+      Email bodies from <code>task_emails</code>, labeled [trigger], [context], [style].<br/>
+      On completion calls: ephemeral [retrieved] emails are injected into the context too.
+    </div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Generate response</div>
+      <div class="node-desc">LLM produces a question, a revised [DRAFT], other markers, or a [RETRIEVE] block</div>
+    </div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide" style="border-left: 3px solid #e8a838;">
+      <div class="node-title">[RETRIEVE] branch (optional)</div>
+      <div class="node-desc">If the LLM outputs <code>[RETRIEVE]{…}[/RETRIEVE]</code>, the server runs the search pipeline instead of processing markers</div>
+    </div>
+    <div class="side-note">
+      Parses search JSON (question, HyDE fields, SQL filter).<br/>
+      Embeds queries → vector kNN → select evidence → return <code>message_ids</code> to Thunderbird.<br/>
+      TB uploads bodies to <code>/task/chat_bodies</code>, then re-calls <code>/task/chat</code> with <code>request_id</code>.<br/>
+      Retrieved emails are ephemeral (not stored as task_emails).
+    </div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Parse markers</div>
+      <div class="node-desc">[DRAFT], [SCORE], [DEADLINE], [TITLE], [DONE], [TASK_NEW], [LINK], [MEMORY], [RETRIEVE]</div>
+    </div>
+    <div class="side-note">Each marker triggers a side effect: create/revise draft, update fields, spawn new task, search archive, etc.</div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">[MEMORY] → Rule + templates</div>
+      <div class="node-desc">Extract symbolic rule and generate template emails for the memory</div>
+      <span class="prompt-tag">memory_rule_extract</span>
+      <span class="prompt-tag">memory_template_gen</span>
+    </div>
+    <div class="side-note">Only if a [MEMORY] marker is present in the response.</div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
+      <div class="node-title">Lifecycle</div>
+      <div class="node-desc">Rolling conversation summary, or archive on [DONE]</div>
+      <span class="prompt-tag">conversation_summary</span>
+      <span class="prompt-tag">task_archive</span>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>Shared / Reference Prompts</h2>
+<div class="pipeline" style="gap:8px;">
+  <div class="step" style="flex-wrap:wrap;gap:8px;">
+    <div class="node" style="min-width:auto;">
+      <span class="prompt-tag">indexed_email_format</span>
+      <div class="node-desc" style="margin-top:4px;">Describes the format of indexed emails. Inserted into <code>query_rewrite</code>.</div>
+    </div>
+    <div class="node" style="min-width:auto;">
+      <span class="prompt-tag">email_body_sections</span>
+      <div class="node-desc" style="margin-top:4px;">Explains the labelled body sections. Used in <code>chat</code> and compression prompts.</div>
+    </div>
+    <div class="node" style="min-width:auto;">
+      <span class="prompt-tag">task_summary</span>
+      <div class="node-desc" style="margin-top:4px;">Standalone task briefing (not currently in a pipeline).</div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

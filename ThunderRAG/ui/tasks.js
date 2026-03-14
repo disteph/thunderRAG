@@ -42,6 +42,8 @@ let isLoading = false;    // Whether an LLM call is in progress
 let selectedTaskIds = new Set();  // Multi-select for bulk actions
 let lastClickedTaskIdx = -1;     // For shift-click range selection
 let filterEmailIds = null;       // Email IDs filter from URL params (persisted across refreshes)
+let dragSourceTaskId = null;     // Task being dragged
+let pauseState = { tasks_paused: false, ingest_paused: false };
 
 /* ── Initialization ── */
 
@@ -72,17 +74,23 @@ async function init() {
     selectTask("general");
   });
 
-  // Memories click handler
-  document.getElementById("memoriesItem").addEventListener("click", () => {
+  // Title click → DB Stats
+  document.getElementById("titleLink").addEventListener("click", () => {
+    selectedTaskIds.clear();
+    selectTask("dbstats");
+  });
+
+  // Memories button
+  document.getElementById("memoriesBtn").addEventListener("click", () => {
     selectedTaskIds.clear();
     selectTask("memories");
   });
 
-  // DB Stats click handler
-  document.getElementById("dbStatsItem").addEventListener("click", () => {
-    selectedTaskIds.clear();
-    selectTask("dbstats");
-  });
+  // Pause toggle buttons
+  document.getElementById("pauseTasksBtn").addEventListener("click", () => togglePause("tasks"));
+  document.getElementById("pauseIngestBtn").addEventListener("click", () => togglePause("ingest"));
+  await fetchPauseStatus();
+  setInterval(fetchPauseStatus, 30000);
 
   // Load models into the left-pane dropdowns
   await fetchModels();
@@ -241,18 +249,15 @@ function renderTaskList() {
   const list = document.getElementById("taskList");
   list.innerHTML = "";
 
-  // Update General chat, Memories, and DB Stats active states
+  // Update General chat active state
   const gcEl = document.getElementById("generalChatItem");
   if (gcEl) {
     gcEl.className = "task-item" + (activeTaskId === "general" ? " active" : "");
   }
-  const memEl = document.getElementById("memoriesItem");
-  if (memEl) {
-    memEl.className = "task-item" + (activeTaskId === "memories" ? " active" : "");
-  }
-  const dbEl = document.getElementById("dbStatsItem");
-  if (dbEl) {
-    dbEl.className = "task-item" + (activeTaskId === "dbstats" ? " active" : "");
+  // Update Memories button active state
+  const memBtn = document.getElementById("memoriesBtn");
+  if (memBtn) {
+    memBtn.className = "nav-btn" + (activeTaskId === "memories" ? " active" : "");
   }
 
   if (tasks.length === 0) {
@@ -264,12 +269,16 @@ function renderTaskList() {
     return;
   }
 
+  const sortBy = document.getElementById("sortBy").value;
+  const draggable = sortBy === "manual" || sortBy === "deadline" || sortBy === "importance";
+
   for (const t of tasks) {
     const el = document.createElement("div");
     const isActive = t.task_id === activeTaskId;
     const isSelected = selectedTaskIds.has(t.task_id);
     el.className = "task-item" + (isActive ? " active" : "") + (isSelected ? " selected" : "");
     el.dataset.id = t.task_id;
+    if (draggable) el.draggable = true;
 
     const badge = statusBadge(t.status);
     const deadline = t.deadline ? `<span style="font-size:10px;">${esc(t.deadline)}</span>` : "";
@@ -310,7 +319,104 @@ function renderTaskList() {
       }
       showTaskContextMenu(ev, t.task_id, t.title);
     });
+
+    /* ── Drag-and-drop ── */
+    if (draggable) {
+      el.addEventListener("dragstart", (ev) => {
+        dragSourceTaskId = t.task_id;
+        el.classList.add("dragging");
+        ev.dataTransfer.effectAllowed = "move";
+        ev.dataTransfer.setData("text/plain", t.task_id);
+      });
+      el.addEventListener("dragend", () => {
+        dragSourceTaskId = null;
+        el.classList.remove("dragging");
+        clearDropIndicators();
+      });
+      el.addEventListener("dragover", (ev) => {
+        if (!dragSourceTaskId || dragSourceTaskId === t.task_id) return;
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = "move";
+        clearDropIndicators();
+        const rect = el.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        if (ev.clientY < midY) {
+          el.classList.add("drop-above");
+        } else {
+          el.classList.add("drop-below");
+        }
+      });
+      el.addEventListener("dragleave", () => {
+        el.classList.remove("drop-above", "drop-below");
+      });
+      el.addEventListener("drop", (ev) => {
+        ev.preventDefault();
+        clearDropIndicators();
+        if (!dragSourceTaskId || dragSourceTaskId === t.task_id) return;
+        const rect = el.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        const insertBefore = ev.clientY < midY;
+        handleTaskDrop(dragSourceTaskId, t.task_id, taskIdx, insertBefore);
+        dragSourceTaskId = null;
+      });
+    }
+
     list.appendChild(el);
+  }
+}
+
+function clearDropIndicators() {
+  for (const el of document.querySelectorAll(".task-item.drop-above, .task-item.drop-below")) {
+    el.classList.remove("drop-above", "drop-below");
+  }
+}
+
+async function handleTaskDrop(sourceId, targetId, targetIdx, insertBefore) {
+  const sortBy = document.getElementById("sortBy").value;
+  const srcIdx = tasks.findIndex(t => t.task_id === sourceId);
+  if (srcIdx < 0) return;
+
+  if (sortBy === "manual") {
+    // Reorder: move source to new position in local array, then persist sort_order
+    const [moved] = tasks.splice(srcIdx, 1);
+    let newIdx = tasks.findIndex(t => t.task_id === targetId);
+    if (newIdx < 0) newIdx = tasks.length;
+    if (!insertBefore) newIdx++;
+    tasks.splice(newIdx, 0, moved);
+    // Assign sort_order values and persist
+    const order = tasks.map((t, i) => ({ task_id: t.task_id, sort_order: i }));
+    renderTaskList();
+    try {
+      const base = await getServerBase();
+      await fetch(`${base}/task/reorder`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order }),
+      });
+    } catch (e) {
+      console.error("[task.reorder]", e);
+    }
+  } else if (sortBy === "deadline" || sortBy === "importance") {
+    // Mutate the dragged task's field to match the target's
+    const target = tasks[targetIdx];
+    if (!target) return;
+    const payload = { task_id: sourceId };
+    if (sortBy === "deadline") {
+      payload.deadline = target.deadline || "";
+    } else {
+      payload.importance_score = target.importance_score;
+    }
+    try {
+      const base = await getServerBase();
+      await fetch(`${base}/task/update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      await loadTaskList(filterEmailIds);
+    } catch (e) {
+      console.error("[task.drop-mutate]", e);
+    }
   }
 }
 
@@ -399,7 +505,15 @@ function buildEmailRow(e) {
   const link = document.createElement("a");
   link.className = "email-link";
   link.href = "#";
-  link.textContent = `${sender} — ${subject}${date ? " (" + date + ")" : ""}`;
+  if (e.role === "style") {
+    link.textContent = subject;
+    const recipParts = [];
+    if (e.recipient) recipParts.push("To: " + e.recipient);
+    if (e.cc) recipParts.push("Cc: " + e.cc);
+    if (recipParts.length) link.title = recipParts.join("\n");
+  } else {
+    link.textContent = `${sender} — ${subject}`;
+  }
   link.addEventListener("click", async (ev) => {
     ev.preventDefault();
     try {
@@ -491,6 +605,12 @@ function buildEmailRow(e) {
   tankBtn.addEventListener("mouseleave", dismissPopup);
 
   row.appendChild(link);
+  if (date) {
+    const dateSpan = document.createElement("span");
+    dateSpan.className = "email-date";
+    dateSpan.textContent = date;
+    row.appendChild(dateSpan);
+  }
   row.appendChild(tankBtn);
   return row;
 }
@@ -1422,6 +1542,7 @@ function renderMemoriesPane() {
 /* ── DB Stats (mid pane) ── */
 
 let dbStatsData = [];
+let dbStatsTotalSize = "";
 
 async function loadDbStats() {
   try {
@@ -1430,9 +1551,11 @@ async function loadDbStats() {
     if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
     const data = await resp.json();
     dbStatsData = data.tables || [];
+    dbStatsTotalSize = data.total_size || "";
   } catch (e) {
     console.error("[db_stats]", e);
     dbStatsData = [];
+    dbStatsTotalSize = "";
   }
 }
 
@@ -1458,9 +1581,21 @@ function renderDbStatsPane() {
     return;
   }
 
-  // Compute total rows and prepare display
+  // Group tables by category
+  const catMeta = {
+    email:  { label: "Email (metadata & embeddings only — no bodies stored)", clearable: false },
+    task:   { label: "Tasks (stores compressed email bodies)", clearable: true, endpoint: "/admin/clear_tasks" },
+    memory: { label: "Memories (derived from emails)", clearable: true, endpoint: "/admin/clear_memories" },
+    other:  { label: "Other", clearable: false }
+  };
+  const groups = {};
   let totalRows = 0;
-  for (const t of dbStatsData) totalRows += t.rows;
+  for (const t of dbStatsData) {
+    const cat = t.category || "other";
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(t);
+    totalRows += t.rows;
+  }
 
   const table = document.createElement("table");
   table.style.cssText = "width:100%;border-collapse:collapse;font-size:13px;";
@@ -1469,21 +1604,35 @@ function renderDbStatsPane() {
   const thead = document.createElement("thead");
   thead.innerHTML = `<tr style="border-bottom:2px solid var(--border,#ddd);text-align:left;">
     <th style="padding:6px 12px 6px 0;">Table</th>
+    <th style="padding:6px 12px;">Description</th>
     <th style="padding:6px 12px;text-align:right;">Rows</th>
     <th style="padding:6px 0 6px 12px;text-align:right;">Size</th>
   </tr>`;
   table.appendChild(thead);
 
   const tbody = document.createElement("tbody");
-  for (const t of dbStatsData) {
-    const tr = document.createElement("tr");
-    tr.style.borderBottom = "1px solid var(--border,#eee)";
-    tr.innerHTML = `
-      <td style="padding:5px 12px 5px 0;font-family:monospace;font-size:12px;">${esc(t.name)}</td>
-      <td style="padding:5px 12px;text-align:right;">${t.rows.toLocaleString()}</td>
-      <td style="padding:5px 0 5px 12px;text-align:right;">${esc(t.size)}</td>
-    `;
-    tbody.appendChild(tr);
+  for (const cat of ["email", "task", "memory", "other"]) {
+    const rows = groups[cat];
+    if (!rows || rows.length === 0) continue;
+    const meta = catMeta[cat] || catMeta.other;
+
+    // Category header row
+    const catTr = document.createElement("tr");
+    catTr.innerHTML = `<td colspan="4" style="padding:10px 0 4px 0;font-weight:bold;font-size:12px;color:var(--fg,#333);border-bottom:1px solid var(--border,#ddd);">
+      ${esc(meta.label)}</td>`;
+    tbody.appendChild(catTr);
+
+    for (const t of rows) {
+      const tr = document.createElement("tr");
+      tr.style.borderBottom = "1px solid var(--border,#eee)";
+      tr.innerHTML = `
+        <td style="padding:5px 12px 5px 12px;font-family:monospace;font-size:12px;">${esc(t.name)}</td>
+        <td style="padding:5px 12px;font-size:12px;color:var(--muted,#888);">${esc(t.description || '')}</td>
+        <td style="padding:5px 12px;text-align:right;">${t.rows.toLocaleString()}</td>
+        <td style="padding:5px 0 5px 12px;text-align:right;">${esc(t.size)}</td>
+      `;
+      tbody.appendChild(tr);
+    }
   }
 
   // Total row
@@ -1491,27 +1640,105 @@ function renderDbStatsPane() {
   totalTr.style.cssText = "border-top:2px solid var(--border,#ddd);font-weight:bold;";
   totalTr.innerHTML = `
     <td style="padding:6px 12px 6px 0;">Total</td>
+    <td style="padding:6px 12px;"></td>
     <td style="padding:6px 12px;text-align:right;">${totalRows.toLocaleString()}</td>
-    <td style="padding:6px 0 6px 12px;text-align:right;"></td>
+    <td style="padding:6px 0 6px 12px;text-align:right;">${esc(dbStatsTotalSize)}</td>
   `;
   tbody.appendChild(totalTr);
 
   table.appendChild(tbody);
   wrapper.appendChild(table);
 
-  // Refresh button
+  // Button row
+  const btnRow = document.createElement("div");
+  btnRow.style.cssText = "margin-top:12px;display:flex;gap:8px;align-items:center;";
+
   const refreshBtn = document.createElement("button");
   refreshBtn.textContent = "Refresh";
-  refreshBtn.style.cssText = "margin-top:12px;font-size:12px;";
+  refreshBtn.style.cssText = "font-size:12px;";
   refreshBtn.addEventListener("click", async () => {
     refreshBtn.disabled = true;
     refreshBtn.textContent = "Loading…";
     await loadDbStats();
     renderDbStatsPane();
   });
-  wrapper.appendChild(refreshBtn);
+  btnRow.appendChild(refreshBtn);
 
+  for (const cat of ["task", "memory"]) {
+    const meta = catMeta[cat];
+    if (!meta || !meta.clearable || !groups[cat]) continue;
+    const catRows = groups[cat];
+    const hasData = catRows.some(t => t.rows > 0);
+    if (!hasData) continue;
+
+    const catLabel = cat === "memory" ? "Memories" : cat.charAt(0).toUpperCase() + cat.slice(1) + "s";
+    const btn = document.createElement("button");
+    btn.textContent = `Clear ${catLabel}`;
+    btn.style.cssText = "font-size:12px;color:#c00;";
+    btn.addEventListener("click", async () => {
+      const names = catRows.map(t => t.name).join(", ");
+      if (!confirm(`Delete ALL data from: ${names}?\n\nThis cannot be undone.`)) return;
+      btn.disabled = true;
+      btn.textContent = "Clearing…";
+      try {
+        const base = await getServerBase();
+        const resp = await fetch(`${base}${meta.endpoint}`, { method: "POST" });
+        if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+        await loadDbStats();
+        renderDbStatsPane();
+      } catch (e) {
+        alert(`Error: ${e.message}`);
+        btn.disabled = false;
+        btn.textContent = `Clear ${catLabel}`;
+      }
+    });
+    btnRow.appendChild(btn);
+  }
+
+  wrapper.appendChild(btnRow);
   pane.appendChild(wrapper);
+}
+
+/* ── Pause controls ── */
+
+async function fetchPauseStatus() {
+  try {
+    const base = await getServerBase();
+    const resp = await fetch(`${base}/admin/pause`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    pauseState.tasks_paused = !!data.tasks_paused;
+    pauseState.ingest_paused = !!data.ingest_paused;
+    updatePauseButtons();
+  } catch (_e) { /* server may be down */ }
+}
+
+function updatePauseButtons() {
+  const tb = document.getElementById("pauseTasksBtn");
+  const ib = document.getElementById("pauseIngestBtn");
+  if (tb) tb.classList.toggle("paused", pauseState.tasks_paused);
+  if (ib) ib.classList.toggle("paused", pauseState.ingest_paused);
+}
+
+async function togglePause(which) {
+  try {
+    const base = await getServerBase();
+    const body = {};
+    if (which === "tasks") body.tasks = !pauseState.tasks_paused;
+    if (which === "ingest") body.ingest = !pauseState.ingest_paused;
+    const resp = await fetch(`${base}/admin/pause`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    pauseState.tasks_paused = !!data.tasks_paused;
+    pauseState.ingest_paused = !!data.ingest_paused;
+    updatePauseButtons();
+  } catch (e) {
+    console.error("[pause.toggle]", e);
+  }
 }
 
 /* ── Boot ── */
