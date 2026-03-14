@@ -53,9 +53,7 @@
         flex: 1;
       }
       textarea {
-        width: 100%;
-        min-height: 90px;
-        resize: vertical;
+        box-sizing: border-box;
       }
       button {
         padding: 8px 12px;
@@ -339,17 +337,33 @@
       }
 
       .composer {
-        padding: 12px 14px;
+        padding: 8px 14px;
         border-top: 1px solid rgba(127, 127, 127, 0.25);
         background: Canvas;
-      }
-      .composer-row {
         display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-        margin-top: 8px;
+        gap: 8px;
+        align-items: flex-end;
+        flex-shrink: 0;
       }
+      .composer textarea {
+        flex: 1;
+        font-size: 13px;
+        padding: 6px 8px;
+        min-height: 36px;
+        max-height: 100px;
+        resize: none;
+        font-family: inherit;
+      }
+      .composer button {
+        padding: 6px 12px;
+        font-size: 13px;
+        cursor: pointer;
+        border-radius: 8px;
+        border: 1px solid rgba(127,127,127,0.35);
+        background: Field;
+        color: FieldText;
+      }
+      .composer button:hover { background: rgba(127,127,127,0.1); }
       /* Voice buttons */
       .voice-mic-btn, .voice-speak-btn {
         background: none;
@@ -412,15 +426,12 @@
       <div id="chat" class="chat"></div>
 
       <div class="composer">
-        <label for="question">Message</label>
-        <textarea id="question" placeholder="Ask something about your email archive..." autofocus></textarea>
-        <div class="composer-row">
-          <span class="muted">Enter to send. Cmd+Enter to add a new line.</span>
-          <button id="askBtn">Send</button>
-        </div>
+        <textarea id="question" rows="1" placeholder="Ask something about your email archive..." autofocus></textarea>
+        <button id="askBtn">Send</button>
       </div>
     </div>
 
+    <script src="marked.min.js"></script>
     <script src="voice.js"></script>
     <script src="query.js"></script>
   </body>

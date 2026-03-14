@@ -821,16 +821,24 @@ let with_high_priority f =
   Atomic.incr high_priority_count;
   Fun.protect f ~finally:(fun () -> Atomic.decr high_priority_count)
 
-(* Generate a random UUID-like task ID.
-   Random.bits() returns 30 bits; we split into properly-sized segments. *)
+(* Generate a UUID v4 task ID using /dev/urandom for proper randomness. *)
 let generate_task_id () =
-  Printf.sprintf "%08x-%04x-%04x-%04x-%04x%08x"
-    (Random.bits () land 0xFFFFFFFF)
-    (Random.int 0xFFFF)
-    (Random.int 0xFFFF)
-    (Random.int 0xFFFF)
-    (Random.int 0xFFFF)
-    (Random.bits () land 0x3FFFFFFF)
+  let buf = Bytes.create 16 in
+  let ic = open_in_bin "/dev/urandom" in
+  Fun.protect ~finally:(fun () -> close_in_noerr ic)
+    (fun () -> really_input ic buf 0 16);
+  (* Set version 4 and variant bits per RFC 4122 *)
+  Bytes.set buf 6 (Char.chr ((Char.code (Bytes.get buf 6) land 0x0F) lor 0x40));
+  Bytes.set buf 8 (Char.chr ((Char.code (Bytes.get buf 8) land 0x3F) lor 0x80));
+  Printf.sprintf "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x"
+    (Char.code (Bytes.get buf 0)) (Char.code (Bytes.get buf 1))
+    (Char.code (Bytes.get buf 2)) (Char.code (Bytes.get buf 3))
+    (Char.code (Bytes.get buf 4)) (Char.code (Bytes.get buf 5))
+    (Char.code (Bytes.get buf 6)) (Char.code (Bytes.get buf 7))
+    (Char.code (Bytes.get buf 8)) (Char.code (Bytes.get buf 9))
+    (Char.code (Bytes.get buf 10)) (Char.code (Bytes.get buf 11))
+    (Char.code (Bytes.get buf 12)) (Char.code (Bytes.get buf 13))
+    (Char.code (Bytes.get buf 14)) (Char.code (Bytes.get buf 15))
 
 (*
   Task proposal processing (Phase D)
@@ -841,6 +849,33 @@ let generate_task_id () =
   3. If neighbors found, call dedup LLM to decide: new task or update existing
   4. Create or update accordingly, link the triggering email
 *)
+(* Retrieve similar done/dismissed tasks and format as prior-resolutions text *)
+let format_prior_resolutions ~(embedding : float list) () : string =
+  let top_k = !task_resolved_top_k in
+  let max_dist = !task_resolved_max_distance in
+  if top_k <= 0 then ""
+  else
+  match Rag_lib.Pg.task_knn_resolved ~embedding ~top_k () with
+  | Error e ->
+      Printf.eprintf "[prior_resolutions] kNN error: %s\n%!" e; ""
+  | Ok rows ->
+      let filtered = List.filter (fun (_, _, _, _, _, _, dist) -> dist <= max_dist) rows in
+      if filtered = [] then ""
+      else begin
+        let buf = Buffer.create 1024 in
+        List.iter (fun (_tid, title, _desc, status, notes, draft_body, dist) ->
+          Buffer.add_string buf (Printf.sprintf "--- [%s, dist=%.3f] \"%s\"\n" status dist title);
+          if String.trim notes <> "" then
+            Buffer.add_string buf (Printf.sprintf "Resolution: %s\n" (String.trim notes));
+          if String.trim draft_body <> "" then
+            Buffer.add_string buf (Printf.sprintf "Draft sent:\n%s\n" (String.trim draft_body));
+          Buffer.add_string buf "---\n\n"
+        ) filtered;
+        let text = String.trim (Buffer.contents buf) in
+        let max_chars = 4000 in
+        if String.length text > max_chars then String.sub text 0 max_chars else text
+      end
+
 let process_task_proposals ~client ~sw ~(doc_id : string)
     ~(body_text : string) ~(email_date : string)
     ~(proposals : task_proposal list) () : unit =
@@ -903,11 +938,15 @@ let process_task_proposals ~client ~sw ~(doc_id : string)
       if neighbors = [] then begin
         (* No neighbors — create new task directly *)
         let task_id = generate_task_id () in
+        let prior = format_prior_resolutions ~embedding () in
+        if prior <> "" then
+          Printf.printf "[task_dedup] found prior resolutions (%d chars) for '%s'\n%!" (String.length prior) tp.tp_title;
         (match Rag_lib.Pg.create_task ~task_id ~title:tp.tp_title
             ~description:tp.tp_description
             ~importance_score:tp.tp_importance
             ~deadline:tp.tp_deadline
-            ~embedding ~conversation_json:"[]" ~drafts_json:"[]" () with
+            ~embedding ~conversation_json:"[]" ~drafts_json:"[]"
+            ~prior_resolutions:prior () with
         | Ok () ->
             (match Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:ndoc ~role:"trigger" ~compressed_body:body_text () with
             | Ok () -> ()
@@ -956,11 +995,13 @@ let process_task_proposals ~client ~sw ~(doc_id : string)
             Printf.eprintf "[task_dedup] LLM error: %s — creating new task\n%!" msg;
             (* Fall back to creating new *)
             let task_id = generate_task_id () in
+            let prior = format_prior_resolutions ~embedding () in
             (match Rag_lib.Pg.create_task ~task_id ~title:tp.tp_title
                 ~description:tp.tp_description
                 ~importance_score:tp.tp_importance
                 ~deadline:tp.tp_deadline
-                ~embedding ~conversation_json:"[]" ~drafts_json:"[]" () with
+                ~embedding ~conversation_json:"[]" ~drafts_json:"[]"
+                ~prior_resolutions:prior () with
             | Ok () ->
                 ignore (Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:ndoc ~role:"trigger" ~compressed_body:body_text ());
                 Printf.printf "[task_dedup] NEW task %s: %s (dedup LLM failed)\n%!" task_id tp.tp_title;
@@ -1035,11 +1076,15 @@ let process_task_proposals ~client ~sw ~(doc_id : string)
             end else begin
               (* Create new task *)
               let task_id = generate_task_id () in
+              let prior = format_prior_resolutions ~embedding () in
+              if prior <> "" then
+                Printf.printf "[task_dedup] found prior resolutions (%d chars) for '%s'\n%!" (String.length prior) tp.tp_title;
               (match Rag_lib.Pg.create_task ~task_id ~title:tp.tp_title
                   ~description:tp.tp_description
                   ~importance_score:tp.tp_importance
                   ~deadline:tp.tp_deadline
-                  ~embedding ~conversation_json:"[]" ~drafts_json:"[]" () with
+                  ~embedding ~conversation_json:"[]" ~drafts_json:"[]"
+                  ~prior_resolutions:prior () with
               | Ok () ->
                   (match Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:ndoc ~role:"trigger" ~compressed_body:body_text () with
                   | Ok () -> ()
@@ -1737,13 +1782,30 @@ let archive_task_conversation ~client ~sw ~(task_id : string)
     match ollama_chat ~client ~sw ~label:"task_archive" ~messages () with
     | Ok raw ->
         let notes = trim_to_max (String.trim raw) target_chars in
+        (* Trim drafts to only the last entry *)
+        let trimmed_drafts =
+          match Rag_lib.Pg.get_task task_id with
+          | Ok (Some json) ->
+              let kv = match json with `Assoc kv -> kv | _ -> [] in
+              (match List.assoc_opt "drafts" kv with
+              | Some (`List (_ :: _ as dl)) ->
+                  let last = List.nth dl (List.length dl - 1) in
+                  Some (Yojson.Safe.to_string (`List [last]))
+              | _ -> Some "[]")
+          | _ -> None
+        in
         (match Rag_lib.Pg.update_task ~task_id
             ~notes
             ~conversation_json:"[]"
             ~history_summary:""
+            ?drafts_json:trimmed_drafts
             () with
         | Ok _ ->
-            Printf.printf "[task_lifecycle] archived task %s (%d char notes)\n%!" task_id (String.length notes)
+            Printf.printf "[task_lifecycle] archived task %s (%d char notes)\n%!" task_id (String.length notes);
+            (* Trim storage: delete context/style emails, clear compressed_body *)
+            (match Rag_lib.Pg.trim_archived_task_storage task_id with
+            | Ok () -> Printf.printf "[task_lifecycle] trimmed storage for %s\n%!" task_id
+            | Error e -> Printf.eprintf "[task_lifecycle] trim storage error: %s\n%!" e)
         | Error e ->
             Printf.eprintf "[task_lifecycle] archive update error: %s\n%!" e)
     | Error e ->
@@ -1879,6 +1941,7 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
   let bcc_ = header_or_empty headers "bcc" |> decode_rfc2047 |> sanitize_utf8 in
   let subject = header_or_empty headers "subject" |> decode_rfc2047 |> sanitize_utf8 in
   let date_ = header_or_empty headers "date" |> decode_rfc2047 |> sanitize_utf8 in
+  let in_reply_to = header_or_empty headers "in-reply-to" |> String.trim in
   (* Reject emails with completely empty metadata — likely encrypted/unreadable *)
   if String.trim from_ = "" && String.trim to_ = "" && String.trim subject = "" then (
     let ndoc = Rag_lib.Pg.normalize_doc_id doc_id in
@@ -1910,7 +1973,7 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
         ~attachments_json:att_pg_array
         ~action_score:None ~importance_score:None ~reply_by:""
         ~ingested_at:(now_utc_iso8601 ())
-        ~whoami
+        ~whoami ~in_reply_to
         ~on_done:(record stats_pg_upsert) ()
     with
     | Error e ->
@@ -2063,7 +2126,7 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
       ~attachments_json:att_pg_array
       ~action_score:None ~importance_score:None ~reply_by:""
       ~ingested_at:(now_utc_iso8601 ())
-      ~whoami
+      ~whoami ~in_reply_to
       ~on_done:(record stats_pg_upsert) ()
     with
     | Error e ->
@@ -2078,6 +2141,40 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
             (resp, Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
         | Ok () ->
             Printf.printf "[ingest.ok] doc_id=%s chunks=%d\n%!" ndoc (List.length embedded_chunks);
+            (* Reply-chain linking: if this is a sent email replying to a task trigger,
+               link it to the task and record the actual reply content *)
+            if in_reply_to <> "" then begin
+              let irt_normalized = Rag_lib.Pg.normalize_doc_id in_reply_to in
+              match Rag_lib.Pg.tasks_by_trigger_doc_id irt_normalized with
+              | Ok task_ids when task_ids <> [] ->
+                  List.iter (fun task_id ->
+                    Printf.printf "[reply-link] sent email %s is a reply to trigger %s on task %s\n%!"
+                      ndoc irt_normalized task_id;
+                    (* Link the reply email to the task *)
+                    (match Rag_lib.Pg.link_email_to_task ~task_id ~doc_id ~role:"reply"
+                        ~compressed_body:new_body_capped () with
+                    | Ok () ->
+                        Printf.printf "[reply-link] linked reply %s to task %s\n%!" ndoc task_id
+                    | Error e ->
+                        Printf.eprintf "[reply-link] link error: %s\n%!" e);
+                    (* Auto-mark task as done if it's still open/in_progress *)
+                    (match Rag_lib.Pg.get_task task_id with
+                    | Ok (Some json) ->
+                        let kv = match json with `Assoc kv -> kv | _ -> [] in
+                        let status = match List.assoc_opt "status" kv with Some (`String s) -> s | _ -> "" in
+                        if status = "open" || status = "in_progress" then begin
+                          (match Rag_lib.Pg.update_task ~task_id ~status:"done" () with
+                          | Ok _ ->
+                              Printf.printf "[reply-link] auto-marked task %s as done (user replied)\n%!" task_id
+                          | Error e ->
+                              Printf.eprintf "[reply-link] auto-done error: %s\n%!" e)
+                        end
+                    | _ -> ())
+                  ) task_ids
+              | Ok _ -> ()
+              | Error e ->
+                  Printf.eprintf "[reply-link] lookup error for in_reply_to=%s: %s\n%!" irt_normalized e
+            end;
             (* Enqueue for async triage by the daemon (propose_tasks + process_task_proposals) *)
             if !task_auto_create then begin
               (match Rag_lib.Pg.enqueue_triage ~doc_id ~body_text ~compressed_body:new_body_capped () with
@@ -5980,6 +6077,7 @@ let handler ~client ~sw ~clock _socket request body =
             let title = task_str "title" in
             let description = task_str "description" in
             let history_summary = task_str "history_summary" in
+            let prior_resolutions = task_str "prior_resolutions" in
             let conversation =
               match List.assoc_opt "conversation" task_kv with
               | Some (`List ms) -> ms
@@ -6164,6 +6262,10 @@ let handler ~client ~sw ~clock _socket request body =
               if String.trim memories_text = "" then ""
               else "USER MEMORIES (persistent preferences — follow these):\n" ^ memories_text
             in
+            let prior_resolutions_section =
+              if String.trim prior_resolutions = "" then ""
+              else "PRIOR RESOLUTIONS (similar tasks resolved in the past — use as reference for tone, approach, and content):\n" ^ prior_resolutions
+            in
             let system_prompt =
               get_prompt "task_interview"
                 ~default:"You are a task management assistant. Help the user work through their tasks. \
@@ -6183,6 +6285,7 @@ let handler ~client ~sw ~clock _socket request body =
                   ("{{style_context}}", style_context);
                   ("{{history_summary}}", if String.trim history_summary = "" then "(no prior conversation)" else history_summary);
                   ("{{user_memories}}", memories_section);
+                  ("{{prior_resolutions}}", prior_resolutions_section);
                 ]
             in
 
@@ -6442,6 +6545,28 @@ let handler ~client ~sw ~clock _socket request body =
                 if is_done then
                   side_effects := `Assoc [ ("type", `String "done") ] :: !side_effects;
 
+                (* Parse [DISMISS] *)
+                let is_dismissed = find_sub resp_text "[DISMISS]" 0 <> None in
+                if is_dismissed then
+                  side_effects := `Assoc [ ("type", `String "dismiss") ] :: !side_effects;
+
+                (* Parse [DELETE] *)
+                let is_deleted = find_sub resp_text "[DELETE]" 0 <> None in
+                if is_deleted then
+                  side_effects := `Assoc [ ("type", `String "delete") ] :: !side_effects;
+
+                (* Parse [RECOMPUTE] *)
+                if find_sub resp_text "[RECOMPUTE]" 0 <> None then
+                  side_effects := `Assoc [ ("type", `String "recompute") ] :: !side_effects;
+
+                (* Parse [NEXT] *)
+                if find_sub resp_text "[NEXT]" 0 <> None then
+                  side_effects := `Assoc [ ("type", `String "next") ] :: !side_effects;
+
+                (* Parse [PREVIOUS] *)
+                if find_sub resp_text "[PREVIOUS]" 0 <> None then
+                  side_effects := `Assoc [ ("type", `String "previous") ] :: !side_effects;
+
                 (* Parse [TASK_NEW title="..." description="..."] *)
                 (match find_sub resp_text "[TASK_NEW " 0 with
                 | None -> ()
@@ -6611,6 +6736,11 @@ let handler ~client ~sw ~clock _socket request body =
                       || (String.length l > 7 && String.sub l 0 7 = "[TITLE ")
                       || (String.length l > 13 && String.sub l 0 13 = "[DESCRIPTION ")
                       || l = "[DONE]"
+                      || l = "[DISMISS]"
+                      || l = "[DELETE]"
+                      || l = "[RECOMPUTE]"
+                      || l = "[NEXT]"
+                      || l = "[PREVIOUS]"
                       || (String.length l > 10 && String.sub l 0 10 = "[TASK_NEW ")
                       || (String.length l > 6 && String.sub l 0 6 = "[LINK ")
                       || (String.length l > 8 && String.sub l 0 8 = "[MEMORY ")
@@ -6649,6 +6779,7 @@ let handler ~client ~sw ~clock _socket request body =
                 in
                 let new_status =
                   if is_done then Some "done"
+                  else if is_dismissed then Some "dismissed"
                   else if conversation = [] then Some "in_progress"
                   else None
                 in
@@ -6673,7 +6804,7 @@ let handler ~client ~sw ~clock _socket request body =
                 let task_history_summary = match List.assoc_opt "history_summary" task_kv with
                   | Some (`String s) -> s | _ -> ""
                 in
-                if is_done then begin
+                if is_done || is_dismissed then begin
                   archive_task_conversation ~client ~sw ~task_id
                     ~conversation:final_conversation
                     ~history_summary:task_history_summary
@@ -6690,6 +6821,30 @@ let handler ~client ~sw ~clock _socket request body =
                   maybe_summarize_task_conversation ~client ~sw ~task_id
                     ~conversation:final_conversation
                     ~history_summary:task_history_summary ();
+
+                (* Handle [RECOMPUTE]: reset context flags and clear context/style emails *)
+                if find_sub resp_text "[RECOMPUTE]" 0 <> None then begin
+                  (match Rag_lib.Pg.update_task ~task_id
+                      ~context_prefetched:false ~context_ready:false
+                      ~context_emails_json:"[]" () with
+                  | Ok _ ->
+                      ignore (Rag_lib.Pg.delete_task_context_and_style task_id);
+                      Printf.printf "[task_chat] recompute triggered for task %s\n%!" task_id;
+                      !notify_prefetch ()
+                  | Error e ->
+                      Printf.eprintf "[task_chat] recompute error: %s\n%!" e)
+                end;
+
+                (* Handle [DELETE]: delete the task *)
+                if is_deleted then begin
+                  (match Rag_lib.Pg.delete_task task_id with
+                  | Ok true ->
+                      Printf.printf "[task_chat] deleted task %s via [DELETE] marker\n%!" task_id
+                  | Ok false ->
+                      Printf.eprintf "[task_chat] task %s not found for deletion\n%!" task_id
+                  | Error e ->
+                      Printf.eprintf "[task_chat] delete error: %s\n%!" e)
+                end;
 
                 (* 9. Return response *)
                 let resp_json = `Assoc
@@ -7111,12 +7266,14 @@ let () =
   (* Phase 3: Generate first assistant message once all evidence bodies are present *)
   let generate_first_message ~client ~sw (task_id : string) (title : string) : unit =
     Printf.printf "[prefetch.gen] generating first message for task %s: %s\n%!" task_id title;
-    (* Load task description *)
-    let description = match Rag_lib.Pg.get_task task_id with
+    (* Load task description + prior_resolutions *)
+    let description, prior_resolutions = match Rag_lib.Pg.get_task task_id with
       | Ok (Some json) ->
           let kv = match json with `Assoc kv -> kv | _ -> [] in
-          (match List.assoc_opt "description" kv with Some (`String s) -> s | _ -> "")
-      | _ -> ""
+          let desc = match List.assoc_opt "description" kv with Some (`String s) -> s | _ -> "" in
+          let pr = match List.assoc_opt "prior_resolutions" kv with Some (`String s) -> s | _ -> "" in
+          (desc, pr)
+      | _ -> ("", "")
     in
     (* Load all task_emails with compressed bodies — same layout as /task/chat *)
     let task_emails = match Rag_lib.Pg.get_task_emails_with_bodies task_id with
@@ -7237,6 +7394,10 @@ let () =
       if String.trim memories_text = "" then ""
       else "USER MEMORIES (persistent preferences — follow these):\n" ^ memories_text
     in
+    let prior_resolutions_section =
+      if String.trim prior_resolutions = "" then ""
+      else "PRIOR RESOLUTIONS (similar tasks resolved in the past — use as reference for tone, approach, and content):\n" ^ prior_resolutions
+    in
     let system_prompt =
       get_prompt "task_first_message"
         ~default:"You are a task assistant. Based on the trigger email(s), write a self-contained \
@@ -7251,6 +7412,7 @@ let () =
           ("{{email_context}}", email_context);
           ("{{style_context}}", style_context);
           ("{{user_memories}}", memories_section);
+          ("{{prior_resolutions}}", prior_resolutions_section);
         ]
     in
     let messages : Yojson.Safe.t list =

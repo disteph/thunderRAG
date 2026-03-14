@@ -289,11 +289,12 @@ function renderTaskList() {
     const badge = statusBadge(t.status);
     const deadline = t.deadline ? `<span style="font-size:10px;">${esc(t.deadline)}</span>` : "";
     const pip = readinessPip(t.context_ready);
+    const score = t.importance_score != null ? `<span class="ti-score">${t.importance_score}</span>` : "";
 
     const displayTitle = (t.title || "(untitled)").replace(/^(?:Respond|Reply) to\b/i, "↩");
     el.innerHTML = `
       <div class="ti-title">${esc(displayTitle)}</div>
-      <div class="ti-meta">${badge} ${pip} ${deadline}</div>
+      <div class="ti-meta"><span class="ti-meta-left">${badge} ${pip} ${deadline}</span>${score}</div>
     `;
     const taskIdx = tasks.indexOf(t);
     el.addEventListener("click", (ev) => {
@@ -654,6 +655,40 @@ function buildCollapsibleSection(label, emailList) {
   return section;
 }
 
+function buildCollapsibleTextSection(label, text) {
+  const section = document.createElement("div");
+  section.className = "mh-email-section";
+
+  const toggle = document.createElement("div");
+  toggle.className = "mh-email-toggle";
+
+  const triangle = document.createElement("span");
+  triangle.className = "triangle";
+  triangle.textContent = "▶";
+
+  const labelSpan = document.createElement("span");
+  labelSpan.textContent = label;
+
+  toggle.appendChild(triangle);
+  toggle.appendChild(labelSpan);
+
+  const body = document.createElement("div");
+  body.className = "mh-email-section-body";
+  const pre = document.createElement("pre");
+  pre.style.cssText = "font-size:11px;line-height:1.4;white-space:pre-wrap;margin:4px 0 0;opacity:0.85;";
+  pre.textContent = text;
+  body.appendChild(pre);
+
+  toggle.addEventListener("click", () => {
+    triangle.classList.toggle("open");
+    body.classList.toggle("open");
+  });
+
+  section.appendChild(toggle);
+  section.appendChild(body);
+  return section;
+}
+
 /* ── Mid pane: conversation ── */
 
 function renderMidPane() {
@@ -695,7 +730,23 @@ function renderMidPane() {
 
   const titleEl = document.createElement("div");
   titleEl.className = "mh-title";
-  titleEl.textContent = activeTask.title || "(untitled)";
+  const titleText = document.createElement("span");
+  titleText.className = "mh-title-text";
+  titleText.textContent = activeTask.title || "(untitled)";
+  titleEl.appendChild(titleText);
+  const titleMeta = document.createElement("span");
+  titleMeta.className = "mh-title-meta";
+  if (activeTask.deadline) {
+    const dl = document.createElement("span");
+    dl.textContent = `📅 ${activeTask.deadline}`;
+    titleMeta.appendChild(dl);
+  }
+  if (activeTask.importance_score != null) {
+    const sc = document.createElement("span");
+    sc.textContent = `⚡${activeTask.importance_score}`;
+    titleMeta.appendChild(sc);
+  }
+  if (titleMeta.childNodes.length) titleEl.appendChild(titleMeta);
   header.appendChild(titleEl);
 
   const descEl = document.createElement("div");
@@ -727,6 +778,14 @@ function renderMidPane() {
     if (styleEmails.length) {
       emailsDiv.appendChild(buildCollapsibleSection(
         `Style emails (${styleEmails.length})`, styleEmails));
+    }
+
+    // Prior resolutions — collapsible
+    const priorRes = (activeTask.prior_resolutions || "").trim();
+    if (priorRes) {
+      const count = (priorRes.match(/^---\s*\[/gm) || []).length;
+      emailsDiv.appendChild(buildCollapsibleTextSection(
+        `Similar resolved tasks (${count})`, priorRes));
     }
 
     header.appendChild(emailsDiv);
@@ -773,7 +832,11 @@ function renderMidPane() {
     row.className = "msg msg-" + role;
     const bubble = document.createElement("div");
     bubble.className = "bubble";
-    bubble.textContent = role === "assistant" ? stripMarkers(content) : content;
+    if (role === "assistant" && typeof marked !== "undefined") {
+      bubble.innerHTML = marked.parse(stripMarkers(content));
+    } else {
+      bubble.textContent = role === "assistant" ? stripMarkers(content) : content;
+    }
     // Debug icon for assistant messages with _llm_debug
     if (role === "assistant" && m._llm_debug) {
       const debugBtn = document.createElement("span");
@@ -799,7 +862,7 @@ function renderMidPane() {
       const msgText = stripMarkers(content);
       speakBtn.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        Voice.speakText(msgText, speakBtn);
+        Voice.speakText(stripMarkdown(msgText), speakBtn);
       });
       bubble.style.position = "relative";
       bubble.appendChild(speakBtn);
@@ -857,6 +920,24 @@ function normalizeWhitespace(text) {
   return text.replace(/[\u00A0\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u202F\u205F]/g, " ");
 }
 
+function stripMarkdown(text) {
+  let s = text;
+  s = s.replace(/```[\s\S]*?```/g, "");       // fenced code blocks
+  s = s.replace(/`([^`]+)`/g, "$1");           // inline code
+  s = s.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1"); // images
+  s = s.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");  // links
+  s = s.replace(/^#{1,6}\s+/gm, "");           // headings
+  s = s.replace(/(\*\*|__)(.*?)\1/g, "$2");    // bold
+  s = s.replace(/(\*|_)(.*?)\1/g, "$2");       // italic
+  s = s.replace(/~~(.*?)~~/g, "$1");           // strikethrough
+  s = s.replace(/^>\s?/gm, "");               // blockquotes
+  s = s.replace(/^[-*+]\s+/gm, "");           // unordered lists
+  s = s.replace(/^\d+\.\s+/gm, "");           // ordered lists
+  s = s.replace(/^---+$/gm, "");              // horizontal rules
+  s = s.replace(/\n{3,}/g, "\n\n");           // collapse excess newlines
+  return s.trim();
+}
+
 function stripMarkers(text) {
   let s = normalizeWhitespace(text);
   const draftPlaceholder = "*(See the draft in the right-hand pane.)*";
@@ -870,6 +951,11 @@ function stripMarkers(text) {
   s = s.replace(/^\[TITLE [^\]]*\]\s*$/gm, "");
   s = s.replace(/^\[DESCRIPTION [^\]]*\]\s*$/gm, "");
   s = s.replace(/^\[DONE\]\s*$/gm, "");
+  s = s.replace(/^\[DISMISS\]\s*$/gm, "");
+  s = s.replace(/^\[DELETE\]\s*$/gm, "");
+  s = s.replace(/^\[RECOMPUTE\]\s*$/gm, "");
+  s = s.replace(/^\[NEXT\]\s*$/gm, "");
+  s = s.replace(/^\[PREVIOUS\]\s*$/gm, "");
   s = s.replace(/^\[TASK_NEW [^\]]*\]\s*$/gm, "");
   s = s.replace(/^\[LINK [^\]]*\]\s*$/gm, "");
   const hadMemory = /^\[MEMORY[\s\]]/m.test(s);
@@ -920,7 +1006,7 @@ async function sendMessage(inputEl) {
     if (typeof Voice !== "undefined" && Voice.getSettings().voiceAutoPlay && activeTask?.conversation?.length) {
       const last = activeTask.conversation[activeTask.conversation.length - 1];
       if (last.role === "assistant") {
-        Voice.speakText(stripMarkers(last.content));
+        Voice.speakText(stripMarkdown(stripMarkers(last.content)));
       }
     }
 
@@ -928,11 +1014,43 @@ async function sendMessage(inputEl) {
     if (data.side_effects) {
       for (const se of data.side_effects) {
         if (se.type === "task_new") {
-          // Reload task list to show the new task
           await loadTaskList();
         }
-        if (se.type === "done") {
+        if (se.type === "done" || se.type === "dismiss" || se.type === "delete") {
+          // Capture the neighbor task BEFORE reloading the list
+          const idx = tasks.findIndex(t => t.task_id === activeTaskId);
+          const nextId = idx >= 0 && idx < tasks.length - 1 ? tasks[idx + 1].task_id
+                       : idx > 0 ? tasks[idx - 1].task_id
+                       : null;
           await loadTaskList();
+          // If the task is gone from the (filtered) list, navigate to the neighbor
+          const stillVisible = tasks.find(t => t.task_id === activeTaskId);
+          if (!stillVisible) {
+            const target = nextId && tasks.find(t => t.task_id === nextId);
+            if (target) {
+              await selectTask(target.task_id);
+            } else if (tasks.length > 0) {
+              await selectTask(tasks[0].task_id);
+            } else {
+              await selectTask("general");
+            }
+          }
+        }
+        if (se.type === "recompute") {
+          // Server already reset context flags; reload task to reflect updated state
+          await selectTask(activeTaskId);
+        }
+        if (se.type === "next") {
+          const idx = tasks.findIndex(t => t.task_id === activeTaskId);
+          if (idx >= 0 && idx < tasks.length - 1) {
+            await selectTask(tasks[idx + 1].task_id);
+          }
+        }
+        if (se.type === "previous") {
+          const idx = tasks.findIndex(t => t.task_id === activeTaskId);
+          if (idx > 0) {
+            await selectTask(tasks[idx - 1].task_id);
+          }
         }
       }
     }
@@ -1033,8 +1151,28 @@ async function bulkUpdateStatus(taskIds, newStatus) {
   }
   if (activeTask && taskIds.includes(activeTaskId)) activeTask.status = newStatus;
   selectedTaskIds.clear();
-  renderTaskList();
-  renderMidPane();
+
+  // If the new status is filtered out, remove affected tasks and auto-select next
+  const checkedStatuses = getCheckedStatuses();
+  if (checkedStatuses.length > 0 && !checkedStatuses.includes(newStatus)) {
+    const removedSet = new Set(taskIds);
+    const activeIdx = tasks.findIndex(t => t.task_id === activeTaskId);
+    tasks = tasks.filter(t => !removedSet.has(t.task_id));
+    if (removedSet.has(activeTaskId)) {
+      const nextIdx = Math.min(activeIdx, tasks.length - 1);
+      if (tasks.length > 0 && nextIdx >= 0) {
+        selectTask(tasks[nextIdx].task_id);
+      } else {
+        selectTask("general");
+      }
+    } else {
+      renderTaskList();
+      renderMidPane();
+    }
+  } else {
+    renderTaskList();
+    renderMidPane();
+  }
 
   // Fire server calls in background
   try {
@@ -1065,14 +1203,29 @@ async function bulkDeleteTasks(taskIds, label) {
         body: JSON.stringify({ task_id: tid }),
       });
     }
-    if (taskIds.includes(activeTaskId)) {
-      activeTaskId = "general";
-      activeTask = null;
-    }
+    const wasActive = taskIds.includes(activeTaskId);
+    const activeIdx = wasActive ? tasks.findIndex(t => t.task_id === activeTaskId) : -1;
+    const nextId = activeIdx >= 0 && activeIdx < tasks.length - 1 ? tasks[activeIdx + 1].task_id
+                 : activeIdx > 0 ? tasks[activeIdx - 1].task_id
+                 : null;
     selectedTaskIds.clear();
     await loadTaskList();
-    renderMidPane();
-    renderRightPane();
+    if (wasActive) {
+      const target = nextId && tasks.find(t => t.task_id === nextId);
+      if (target) {
+        await selectTask(target.task_id);
+      } else if (tasks.length > 0) {
+        await selectTask(tasks[0].task_id);
+      } else {
+        activeTaskId = "general";
+        activeTask = null;
+        renderMidPane();
+        renderRightPane();
+      }
+    } else {
+      renderMidPane();
+      renderRightPane();
+    }
   } catch (e) {
     console.error("[tasks.bulkDelete]", e);
     alert(`Failed to delete tasks: ${e.message}`);
@@ -1110,10 +1263,26 @@ async function updateTaskStatus(newStatus) {
   // Optimistic UI update
   activeTask.status = newStatus;
   const tid = activeTaskId;
-  const t = tasks.find(t => t.task_id === tid);
+  const idx = tasks.findIndex(t => t.task_id === tid);
+  const t = idx >= 0 ? tasks[idx] : null;
   if (t) t.status = newStatus;
-  renderTaskList();
-  renderMidPane();
+
+  // If the task's new status is no longer in the checked filters, select the next visible task
+  const checkedStatuses = getCheckedStatuses();
+  if (checkedStatuses.length > 0 && !checkedStatuses.includes(newStatus)) {
+    // Remove from local list since it won't be visible
+    if (idx >= 0) tasks.splice(idx, 1);
+    // Select the next task (or previous if it was last)
+    const nextIdx = Math.min(idx, tasks.length - 1);
+    if (tasks.length > 0 && nextIdx >= 0) {
+      selectTask(tasks[nextIdx].task_id);
+    } else {
+      selectTask("general");
+    }
+  } else {
+    renderTaskList();
+    renderMidPane();
+  }
 
   // Fire server call in background
   try {
@@ -1289,9 +1458,31 @@ function getComposeFields(stripQuote) {
   };
 }
 
+async function markDraftUsed() {
+  if (!activeTask || !activeTask.drafts) return;
+  const drafts = activeTask.drafts;
+  const draft = drafts[activeDraftIdx];
+  if (!draft || draft.used) return;
+  draft.used = true;
+  // Also capture current compose body as the version the user sent/opened
+  const body = document.getElementById("composeBody")?.value || "";
+  if (body.trim()) draft.body = body;
+  try {
+    const base = await getServerBase();
+    await fetch(`${base}/task/update`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task_id: activeTaskId, drafts: drafts }),
+    });
+  } catch (e) {
+    console.error("[markDraftUsed]", e);
+  }
+}
+
 async function openInCompose(draft) {
   const fields = getComposeFields(false);
   try {
+    await markDraftUsed();
     await browser.runtime.sendMessage({
       type: "openCompose",
       to: fields.to,
@@ -1316,6 +1507,7 @@ async function sendDraftNow(draft) {
   if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
 
   try {
+    await markDraftUsed();
     await browser.runtime.sendMessage({
       type: "sendCompose",
       to: fields.to,

@@ -162,6 +162,8 @@ let schema_statements () =
        embedding     vector(%d) NOT NULL
      )|} !rag_vector_dimension
   ; {|CREATE INDEX IF NOT EXISTS idx_memory_templates_memory_id ON memory_templates(memory_id)|}
+  ; {|ALTER TABLE tasks ADD COLUMN IF NOT EXISTS prior_resolutions TEXT NOT NULL DEFAULT ''|}
+  ; {|ALTER TABLE emails ADD COLUMN IF NOT EXISTS in_reply_to TEXT NOT NULL DEFAULT ''|}
   (* --- triage queue: emails waiting for daemon to run propose_tasks --- *)
   ; {|CREATE TABLE IF NOT EXISTS triage_queue (
        doc_id          TEXT PRIMARY KEY REFERENCES emails(doc_id) ON DELETE CASCADE,
@@ -217,6 +219,7 @@ let upsert_email
     ~(action_score : int option) ~(importance_score : int option)
     ~(reply_by : string) ~(ingested_at : string)
     ~(whoami : string)
+    ?(in_reply_to : string = "")
     ?(on_done : (float -> unit) option)
     () : (unit, string) result =
   let t0 = Unix.gettimeofday () in
@@ -225,8 +228,8 @@ let upsert_email
     INSERT INTO emails
       (doc_id, embed_model, triage_model, summarize_model, sender, recipient, cc, bcc,
        subject, email_date, attachments, action_score, importance_score,
-       reply_by, processed, ingested_at, whoami)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,'')::timestamptz,$11::text[],$12,$13,NULLIF($14,'')::timestamptz,FALSE,NULLIF($15,'')::timestamptz,$16)
+       reply_by, processed, ingested_at, whoami, in_reply_to)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,'')::timestamptz,$11::text[],$12,$13,NULLIF($14,'')::timestamptz,FALSE,NULLIF($15,'')::timestamptz,$16,$17)
     ON CONFLICT (doc_id) DO UPDATE SET
       embed_model = EXCLUDED.embed_model,
       triage_model = EXCLUDED.triage_model,
@@ -242,17 +245,18 @@ let upsert_email
       importance_score = EXCLUDED.importance_score,
       reply_by = EXCLUDED.reply_by,
       ingested_at = EXCLUDED.ingested_at,
-      whoami = EXCLUDED.whoami
+      whoami = EXCLUDED.whoami,
+      in_reply_to = EXCLUDED.in_reply_to
   |} in
   let open Caqti_type in
   (* Parameter order must match SQL: $1-$8 strings, $9 subject, $10 email_date,
      $11 attachments, $12 action_score, $13 importance_score, $14 reply_by,
-     $15 ingested_at, $16 whoami *)
+     $15 ingested_at, $16 whoami, $17 in_reply_to *)
   let pt = t2
     (t2 (t4 string string string string) (t4 string string string string))
     (t2
       (t2 string string)
-      (t2 (t2 string (option int)) (t4 (option int) string string string)))
+      (t2 (t2 string (option int)) (t2 (t4 (option int) string string string) string)))
   in
   let req = Caqti_request.Infix.(pt ->. unit) ~oneshot:true sql in
   let result =
@@ -261,7 +265,7 @@ let upsert_email
         (((doc_id, embed_model, triage_model, summarize_model),
           (sender, recipient, cc, bcc)),
          ((subject, email_date),
-          ((attachments_json, action_score), (importance_score, reply_by, ingested_at, whoami)))))
+          ((attachments_json, action_score), ((importance_score, reply_by, ingested_at, whoami), in_reply_to)))))
   in
   let dt = Unix.gettimeofday () -. t0 in
   Printf.eprintf "[timer] pg.upsert_email: %.3fs\n%!" dt;
@@ -648,25 +652,28 @@ let create_task
     ~(importance_score : int option) ~(deadline : string)
     ~(embedding : float list)
     ~(conversation_json : string) ~(drafts_json : string)
+    ?(prior_resolutions : string = "")
     () : (unit, string) result =
   let vec = float_list_to_pgvector embedding in
   let sql = {|
     INSERT INTO tasks
       (task_id, title, description, status, importance_score, deadline,
-       embedding, conversation, drafts)
+       embedding, conversation, drafts, prior_resolutions)
     VALUES ($1, $2, $3, 'open', $4, NULLIF($5,'')::timestamptz,
-            $6::vector, $7::jsonb, $8::jsonb)
+            $6::vector, $7::jsonb, $8::jsonb, $9)
   |} in
   let open Caqti_type in
   let pt = t2
-    (t4 string string string (option int))
-    (t4 string string string string)
+    (t2 (t4 string string string (option int))
+        (t4 string string string string))
+    string
   in
   let req = Caqti_request.Infix.(pt ->. unit) ~oneshot:true sql in
   use (fun (module C : Caqti_eio.CONNECTION) ->
     C.exec req
-      ((task_id, title, description, importance_score),
-       (deadline, vec, conversation_json, drafts_json)))
+      (((task_id, title, description, importance_score),
+        (deadline, vec, conversation_json, drafts_json)),
+       prior_resolutions))
 
 let get_task (task_id : string)
     : (Yojson.Safe.t option, string) result =
@@ -682,7 +689,8 @@ let get_task (task_id : string)
            t.notes,
            t.context_emails::text,
            t.context_prefetched,
-           t.context_ready
+           t.context_ready,
+           t.prior_resolutions
     FROM tasks t WHERE t.task_id = $1
   |} in
   let open Caqti_type in
@@ -692,7 +700,7 @@ let get_task (task_id : string)
       (t4 (option int) string string string)
       (t2
         (t4 string string string string)
-        (t2 string (t2 bool bool))))
+        (t2 string (t2 (t2 bool bool) string))))
   in
   let req = Caqti_request.Infix.(string ->? rt) ~oneshot:true sql in
   (* Also fetch linked emails with metadata from emails table *)
@@ -718,7 +726,7 @@ let get_task (task_id : string)
     | Ok (Some ((tid, title, description, status),
                 ((importance, deadline, created_at, updated_at),
                  ((conversation_text, history_summary, drafts_text, notes),
-                  (context_emails_text, (context_prefetched, context_ready)))))) ->
+                  (context_emails_text, ((context_prefetched, context_ready), prior_resolutions)))))) ->
         let conversation = try Yojson.Safe.from_string conversation_text with _ -> `List [] in
         let drafts = try Yojson.Safe.from_string drafts_text with _ -> `List [] in
         let context_emails = try Yojson.Safe.from_string context_emails_text with _ -> `List [] in
@@ -755,6 +763,7 @@ let get_task (task_id : string)
           ; ("context_emails", context_emails)
           ; ("context_prefetched", `Bool context_prefetched)
           ; ("context_ready", `Bool context_ready)
+          ; ("prior_resolutions", `String prior_resolutions)
           ])))
 
 let update_task
@@ -773,6 +782,7 @@ let update_task
     ?(context_prefetched : bool option)
     ?(context_ready : bool option)
     ?(sort_order : int option option)
+    ?(prior_resolutions : string option)
     () : (bool, string) result =
   let escape_literal (s : string) : string =
     let buf = Buffer.create (String.length s + 4) in
@@ -824,6 +834,7 @@ let update_task
    | Some (Some n) -> add "sort_order" (string_of_int n)
    | Some None -> add "sort_order" "NULL"
    | None -> ());
+  (match prior_resolutions with Some p -> add "prior_resolutions" (escape_literal p) | None -> ());
   if !set_parts = [] then Ok true
   else begin
     add "updated_at" (escape_literal (now_utc_iso8601 ()) ^ "::timestamptz");
@@ -1110,6 +1121,17 @@ let task_trigger_doc_ids (task_id : string)
     | Error _ as e -> e
     | Ok ids -> Ok ids)
 
+(* Find task_ids where a given doc_id is a trigger — used for reply-chain linking *)
+let tasks_by_trigger_doc_id (doc_id : string)
+    : (string list, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  let sql = "SELECT task_id FROM task_emails WHERE doc_id = $1 AND role = 'trigger'" in
+  let req = Caqti_request.Infix.(Caqti_type.string ->* Caqti_type.string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.collect_list req doc_id with
+    | Error _ as e -> e
+    | Ok ids -> Ok ids)
+
 (* Delete context and style task_emails rows for a task (keeps triggers) *)
 let delete_task_context_and_style (task_id : string)
     : (int, string) result =
@@ -1327,6 +1349,56 @@ let task_knn ~(embedding : float list) ~(top_k : int)
     | Error _ as e -> e
     | Ok rows -> Ok (List.map (fun ((tid, title, desc, imp), (dl, dist)) ->
         (tid, title, desc, imp, dl, dist)) rows))
+
+(* kNN search against resolved (done/dismissed) tasks — returns notes + last draft body
+   for building prior_resolutions context on new tasks *)
+let task_knn_resolved ~(embedding : float list) ~(top_k : int)
+    () : ((string * string * string * string * string * string * float) list, string) result =
+  let vec = float_list_to_pgvector embedding in
+  let sql = {|
+    SELECT t.task_id, t.title, t.description, t.status, t.notes,
+           COALESCE(
+             (SELECT te.compressed_body FROM task_emails te
+              WHERE te.task_id = t.task_id AND te.role = 'reply'
+              ORDER BY te.added_at DESC LIMIT 1),
+             CASE WHEN (t.drafts::jsonb -> -1 ->> 'used')::boolean IS TRUE
+                  THEN t.drafts::jsonb -> -1 ->> 'body'
+                  ELSE '' END,
+             ''),
+           t.embedding <=> $1::vector AS distance
+    FROM tasks t
+    WHERE t.status IN ('done', 'dismissed')
+      AND t.embedding IS NOT NULL
+    ORDER BY t.embedding <=> $1::vector ASC
+    LIMIT $2
+  |} in
+  let open Caqti_type in
+  let rt = t2 (t4 string string string string) (t2 string (t2 string float)) in
+  let req = Caqti_request.Infix.(t2 string int ->* rt) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.collect_list req (vec, top_k) with
+    | Error _ as e -> e
+    | Ok rows -> Ok (List.map (fun ((tid, title, desc, status), (notes, (draft_body, dist))) ->
+        (tid, title, desc, status, notes, draft_body, dist)) rows))
+
+(* Clear compressed_body from task_emails and context_emails on a task (for storage trim on archival) *)
+let trim_archived_task_storage (task_id : string) : (unit, string) result =
+  (* Delete context/style task_emails rows *)
+  let del_sql = "DELETE FROM task_emails WHERE task_id = $1 AND role IN ('context', 'style')" in
+  let del_req = Caqti_request.Infix.(Caqti_type.string ->. Caqti_type.unit) ~oneshot:true del_sql in
+  (* Clear compressed_body on remaining (trigger) rows *)
+  let clear_sql = "UPDATE task_emails SET compressed_body = '' WHERE task_id = $1" in
+  let clear_req = Caqti_request.Infix.(Caqti_type.string ->. Caqti_type.unit) ~oneshot:true clear_sql in
+  (* Clear context_emails JSON *)
+  let ctx_sql = "UPDATE tasks SET context_emails = '[]'::jsonb WHERE task_id = $1" in
+  let ctx_req = Caqti_request.Infix.(Caqti_type.string ->. Caqti_type.unit) ~oneshot:true ctx_sql in
+  use (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.exec del_req task_id with
+    | Error _ as e -> e
+    | Ok () ->
+    match C.exec clear_req task_id with
+    | Error _ as e -> e
+    | Ok () -> C.exec ctx_req task_id)
 
 (* Find tasks with raw [DRAFT markers in conversation but empty drafts array *)
 let tasks_needing_draft_migration ()

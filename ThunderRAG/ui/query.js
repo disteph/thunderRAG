@@ -96,6 +96,24 @@ function scrollChatToBottom() {
   chat.scrollTop = chat.scrollHeight;
 }
 
+function stripMarkdown(text) {
+  let s = text;
+  s = s.replace(/```[\s\S]*?```/g, "");
+  s = s.replace(/`([^`]+)`/g, "$1");
+  s = s.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1");
+  s = s.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
+  s = s.replace(/^#{1,6}\s+/gm, "");
+  s = s.replace(/(\*\*|__)(.*?)\1/g, "$2");
+  s = s.replace(/(\*|_)(.*?)\1/g, "$2");
+  s = s.replace(/~~(.*?)~~/g, "$1");
+  s = s.replace(/^>\s?/gm, "");
+  s = s.replace(/^[-*+]\s+/gm, "");
+  s = s.replace(/^\d+\.\s+/gm, "");
+  s = s.replace(/^---+$/gm, "");
+  s = s.replace(/\n{3,}/g, "\n\n");
+  return s.trim();
+}
+
 function normalizeUnicodeWhitespace(s) {
   // Replace common Unicode whitespace variants with ASCII equivalents
   return s.replace(/[\u00A0\u2000-\u200A\u202F\u205F]/g, " ")
@@ -110,7 +128,11 @@ function appendMessage(role, text) {
 
   const bubble = document.createElement("div");
   bubble.className = "bubble";
-  bubble.textContent = normalizeUnicodeWhitespace(text);
+  if (role === "assistant" && typeof marked !== "undefined" && text) {
+    bubble.innerHTML = marked.parse(normalizeUnicodeWhitespace(text));
+  } else {
+    bubble.textContent = normalizeUnicodeWhitespace(text);
+  }
 
   msg.appendChild(bubble);
   chat.appendChild(msg);
@@ -373,49 +395,39 @@ function setAssistantMessage(bubble, answer, sources, retrievalInfo, llmCalls) {
   const renumber = new Map();
   citedOriginal.forEach((origIdx, i) => renumber.set(origIdx, i + 1));
 
-  // Pass 2: render answer text with renumbered citations.
+  // Pass 2: render answer with Markdown + renumbered citations as clickable links.
   {
-    const re = /\[Email\s+(\d+)\]/g;
-    let last = 0;
-    let m;
-    while ((m = re.exec(text))) {
-      const start = m.index;
-      const end = re.lastIndex;
-      if (start > last) {
-        answerEl.appendChild(document.createTextNode(text.slice(last, start)));
-      }
-
-      const origN = parseInt(m[1], 10);
-      const idx = origN - 1;
+    // First renumber citations in the raw text
+    const renumberedText = text.replace(/\[Email\s+(\d+)\]/g, (match, n) => {
+      const idx = parseInt(n, 10) - 1;
       const newN = renumber.get(idx);
-
       if (newN !== undefined) {
-        const docId = String(srcs[idx]?.doc_id || "");
-        const a = document.createElement("a");
-        a.href = "#";
-        a.className = "citation";
-        a.textContent = `[Email ${newN}]`;
-        a.addEventListener("click", async (e) => {
-          e.preventDefault();
-          try {
-            await browser.runtime.sendMessage({
-              type: "openMessageByHeaderMessageId",
-              headerMessageId: docId,
-            });
-          } catch (err) {
-            $("error").textContent = String(err && err.message ? err.message : err);
-          }
-        });
-        answerEl.appendChild(a);
-      } else {
-        answerEl.appendChild(document.createTextNode(m[0]));
+        const docId = String(srcs[idx]?.doc_id || "").replace(/"/g, "&quot;");
+        return `<a href="#" class="citation" data-docid="${docId}">[Email ${newN}]</a>`;
       }
-
-      last = end;
+      return match;
+    });
+    // Render Markdown (or plain text fallback)
+    if (typeof marked !== "undefined") {
+      answerEl.innerHTML = marked.parse(renumberedText);
+    } else {
+      answerEl.innerHTML = renumberedText;
     }
-    if (last < text.length) {
-      answerEl.appendChild(document.createTextNode(text.slice(last)));
-    }
+    // Wire up citation click handlers
+    answerEl.querySelectorAll("a.citation[data-docid]").forEach(a => {
+      const docId = a.dataset.docid;
+      a.addEventListener("click", async (e) => {
+        e.preventDefault();
+        try {
+          await browser.runtime.sendMessage({
+            type: "openMessageByHeaderMessageId",
+            headerMessageId: docId,
+          });
+        } catch (err) {
+          $("error").textContent = String(err && err.message ? err.message : err);
+        }
+      });
+    });
   }
   bubble.appendChild(answerEl);
 
@@ -753,7 +765,7 @@ async function onAsk() {
       setAssistantMessage(assistant.bubble, answer, sources, retrievalInfo, llmCalls);
       // Auto-play TTS
       if (typeof Voice !== "undefined" && Voice.getSettings().voiceAutoPlay && answer.trim()) {
-        Voice.speakText(normalizeUnicodeWhitespace(answer));
+        Voice.speakText(stripMarkdown(normalizeUnicodeWhitespace(answer)));
       }
       return;
     } else {
@@ -761,7 +773,7 @@ async function onAsk() {
       setAssistantMessage(assistant.bubble, answer, srcs);
       // Auto-play TTS
       if (typeof Voice !== "undefined" && Voice.getSettings().voiceAutoPlay && answer.trim()) {
-        Voice.speakText(normalizeUnicodeWhitespace(answer));
+        Voice.speakText(stripMarkdown(normalizeUnicodeWhitespace(answer)));
       }
     }
   } catch (e) {
@@ -951,14 +963,14 @@ function setupQueryVoice() {
 
   // Add mic button to composer if STT enabled
   if (s.voiceEnableSTT) {
-    const composerRow = document.querySelector(".composer-row");
-    if (composerRow) {
+    const composer = document.querySelector(".composer");
+    if (composer) {
       const micBtn = document.createElement("button");
       micBtn.className = "voice-mic-btn";
       micBtn.id = "queryMicBtn";
       micBtn.title = "Voice input";
       micBtn.textContent = "\uD83C\uDF99\uFE0F";
-      composerRow.insertBefore(micBtn, $("askBtn"));
+      composer.insertBefore(micBtn, $("askBtn"));
       micBtn.addEventListener("click", () => toggleQueryMic(micBtn));
     }
   }
@@ -1003,7 +1015,7 @@ function addSpeakerButton(bubble, text) {
   btn.textContent = "\uD83D\uDD0A";
   btn.addEventListener("click", (ev) => {
     ev.stopPropagation();
-    Voice.speakText(text, btn);
+    Voice.speakText(stripMarkdown(text), btn);
   });
   bubble.appendChild(btn);
 }

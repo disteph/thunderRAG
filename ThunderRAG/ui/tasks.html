@@ -253,6 +253,20 @@
         gap: 6px;
         align-items: center;
       }
+      .task-item .ti-meta-left {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        flex: 1;
+        min-width: 0;
+      }
+      .task-item .ti-score {
+        margin-left: auto;
+        font-weight: 600;
+        font-size: 10px;
+        opacity: 0.8;
+        white-space: nowrap;
+      }
       .task-item.active .ti-meta { opacity: 0.9; }
 
       /* Status badges */
@@ -319,7 +333,9 @@
         flex-shrink: 0;
         position: relative;
       }
-      .mid-header .mh-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; text-align: left; }
+      .mid-header .mh-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; text-align: left; display: flex; align-items: baseline; gap: 8px; }
+      .mid-header .mh-title-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .mid-header .mh-title-meta { font-size: 11px; font-weight: 400; opacity: 0.7; white-space: nowrap; display: flex; gap: 8px; align-items: baseline; }
       .mid-header .mh-desc { opacity: 0.85; margin-bottom: 6px; }
       .mid-header .mh-emails {
         font-size: 11px;
@@ -375,7 +391,6 @@
         padding: 8px 12px;
         border-radius: 10px;
         line-height: 1.35;
-        white-space: pre-wrap;
         border: 1px solid rgba(127,127,127,0.25);
         background: Field;
         color: FieldText;
@@ -385,7 +400,19 @@
         background: AccentColor;
         color: AccentColorText;
         border-color: rgba(0,0,0,0);
+        white-space: pre-wrap;
       }
+      /* Markdown content in assistant bubbles */
+      .mid-chat .msg-assistant .bubble p { margin: 0 0 0.5em 0; }
+      .mid-chat .msg-assistant .bubble p:last-child { margin-bottom: 0; }
+      .mid-chat .msg-assistant .bubble ul, .mid-chat .msg-assistant .bubble ol { margin: 0.3em 0; padding-left: 1.4em; }
+      .mid-chat .msg-assistant .bubble li { margin: 0.15em 0; }
+      .mid-chat .msg-assistant .bubble code { background: rgba(127,127,127,0.12); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+      .mid-chat .msg-assistant .bubble pre { background: rgba(127,127,127,0.1); padding: 8px; border-radius: 6px; overflow-x: auto; margin: 0.4em 0; }
+      .mid-chat .msg-assistant .bubble pre code { background: none; padding: 0; }
+      .mid-chat .msg-assistant .bubble blockquote { border-left: 3px solid rgba(127,127,127,0.3); margin: 0.4em 0; padding-left: 10px; opacity: 0.85; }
+      .mid-chat .msg-assistant .bubble h1, .mid-chat .msg-assistant .bubble h2, .mid-chat .msg-assistant .bubble h3 { font-size: 13px; font-weight: 600; margin: 0.5em 0 0.3em; }
+      .mid-chat .msg-assistant .bubble hr { border: none; border-top: 1px solid rgba(127,127,127,0.2); margin: 0.5em 0; }
       .llm-debug-icon {
         position: absolute;
         top: 2px;
@@ -810,6 +837,14 @@
         opacity: 0.6;
         transition: opacity 0.15s, background 0.15s;
       }
+      .voice-speak-btn {
+        position: absolute;
+        bottom: 2px;
+        right: 4px;
+        font-size: 12px;
+        padding: 2px 4px;
+        opacity: 0.3;
+      }
       .voice-mic-btn:hover, .voice-speak-btn:hover { opacity: 1; }
       .voice-mic-btn.recording {
         opacity: 1;
@@ -881,6 +916,7 @@
         <div class="empty-state">Compose form will appear here</div>
       </div>
     </div>
+    <script src="marked.min.js"></script>
     <script src="voice.js"></script>
     <script src="tasks.js"></script>
   </body>

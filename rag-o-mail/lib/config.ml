@@ -133,6 +133,8 @@ let rag_debug_ollama_chat         = ref false
 let rag_debug_retrieval           = ref false
 let task_auto_create              = ref true
 let task_dedup_top_k              = ref 5
+let task_resolved_top_k           = ref 3
+let task_resolved_max_distance    = ref 0.35
 let memory_enabled                = ref true
 let memory_max_chars              = ref 3000
 let memory_knn_top_k              = ref 10
@@ -198,6 +200,9 @@ let load_settings () : unit =
   rag_debug_retrieval    := sb [ "debug"; "retrieval" ]    ~default:false;
   task_auto_create       := sb [ "task"; "auto_create" ]   ~default:true;
   task_dedup_top_k       := si [ "task"; "dedup_top_k" ]   ~default:5;
+  task_resolved_top_k    := si [ "task"; "resolved_top_k" ] ~default:3;
+  task_resolved_max_distance := (match setting_string j ["task"; "resolved_max_distance"] ~default:"0.35" with
+    | s -> (try float_of_string s with _ -> 0.35));
   memory_enabled         := sb [ "memory"; "enabled" ]     ~default:true;
   memory_max_chars       := si [ "memory"; "max_chars" ]   ~default:3000;
   memory_knn_top_k       := si [ "memory"; "knn_top_k" ]   ~default:10;
@@ -261,6 +266,8 @@ let current_settings_json () : Yojson.Safe.t =
     ; ("task", `Assoc
         [ ("auto_create", `Bool !task_auto_create)
         ; ("dedup_top_k", `Int !task_dedup_top_k)
+        ; ("resolved_top_k", `Int !task_resolved_top_k)
+        ; ("resolved_max_distance", `Float !task_resolved_max_distance)
         ])
     ; ("memory", `Assoc
         [ ("enabled", `Bool !memory_enabled)

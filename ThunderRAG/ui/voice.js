@@ -257,6 +257,11 @@ const Voice = (() => {
           settings[key] = changes[key].newValue;
         }
       }
+      // Stop playback immediately when auto-play or TTS is disabled
+      if ((changes.voiceAutoPlay && !changes.voiceAutoPlay.newValue) ||
+          (changes.voiceEnableTTS && !changes.voiceEnableTTS.newValue)) {
+        stopPlayback();
+      }
     });
   }
 
