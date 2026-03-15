@@ -171,6 +171,13 @@ let schema_statements () =
        compressed_body TEXT NOT NULL,
        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
      )|}
+  (* --- FYI emails: triaged emails that did not produce tasks --- *)
+  ; {|CREATE TABLE IF NOT EXISTS fyi_emails (
+       doc_id     TEXT PRIMARY KEY,
+       summary    TEXT NOT NULL,
+       email_date TIMESTAMPTZ,
+       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )|}
   (* --- ingest queue: raw emails waiting for async ingestion --- *)
   ; {|CREATE TABLE IF NOT EXISTS ingest_queue (
        doc_id      TEXT PRIMARY KEY,
@@ -302,12 +309,39 @@ let insert_chunks ~(doc_id : string) ?(on_done : (float -> unit) option)
 let purge_empty_metadata () : (int, string) result =
   let count_sql = "SELECT COUNT(*)::int FROM emails WHERE sender = '' AND recipient = '' AND subject = ''" in
   let count_req = Caqti_request.Infix.(Caqti_type.unit ->! Caqti_type.int) ~oneshot:true count_sql in
+  (* Clean up task_emails referencing these emails before deleting them *)
+  let te_sql = {|DELETE FROM task_emails WHERE doc_id IN
+    (SELECT doc_id FROM emails WHERE sender = '' AND recipient = '' AND subject = '')|} in
+  let te_req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true te_sql in
   let del_sql = "DELETE FROM emails WHERE sender = '' AND recipient = '' AND subject = ''" in
   let del_req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true del_sql in
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
     match C.find count_req () with
     | Error _ as e -> e
     | Ok n ->
+        match C.exec te_req () with
+        | Error _ as e -> e
+        | Ok () ->
+        match C.exec del_req () with
+        | Error _ as e -> e
+        | Ok () -> Ok n)
+
+(* Remove task_emails rows whose doc_id no longer exists in the emails table.
+   Returns the number of orphaned rows removed. *)
+let purge_orphaned_task_emails () : (int, string) result =
+  let count_sql = {|SELECT COUNT(*)::int FROM task_emails te
+    WHERE NOT EXISTS (SELECT 1 FROM emails e WHERE e.doc_id = te.doc_id)|} in
+  let count_req = Caqti_request.Infix.(Caqti_type.unit ->! Caqti_type.int) ~oneshot:true count_sql in
+  let del_sql = {|DELETE FROM task_emails WHERE doc_id IN
+    (SELECT te.doc_id FROM task_emails te
+     WHERE NOT EXISTS (SELECT 1 FROM emails e WHERE e.doc_id = te.doc_id))|} in
+  let del_req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true del_sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.find count_req () with
+    | Error _ as e -> e
+    | Ok n ->
+        if n = 0 then Ok 0
+        else
         match C.exec del_req () with
         | Error _ as e -> e
         | Ok () -> Ok n)
@@ -321,18 +355,21 @@ let reset_all () : (unit, string) result =
       let req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true sql in
       C.exec req ()
     in
-    match exec "DROP TABLE IF EXISTS task_emails" with
+    match exec "DROP TABLE IF EXISTS fyi_emails" with
     | Error _ as e -> e
     | Ok () ->
-      match exec "DROP TABLE IF EXISTS tasks" with
+      match exec "DROP TABLE IF EXISTS task_emails" with
       | Error _ as e -> e
       | Ok () ->
-        match exec "DROP TABLE IF EXISTS email_chunks" with
+        match exec "DROP TABLE IF EXISTS tasks" with
         | Error _ as e -> e
         | Ok () ->
-          match exec "DROP TABLE IF EXISTS emails" with
+          match exec "DROP TABLE IF EXISTS email_chunks" with
           | Error _ as e -> e
-          | Ok () -> init_schema_with (module C : Caqti_eio.CONNECTION))
+          | Ok () ->
+            match exec "DROP TABLE IF EXISTS emails" with
+            | Error _ as e -> e
+            | Ok () -> init_schema_with (module C : Caqti_eio.CONNECTION))
 
 (* ---------- status queries ---------- *)
 
@@ -481,26 +518,30 @@ let delete_email (doc_id : string)
     let te_sql = "DELETE FROM task_emails WHERE doc_id = $1" in
     let te_req = Caqti_request.Infix.(string ->. unit) ~oneshot:true te_sql in
     (match C.exec te_req doc_id with Error _ as e -> e | Ok () ->
-    (* 3. Delete from memory_emails *)
+    (* 3. Delete from fyi_emails *)
+    let fy_sql = "DELETE FROM fyi_emails WHERE doc_id = $1" in
+    let fy_req = Caqti_request.Infix.(string ->. unit) ~oneshot:true fy_sql in
+    (match C.exec fy_req doc_id with Error _ as e -> e | Ok () ->
+    (* 4. Delete from memory_emails *)
     let me_sql = "DELETE FROM memory_emails WHERE doc_id = $1" in
     let me_req = Caqti_request.Infix.(string ->. unit) ~oneshot:true me_sql in
     (match C.exec me_req doc_id with Error _ as e -> e | Ok () ->
-    (* 4. Delete from propose_tasks_log *)
+    (* 5. Delete from propose_tasks_log *)
     let pl_sql = "DELETE FROM propose_tasks_log WHERE doc_id = $1" in
     let pl_req = Caqti_request.Infix.(string ->. unit) ~oneshot:true pl_sql in
     (match C.exec pl_req doc_id with Error _ as e -> e | Ok () ->
-    (* 4b. Delete from ingest_queue (may still be pending) *)
+    (* 5b. Delete from ingest_queue (may still be pending) *)
     let iq_sql = "DELETE FROM ingest_queue WHERE doc_id = $1" in
     let iq_req = Caqti_request.Infix.(string ->. unit) ~oneshot:true iq_sql in
     (match C.exec iq_req doc_id with Error _ as e -> e | Ok () ->
-    (* 5. Delete from emails (cascades to email_chunks, triage_queue) *)
+    (* 6. Delete from emails (cascades to email_chunks, triage_queue) *)
     let del_sql = "DELETE FROM emails WHERE doc_id = $1 RETURNING doc_id" in
     let del_req = Caqti_request.Infix.(string ->? string) ~oneshot:true del_sql in
     (match C.find_opt del_req doc_id with
     | Error _ as e -> e
     | Ok existed ->
         let existed = existed <> None in
-        (* 6. For affected tasks, check if any triggers remain *)
+        (* 7. For affected tasks, check if any triggers remain *)
         let check_sql = {|
           SELECT COUNT(*) FROM task_emails
           WHERE task_id = $1 AND role = 'trigger'
@@ -510,7 +551,7 @@ let delete_email (doc_id : string)
           match C.find check_req tid with
           | Ok 0 -> true | _ -> false
         ) affected_task_ids in
-        Ok (existed, triggerless)))))))
+        Ok (existed, triggerless))))))))
 
 let get_propose_tasks_debug (doc_id : string) : (string option, string) result =
   let doc_id = normalize_doc_id doc_id in
@@ -1841,6 +1882,7 @@ let table_description (name : string) : string =
   | "task_emails"       -> "Email\xe2\x86\x94task links (trigger/context/style)"
   | "propose_tasks_log" -> "Triage LLM debug log"
   | "triage_queue"      -> "Daemon Phase 0 pending queue"
+  | "fyi_emails"        -> "Triaged emails with no tasks (FYI)"
   | "ingest_queue"      -> "Async ingestion pending queue"
   | "memories"          -> "User memories & preferences"
   | "memory_emails"     -> "Memory\xe2\x86\x94email source links"
@@ -1850,7 +1892,7 @@ let table_description (name : string) : string =
 let table_category (name : string) : string =
   match name with
   | "emails" | "email_chunks" | "ingest_queue" -> "email"
-  | "tasks" | "task_emails" | "propose_tasks_log" | "triage_queue" -> "task"
+  | "tasks" | "task_emails" | "propose_tasks_log" | "triage_queue" | "fyi_emails" -> "task"
   | "memories" | "memory_emails" | "memory_templates" -> "memory"
   | _ -> "other"
 
@@ -1894,6 +1936,9 @@ let clear_tasks () : (unit, string) result =
       let req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true sql in
       C.exec req ()
     in
+    match exec "DELETE FROM fyi_emails" with
+    | Error _ as e -> e
+    | Ok () ->
     match exec "DELETE FROM task_emails" with
     | Error _ as e -> e
     | Ok () ->
@@ -1919,3 +1964,47 @@ let clear_memories () : (unit, string) result =
     | Error _ as e -> e
     | Ok () ->
     exec "DELETE FROM memories")
+
+(* --- FYI emails --- *)
+
+let insert_fyi ~(doc_id : string) ~(summary : string)
+    ~(email_date : string) () : (unit, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  let sql = {|
+    INSERT INTO fyi_emails (doc_id, summary, email_date)
+    VALUES ($1, $2, CASE WHEN $3 = '' THEN NULL ELSE $3::timestamptz END)
+    ON CONFLICT (doc_id) DO UPDATE
+      SET summary = EXCLUDED.summary,
+          email_date = EXCLUDED.email_date
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(t3 string string string ->. unit) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    C.exec req (doc_id, summary, email_date))
+
+let delete_fyi (doc_id : string) : (unit, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  let sql = "DELETE FROM fyi_emails WHERE doc_id = $1" in
+  let req = Caqti_request.Infix.(Caqti_type.string ->. Caqti_type.unit) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    C.exec req doc_id)
+
+(* Return all FYI entries joined with email metadata.
+   Each row: (doc_id, summary, email_date, sender, subject) *)
+let list_fyi () : ((string * string * string * string * string) list, string) result =
+  let sql = {|
+    SELECT f.doc_id, f.summary,
+           COALESCE(TO_CHAR(f.email_date, 'YYYY-MM-DD HH24:MI'), ''),
+           COALESCE(e.sender, ''), COALESCE(e.subject, '')
+    FROM fyi_emails f
+    LEFT JOIN emails e ON e.doc_id = f.doc_id
+    ORDER BY f.email_date DESC NULLS LAST
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(unit ->* t2 (t3 string string string) (t2 string string)) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.collect_list req () with
+    | Error _ as e -> e
+    | Ok rows ->
+        Ok (List.map (fun ((doc_id, summary, date), (sender, subject)) ->
+          (doc_id, summary, date, sender, subject)) rows))

@@ -706,10 +706,10 @@ let propose_tasks ~client ~sw ~(whoami : string)
     ~(from_ : string) ~(to_ : string) ~(cc_ : string) ~(bcc_ : string)
     ~(subject : string) ~(date_ : string) ~(body_text : string)
     ~(memories_text : string)
-    : task_proposal list * Yojson.Safe.t option =
+    : task_proposal list * string * Yojson.Safe.t option =
   if String.trim whoami = "" then (
     Printf.eprintf "[propose_tasks] skipped: whoami is empty\n%!";
-    ([], None))
+    ([], "", None))
   else
   let user_identity =
     if String.trim whoami <> ""
@@ -731,7 +731,10 @@ let propose_tasks ~client ~sw ~(whoami : string)
         "Newsletters, notifications, and FYI emails should have an empty tasks array. " ^
         "In 90%+ of cases, the answer is 0 or 1 tasks. " ^
         "Every task MUST have a deadline. If no explicit deadline, guess based on urgency cues and professional norms. " ^
-        "Use the email Date as reference." ^ memories_section)
+        "Use the email Date as reference. " ^
+        "When tasks is empty, include a \"summary\" field: a 1-2 sentence natural-language summary " ^
+        "from the sender's perspective (e.g. \"Julie says she's pleased with the debrief\"). " ^
+        "Do NOT use Sender-Subject format." ^ memories_section)
       ~vars:[("{{user_identity}}", user_identity); ("{{user_memories}}", memories_text)]
   in
   let user_msg =
@@ -768,10 +771,10 @@ let propose_tasks ~client ~sw ~(whoami : string)
       in
       (try
         let json = Yojson.Safe.from_string trimmed in
-        let task_proposals =
+        let task_proposals, summary =
           match json with
           | `Assoc kv ->
-              (match List.assoc_opt "tasks" kv with
+              let proposals = match List.assoc_opt "tasks" kv with
               | Some (`List tasks) ->
                   List.filter_map (fun tj ->
                     let tkv = match tj with `Assoc kv -> kv | _ -> [] in
@@ -790,18 +793,25 @@ let propose_tasks ~client ~sw ~(whoami : string)
                               ; tp_deadline = let d = ts "deadline" in if d = "none" then "" else d
                               }
                   ) tasks
-              | _ -> [])
-          | _ -> []
+              | _ -> []
+              in
+              let sum = match List.assoc_opt "summary" kv with
+                | Some (`String s) -> String.trim s | _ -> ""
+              in
+              (proposals, sum)
+          | _ -> ([], "")
         in
-        Printf.printf "[propose_tasks] proposed %d tasks\n%!" (List.length task_proposals);
-        (task_proposals, debug_json raw_resp)
+        Printf.printf "[propose_tasks] proposed %d tasks, summary=%s\n%!"
+          (List.length task_proposals)
+          (if summary = "" then "(none)" else truncate_chars summary ~max_chars:60 |> String.trim);
+        (task_proposals, summary, debug_json raw_resp)
       with ex ->
         Printf.eprintf "[propose_tasks.parse_error] %s — raw: %s\n%!" (Printexc.to_string ex)
           (truncate_chars raw_resp ~max_chars:200 |> String.trim);
-        ([], debug_json raw_resp))
+        ([], "", debug_json raw_resp))
   | Error err ->
       Printf.eprintf "[propose_tasks.error] %s\n%!" (truncate_chars err ~max_chars:400 |> String.trim);
-      ([], None)
+      ([], "", None)
 
 (* Global hook for background prefetch notification — set at startup *)
 let notify_prefetch : (unit -> unit) ref = ref (fun () -> ())
@@ -5415,6 +5425,75 @@ let handler ~client ~sw ~clock _socket request body =
       Cohttp_eio.Server.respond_string ~status ~body:resp_body ~headers:json_headers ()
 
   (* ===================================================================
+     FYI (triaged emails with no tasks) endpoints
+     =================================================================== *)
+
+  | `GET, "/fyi/list" ->
+      (match Rag_lib.Pg.list_fyi () with
+      | Ok rows ->
+          let items = List.map (fun (doc_id, summary, date, sender, subject) ->
+            `Assoc [ ("doc_id", `String doc_id)
+                   ; ("summary", `String summary)
+                   ; ("date", `String date)
+                   ; ("sender", `String sender)
+                   ; ("subject", `String subject)
+                   ]
+          ) rows in
+          Cohttp_eio.Server.respond_string ~status:`OK
+            ~body:(Yojson.Safe.to_string (`List items)) ~headers:json_headers ()
+      | Error e ->
+          Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+            ~body:(Printf.sprintf "{\"error\":%s}" (Yojson.Safe.to_string (`String e)))
+            ~headers:json_headers ())
+
+  | `POST, "/fyi/create_task" ->
+      let raw = read_all body in
+      (try
+        let json = Yojson.Safe.from_string raw in
+        let kv = match json with `Assoc kv -> kv | _ -> [] in
+        let doc_id = match List.assoc_opt "doc_id" kv with Some (`String s) -> String.trim s | _ -> "" in
+        if doc_id = "" then
+          Cohttp_eio.Server.respond_string ~status:`Bad_request
+            ~body:"{\"error\":\"doc_id required\"}" ~headers:json_headers ()
+        else begin
+          (* Look up FYI summary for the title *)
+          let summary = match Rag_lib.Pg.list_fyi () with
+            | Ok rows ->
+                (match List.find_opt (fun (did, _, _, _, _) -> did = Rag_lib.Pg.normalize_doc_id doc_id) rows with
+                | Some (_, s, _, _, _) -> s
+                | None -> "Task from FYI email")
+            | Error _ -> "Task from FYI email"
+          in
+          let title = if String.length summary > 80 then String.sub summary 0 77 ^ "..." else summary in
+          let task_id = generate_task_id () in
+          (* Embed the title for vector search *)
+          let embedding = match ollama_embed ~client ~sw ~task:Search_document
+              ~label:"fyi_create_task" ~text:title () with
+            | Ok v -> l2_normalize v
+            | Error _ -> []
+          in
+          (match Rag_lib.Pg.create_task ~task_id ~title ~description:summary
+              ~importance_score:(Some 50) ~deadline:""
+              ~embedding ~conversation_json:"[]" ~drafts_json:"[]" () with
+          | Ok () ->
+              ignore (Rag_lib.Pg.link_email_to_task ~task_id ~doc_id ~role:"trigger"
+                ~compressed_body:summary ());
+              ignore (Rag_lib.Pg.delete_fyi doc_id);
+              !notify_prefetch ();
+              Printf.printf "[fyi.create_task] created task %s from FYI doc_id=%s\n%!" task_id doc_id;
+              Cohttp_eio.Server.respond_string ~status:`OK
+                ~body:(Yojson.Safe.to_string (`Assoc [("task_id", `String task_id)]))
+                ~headers:json_headers ()
+          | Error e ->
+              Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+                ~body:(Printf.sprintf "{\"error\":%s}" (Yojson.Safe.to_string (`String e)))
+                ~headers:json_headers ())
+        end
+      with e ->
+        Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+          ~body:(Printf.sprintf "fyi/create_task error: %s\n" (Printexc.to_string e)) ())
+
+  (* ===================================================================
      Task manager endpoints
      =================================================================== *)
 
@@ -5887,17 +5966,20 @@ let handler ~client ~sw ~clock _socket request body =
               else ""
             in
             (* 7. Run propose_tasks *)
-            let (task_proposals, pt_debug) = propose_tasks ~client ~sw ~whoami
+            let (task_proposals, fyi_summary, pt_debug) = propose_tasks ~client ~sw ~whoami
               ~from_ ~to_ ~cc_ ~bcc_ ~subject ~date_ ~body_text
               ~memories_text in
             (* 8. Store debug *)
             (match pt_debug with
             | Some dbg -> ignore (Rag_lib.Pg.set_propose_tasks_debug ndoc (Yojson.Safe.to_string dbg))
             | None -> ());
-            (* 9. Create new tasks *)
-            if task_proposals <> [] then
+            (* 9. Create new tasks or store FYI *)
+            if task_proposals <> [] then begin
               process_task_proposals ~client ~sw ~doc_id:ndoc ~body_text
                 ~email_date:date_ ~proposals:task_proposals ();
+              ignore (Rag_lib.Pg.delete_fyi ndoc)
+            end else if fyi_summary <> "" then
+              ignore (Rag_lib.Pg.insert_fyi ~doc_id:ndoc ~summary:fyi_summary ~email_date:date_ ());
             Printf.printf "[email.recompute_tasks] doc_id=%s proposals=%d\n%!" ndoc (List.length task_proposals);
             let result = `Assoc
               [ ("status", `String "ok")
@@ -7062,6 +7144,11 @@ let () =
    | Ok 0 -> ()
    | Ok n -> Printf.printf "[startup] purged %d emails with base64-encoded chunks (body was not decoded)\n%!" n
    | Error e -> Printf.eprintf "[startup] purge_base64_chunks error: %s\n%!" e);
+  (* Purge task_emails rows referencing emails no longer in the DB *)
+  (match Rag_lib.Pg.purge_orphaned_task_emails () with
+   | Ok 0 -> ()
+   | Ok n -> Printf.printf "[startup] purged %d orphaned task_email rows (email no longer in DB)\n%!" n
+   | Error e -> Printf.eprintf "[startup] purge_orphaned_task_emails error: %s\n%!" e);
   (* --- Background task context prefetch daemon --- *)
   let prefetch_wake = Eio.Stream.create 10 in
   notify_prefetch := (fun () ->
@@ -7118,15 +7205,18 @@ let () =
           end
         end
       in
-      let (task_proposals, pt_debug) = propose_tasks ~client ~sw ~whoami
+      let (task_proposals, fyi_summary, pt_debug) = propose_tasks ~client ~sw ~whoami
         ~from_ ~to_ ~cc_ ~bcc_ ~subject ~date_ ~body_text
         ~memories_text in
       (match pt_debug with
       | Some dbg -> ignore (Rag_lib.Pg.set_propose_tasks_debug doc_id (Yojson.Safe.to_string dbg))
       | None -> ());
-      if task_proposals <> [] then
+      if task_proposals <> [] then begin
         process_task_proposals ~client ~sw ~doc_id ~body_text:compressed_body
           ~email_date:date_ ~proposals:task_proposals ();
+        ignore (Rag_lib.Pg.delete_fyi doc_id)
+      end else if fyi_summary <> "" then
+        ignore (Rag_lib.Pg.insert_fyi ~doc_id ~summary:fyi_summary ~email_date:date_ ());
       Printf.printf "[daemon.triage] doc_id=%s proposals=%d\n%!" doc_id (List.length task_proposals);
       ignore (Rag_lib.Pg.delete_triage_entry doc_id)
     end

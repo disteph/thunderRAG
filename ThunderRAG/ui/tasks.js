@@ -44,6 +44,8 @@ let lastClickedTaskIdx = -1;     // For shift-click range selection
 let filterEmailIds = null;       // Email IDs filter from URL params (persisted across refreshes)
 let dragSourceTaskId = null;     // Task being dragged
 let pauseState = { tasks_paused: false, ingest_paused: false };
+let fyiEntries = [];      // Array of FYI email summaries from /fyi/list
+let fyiSortAsc = false;   // Sort direction for FYI pane (false = newest first)
 
 /* ── Initialization ── */
 
@@ -72,6 +74,12 @@ async function init() {
   document.getElementById("generalChatItem").addEventListener("click", () => {
     selectedTaskIds.clear();
     selectTask("general");
+  });
+
+  // FYI click handler
+  document.getElementById("fyiItem").addEventListener("click", () => {
+    selectedTaskIds.clear();
+    selectTask("fyi");
   });
 
   // Title click → DB Stats
@@ -195,8 +203,13 @@ function notifyIframeModels() {
 async function refreshTaskList() {
   const prevIds = new Set(tasks.map(t => t.task_id));
   await loadTaskList(filterEmailIds);
-  // If the active task is a real task (not "general"), refresh its detail too
-  if (activeTaskId && activeTaskId !== "general") {
+  if (activeTaskId === "fyi") {
+    await loadFyiList();
+    renderMidPane();
+    renderRightPane();
+    return;
+  }
+  if (activeTaskId && activeTaskId !== "general" && activeTaskId !== "memories" && activeTaskId !== "dbstats") {
     try {
       const base = await getServerBase();
       const resp = await fetch(`${base}/task/get`, {
@@ -259,6 +272,10 @@ function renderTaskList() {
   const gcEl = document.getElementById("generalChatItem");
   if (gcEl) {
     gcEl.className = "task-item" + (activeTaskId === "general" ? " active" : "");
+  }
+  const fyiEl = document.getElementById("fyiItem");
+  if (fyiEl) {
+    fyiEl.className = "task-item" + (activeTaskId === "fyi" ? " active" : "");
   }
   // Update Memories button active state
   const memBtn = document.getElementById("memoriesBtn");
@@ -458,6 +475,14 @@ async function selectTask(taskId) {
 
   if (taskId === "general") {
     activeTask = null;
+    renderMidPane();
+    renderRightPane();
+    return;
+  }
+
+  if (taskId === "fyi") {
+    activeTask = null;
+    await loadFyiList();
     renderMidPane();
     renderRightPane();
     return;
@@ -693,9 +718,12 @@ function buildCollapsibleTextSection(label, text) {
 
 function renderMidPane() {
   const pane = document.getElementById("midPane");
+  const right = document.getElementById("rightPane");
+  const dividerRight = document.getElementById("dividerRight");
 
   // General chat mode: embed the RAG query UI
   if (activeTaskId === "general") {
+    pane.style.width = "";
     pane.innerHTML = '';
     const iframe = document.createElement("iframe");
     iframe.src = "query.html";
@@ -707,15 +735,30 @@ function renderMidPane() {
 
   // DB Stats mode
   if (activeTaskId === "dbstats") {
+    pane.style.width = "";
     renderDbStatsPane();
     return;
   }
 
   // Memories mode
   if (activeTaskId === "memories") {
+    pane.style.width = "";
     renderMemoriesPane();
     return;
   }
+
+  if (activeTaskId === "fyi") {
+    if (right) right.style.display = "none";
+    if (dividerRight) dividerRight.style.display = "none";
+    pane.style.flex = "1";
+    pane.style.width = "";
+    renderFyiPane();
+    return;
+  }
+
+  pane.style.flex = "1";
+  pane.style.width = "";
+  if (dividerRight) dividerRight.style.display = "";
 
   if (!activeTask) {
     pane.innerHTML = '<div class="empty-state">Select a task on the left</div>';
@@ -1304,13 +1347,16 @@ async function updateTaskStatus(newStatus) {
 
 function renderRightPane() {
   const pane = document.getElementById("rightPane");
+  const dividerRight = document.getElementById("dividerRight");
 
   // Hide right pane for General chat, Memories, and DB Stats
-  if (activeTaskId === "general" || activeTaskId === "memories" || activeTaskId === "dbstats") {
+  if (activeTaskId === "general" || activeTaskId === "fyi" || activeTaskId === "memories" || activeTaskId === "dbstats") {
     pane.style.display = "none";
+    if (dividerRight) dividerRight.style.display = "none";
     return;
   }
   pane.style.display = "";
+  if (dividerRight) dividerRight.style.display = "";
 
   if (!activeTask) {
     pane.innerHTML = '<div class="empty-state">Compose form will appear here</div>';
@@ -1428,6 +1474,122 @@ async function dismissDraft(idx) {
   }
 
   renderRightPane();
+}
+
+async function loadFyiList() {
+  try {
+    const base = await getServerBase();
+    const resp = await fetch(`${base}/fyi/list`);
+    if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+    const data = await resp.json();
+    fyiEntries = Array.isArray(data) ? data : [];
+  } catch (e) {
+    console.error("[fyi.list]", e);
+    fyiEntries = [];
+  }
+}
+
+function sortFyiEntries(entries) {
+  return [...entries].sort((a, b) => {
+    const av = a.date || "";
+    const bv = b.date || "";
+    return fyiSortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+  });
+}
+
+async function createTaskFromFyi(docId) {
+  try {
+    const base = await getServerBase();
+    const resp = await fetch(`${base}/fyi/create_task`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ doc_id: docId }),
+    });
+    if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+    const data = await resp.json();
+    await loadFyiList();
+    await loadTaskList(filterEmailIds);
+    if (data.task_id) {
+      await selectTask(data.task_id);
+    } else {
+      renderMidPane();
+      renderRightPane();
+    }
+  } catch (e) {
+    console.error("[fyi.create_task]", e);
+    alert(`Failed to create task: ${e.message}`);
+  }
+}
+
+function renderFyiPane() {
+  const pane = document.getElementById("midPane");
+  pane.innerHTML = "";
+  pane.style.display = "flex";
+  pane.style.flexDirection = "column";
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "fyi-toolbar";
+  const title = document.createElement("h3");
+  title.textContent = "FYI";
+  const count = document.createElement("span");
+  count.className = "fyi-count";
+  count.textContent = `${fyiEntries.length} email${fyiEntries.length === 1 ? "" : "s"}`;
+  const sortBtn = document.createElement("button");
+  sortBtn.textContent = fyiSortAsc ? "Oldest first" : "Newest first";
+  sortBtn.addEventListener("click", () => {
+    fyiSortAsc = !fyiSortAsc;
+    renderFyiPane();
+  });
+  toolbar.appendChild(title);
+  toolbar.appendChild(count);
+  toolbar.appendChild(sortBtn);
+  pane.appendChild(toolbar);
+
+  if (fyiEntries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.style.padding = "24px";
+    empty.textContent = "No FYI emails";
+    pane.appendChild(empty);
+    return;
+  }
+
+  const list = document.createElement("ul");
+  list.className = "fyi-list";
+  for (const item of sortFyiEntries(fyiEntries)) {
+    const li = document.createElement("li");
+    const text = document.createElement("div");
+    text.textContent = item.summary || "(no summary)";
+    li.appendChild(text);
+
+    if (item.date) {
+      const dateEl = document.createElement("span");
+      dateEl.className = "fyi-date";
+      dateEl.textContent = item.date;
+      text.appendChild(dateEl);
+    }
+
+    li.addEventListener("click", async () => {
+      try {
+        await browser.runtime.sendMessage({
+          type: "openMessageByHeaderMessageId",
+          headerMessageId: item.doc_id,
+        });
+      } catch (_) {}
+    });
+
+    const createBtn = document.createElement("button");
+    createBtn.className = "fyi-create-btn";
+    createBtn.title = "Create task";
+    createBtn.textContent = "➕";
+    createBtn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      await createTaskFromFyi(item.doc_id);
+    });
+    li.appendChild(createBtn);
+    list.appendChild(li);
+  }
+  pane.appendChild(list);
 }
 
 /* ── Send / Compose ── */

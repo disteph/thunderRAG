@@ -148,6 +148,82 @@
         border: 1px solid rgba(127,127,127,0.25);
         border-radius: 4px;
       }
+      .nav-row {
+        display: flex;
+        gap: 0;
+        flex-shrink: 0;
+      }
+      .nav-row .task-item {
+        flex: 1;
+        min-width: 0;
+      }
+      /* ── FYI pane ── */
+      .fyi-list {
+        list-style: disc;
+        margin: 0;
+        padding: 0 14px 0 28px;
+        overflow-y: auto;
+        flex: 1;
+      }
+      .fyi-list li {
+        position: relative;
+        padding: 8px 36px 8px 2px;
+        font-size: 13px;
+        line-height: 1.45;
+        border-bottom: 1px solid rgba(127,127,127,0.1);
+        cursor: pointer;
+      }
+      .fyi-list li:hover {
+        background: rgba(127,127,127,0.06);
+      }
+      .fyi-date {
+        font-size: 10px;
+        opacity: 0.5;
+        margin-left: 6px;
+        white-space: nowrap;
+      }
+      .fyi-create-btn {
+        position: absolute;
+        bottom: 4px;
+        right: 6px;
+        font-size: 14px;
+        cursor: pointer;
+        opacity: 0.35;
+        background: none;
+        border: none;
+        padding: 2px 4px;
+        color: CanvasText;
+      }
+      .fyi-create-btn:hover {
+        opacity: 1;
+      }
+      .fyi-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px 8px;
+        flex-shrink: 0;
+        border-bottom: 1px solid rgba(127,127,127,0.15);
+      }
+      .fyi-toolbar h3 {
+        margin: 0;
+        font-size: 14px;
+        flex: 1;
+      }
+      .fyi-toolbar button {
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 4px;
+        border: 1px solid rgba(127,127,127,0.25);
+        background: Field;
+        color: FieldText;
+        cursor: pointer;
+      }
+      .fyi-toolbar button:hover { background: rgba(127,127,127,0.1); }
+      .fyi-count {
+        font-size: 11px;
+        opacity: 0.5;
+      }
       .left-tasks-header {
         display: flex;
         align-items: center;
@@ -887,8 +963,13 @@
           <div class="model-row"><span class="model-label">Rewrite</span><select id="rewriteModel" title="Query generation model"><option>(loading…)</option></select></div>
           <div class="model-row"><span class="model-label">Summary</span><select id="summarizeModel" title="Summarization model"><option>(loading…)</option></select></div>
         </div>
-        <div id="generalChatItem" class="task-item active" data-id="general">
-          <div class="ti-title">💬 General chat</div>
+        <div class="nav-row">
+          <div id="generalChatItem" class="task-item active" data-id="general">
+            <div class="ti-title">💬 General chat</div>
+          </div>
+          <div id="fyiItem" class="task-item" data-id="fyi">
+            <div class="ti-title">📋 FYI</div>
+          </div>
         </div>
         <div class="left-tasks-header">
           <span class="lth-label">Tasks</span>

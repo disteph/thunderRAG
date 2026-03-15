@@ -67,6 +67,13 @@
     "  * The email's Date header as the reference point for relative deadlines",
     "- Every task that requires action MUST have a deadline. When in doubt, guess conservatively (sooner rather than later).",
     "",
+    "FYI summary (required when tasks array is empty):",
+    "- When the tasks array is empty, you MUST include a \"summary\" field in the JSON object.",
+    "- The summary is a 1-2 sentence natural-language description written from the sender's perspective.",
+    "- Example: {\"tasks\": [], \"summary\": \"Julie says she's pleased with the debrief and will review the proposal next week.\"}",
+    "- Do NOT use 'Sender - Subject' format. Write it as a human would summarize it conversationally.",
+    "- When tasks is non-empty, omit the summary field.",
+    "",
     "{{user_memories}}"
   ],
 
