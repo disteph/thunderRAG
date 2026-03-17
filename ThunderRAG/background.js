@@ -42,6 +42,46 @@ function notifyTasksChanged() {
   } catch (_) {}
 }
 
+const INGEST_HTTP_TIMEOUT_MS = 15000;
+
+async function fetchWithTimeout(url, init, timeoutMs = INGEST_HTTP_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function postRfc822ToEndpoint(endpoint, raw, headerMessageId) {
+  const bytes = new TextEncoder().encode(raw);
+  const blob = new Blob([bytes], { type: "message/rfc822" });
+  const headers = new Headers();
+  headers.set("Content-Type", "message/rfc822");
+  headers.set("X-Thunderbird-Message-Id", headerMessageId);
+
+  try {
+    return await fetchWithTimeout(endpoint, {
+      method: "POST",
+      headers,
+      body: blob,
+    });
+  } catch (e) {
+    const msg = String(e || "");
+    const isNetworkError = msg.includes("NetworkError") || msg.includes("Failed to fetch");
+    if (isNetworkError && typeof endpoint === "string" && endpoint.startsWith("http://localhost")) {
+      const endpoint2 = endpoint.replace("http://localhost", "http://127.0.0.1");
+      return await fetchWithTimeout(endpoint2, {
+        method: "POST",
+        headers,
+        body: blob,
+      });
+    }
+    throw e;
+  }
+}
+
 /* Open the ThunderRAG task manager UI, optionally filtered to emails. */
 function openTasksTab(emailIds) {
   try {
@@ -283,7 +323,7 @@ browser.runtime.onMessage.addListener(async (msg) => {
       headers.set("Content-Type", "message/rfc822");
       headers.set("X-Thunderbird-Message-Id", headerMessageId);
 
-      const resp = await fetch(endpoint, {
+      const resp = await fetchWithTimeout(endpoint, {
         method: "POST",
         headers,
         body: blob,
@@ -292,6 +332,12 @@ browser.runtime.onMessage.addListener(async (msg) => {
       debugLog(`[ingestByHdrMsgId] response: ${resp.status} ${text.slice(0, 200)}`);
       if (resp.ok) notifyTasksChanged();
       return { ok: resp.ok, status: resp.status, statusText: resp.statusText, body: text };
+    }
+
+    if (msg.type === "refreshThunderRagState") {
+      refreshIngestStatusForFolder();
+      notifyTasksChanged();
+      return { ok: true };
     }
   } catch (e) {
     console.error(e);
@@ -477,7 +523,7 @@ async function processIngestQueue() {
         const messageId = await resolveHeaderMessageId(headerMessageId);
         const rfc822 = await getDecryptedRfc822ForIngest(messageId, headerMessageId);
         const mid = headerMessageId.startsWith("<") ? headerMessageId : "<" + headerMessageId + ">";
-        items.push({ doc_id: mid, raw: rfc822, _endpoint: endpoint });
+        items.push({ doc_id: mid, raw: rfc822, _endpoint: endpoint, _headerMessageId: headerMessageId });
       } catch (e) {
         console.warn(`[ThunderRAG] ingestQueue: failed to fetch ${item.headerMessageId}: ${e}`);
       }
@@ -496,27 +542,48 @@ async function processIngestQueue() {
     for (const item of items) {
       const ep = item._endpoint;
       if (!byEndpoint[ep]) byEndpoint[ep] = [];
-      byEndpoint[ep].push({ doc_id: item.doc_id, raw: item.raw });
+      byEndpoint[ep].push({ doc_id: item.doc_id, raw: item.raw, _headerMessageId: item._headerMessageId });
     }
 
     for (const [endpoint, batch] of Object.entries(byEndpoint)) {
       // Derive server base from the endpoint (strip /ingest path).
-      const base = endpoint.replace(/\/ingest\/?$/, "");
-      try {
-        const resp = await fetch(`${base}/ingest/batch`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ items: batch }),
-        });
-        if (resp.ok) {
-          const data = await resp.json();
-          console.log(`[ThunderRAG] ingestQueue: batch queued ${data.queued || 0} item(s)`);
-          notifyTasksChanged();
-        } else {
-          console.warn(`[ThunderRAG] ingestQueue: batch POST ${resp.status}`);
+      if (/\/ingest\/?$/.test(endpoint)) {
+        const base = endpoint.replace(/\/ingest\/?$/, "");
+        try {
+          const resp = await fetchWithTimeout(`${base}/ingest/batch`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items: batch }),
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            console.log(`[ThunderRAG] ingestQueue: batch queued ${data.queued || 0} item(s)`);
+            notifyTasksChanged();
+            refreshIngestStatusForFolder();
+          } else {
+            console.warn(`[ThunderRAG] ingestQueue: batch POST ${resp.status}`);
+          }
+        } catch (e) {
+          console.warn(`[ThunderRAG] ingestQueue: batch POST error: ${e}`);
         }
-      } catch (e) {
-        console.warn(`[ThunderRAG] ingestQueue: batch POST error: ${e}`);
+      } else {
+        let ok = 0;
+        let fail = 0;
+        for (const item of byEndpoint[endpoint]) {
+          try {
+            const resp = await postRfc822ToEndpoint(endpoint, item.raw, item._headerMessageId || item.doc_id);
+            if (resp.ok) ok++;
+            else fail++;
+          } catch (e) {
+            console.warn(`[ThunderRAG] ingestQueue: direct POST failed endpoint=${endpoint} doc_id=${item.doc_id}: ${e}`);
+            fail++;
+          }
+        }
+        console.log(`[ThunderRAG] ingestQueue: direct POST endpoint=${endpoint} ok=${ok} fail=${fail}`);
+        if (ok > 0) {
+          notifyTasksChanged();
+          refreshIngestStatusForFolder();
+        }
       }
     }
   } catch (e) {
@@ -785,6 +852,12 @@ browser.menus.create({
 });
 
 browser.menus.create({
+  id: "thunderrag-force-task",
+  title: "Force task",
+  contexts: ["message_list"],
+});
+
+browser.menus.create({
   id: "thunderrag-show-tasks",
   title: "Show tasks",
   contexts: ["message_list"],
@@ -805,15 +878,20 @@ browser.menus.onShown.addListener(async (info) => {
     const selected = await browser.mailTabs.getSelectedMessages(tabs[0].id);
     const msgs = selected?.messages || [];
     const multi = msgs.length > 1;
+    const anyNeedsForceTask = msgs.some((msg) => {
+      const mid = msg.headerMessageId || "";
+      const status = ingestStatusCache.get(mid);
+      return !(status?.trigger_active);
+    });
 
     if (multi) {
-      // Multiple selection: show all items
       await Promise.all([
         browser.menus.update("thunderrag-ingest-selected", { visible: true }),
         browser.menus.update("thunderrag-deingest", { visible: true }),
         browser.menus.update("thunderrag-show-ingested", { visible: true }),
         browser.menus.update("thunderrag-mark-processed", { visible: true }),
         browser.menus.update("thunderrag-mark-unprocessed", { visible: true }),
+        browser.menus.update("thunderrag-force-task", { visible: anyNeedsForceTask }),
         browser.menus.update("thunderrag-show-tasks", { visible: true }),
         browser.menus.update("thunderrag-recompute-tasks", { visible: true }),
       ]);
@@ -822,16 +900,15 @@ browser.menus.onShown.addListener(async (info) => {
       const status = ingestStatusCache.get(mid);
       const isIngested = status?.ingested || false;
       const isProcessed = status?.processed || false;
+      const hasTriggerTask = status?.trigger_active || false;
 
-      // Not ingested: only show Ingest
-      // Ingested, not processed: show De-ingest, Show, Mark processed
-      // Ingested, processed: show De-ingest, Show, Mark unprocessed
       await Promise.all([
         browser.menus.update("thunderrag-ingest-selected", { visible: !isIngested }),
         browser.menus.update("thunderrag-deingest", { visible: isIngested }),
         browser.menus.update("thunderrag-show-ingested", { visible: isIngested }),
         browser.menus.update("thunderrag-mark-processed", { visible: isIngested && !isProcessed }),
         browser.menus.update("thunderrag-mark-unprocessed", { visible: isIngested && isProcessed }),
+        browser.menus.update("thunderrag-force-task", { visible: !hasTriggerTask }),
         browser.menus.update("thunderrag-show-tasks", { visible: true }),
         browser.menus.update("thunderrag-recompute-tasks", { visible: isIngested }),
       ]);
@@ -854,6 +931,8 @@ browser.menus.onClicked.addListener(async (info) => {
       await handleMarkProcessed(true);
     } else if (info.menuItemId === "thunderrag-mark-unprocessed") {
       await handleMarkProcessed(false);
+    } else if (info.menuItemId === "thunderrag-force-task") {
+      await handleForceTask();
     } else if (info.menuItemId === "thunderrag-show-tasks") {
       await handleShowTasks();
     } else if (info.menuItemId === "thunderrag-recompute-tasks") {
@@ -944,6 +1023,47 @@ async function handleIngestSelected() {
 
   debugLog(`[ingestSelected] queued ${totalQueued}/${items.length} (${fetchFail} fetch failures)`);
   refreshIngestStatusForFolder();
+}
+
+async function handleForceTask() {
+  const tabs = await browser.mailTabs.query({ active: true, currentWindow: true });
+  if (!tabs.length) return;
+  let page = await browser.mailTabs.getSelectedMessages(tabs[0].id);
+  if (!page?.messages?.length) return;
+
+  const allMessages = [...page.messages];
+  while (page.id) {
+    page = await browser.messages.continueList(page.id);
+    if (page?.messages?.length) allMessages.push(...page.messages);
+  }
+
+  const serverBase = await getServerBase();
+  let ok = 0, fail = 0;
+  for (const msg of allMessages) {
+    try {
+      const headerMessageId = msg.headerMessageId || "";
+      if (!headerMessageId) { fail++; continue; }
+      const mid = headerMessageId.startsWith("<") ? headerMessageId : `<${headerMessageId}>`;
+      const rfc822 = await getDecryptedRfc822ForIngest(msg.id, headerMessageId);
+      const resp = await fetch(`${serverBase}/email/force_task`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: mid, raw: rfc822 }),
+      });
+      if (resp.ok) {
+        ok++;
+      } else {
+        fail++;
+      }
+    } catch (e) {
+      console.warn(`[ThunderRAG] force task: failed for ${msg.headerMessageId}: ${e}`);
+      fail++;
+    }
+  }
+
+  console.log(`[ThunderRAG] force task: ${ok} ok, ${fail} failed out of ${allMessages.length}`);
+  refreshIngestStatusForFolder();
+  if (ok > 0) notifyTasksChanged();
 }
 
 async function handleRecomputeTasks() {
@@ -1224,23 +1344,6 @@ browser.messages.onMoved.addListener((_originalMessages, movedMessages) => {
     const ft = msg.folder?.type || "";
     if (ft === "trash" || ft === "junk") {
       proactiveDelete(msg.headerMessageId, `moved to ${ft}`);
-    } else if (ft === "archives") {
-      // Auto-mark as processed when archived
-      const hmid = msg.headerMessageId || "";
-      if (!hmid) continue;
-      const mid = hmid.startsWith("<") ? hmid : `<${hmid}>`;
-      getServerBase().then(base => {
-        fetch(`${base}/admin/mark_processed`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: mid }),
-        }).then(resp => {
-          if (resp.ok) {
-            console.log(`[ThunderRAG] auto-marked processed (archived): ${hmid}`);
-            notifyTasksChanged();
-          }
-        }).catch(e => console.warn(`[ThunderRAG] auto-mark processed failed for ${hmid}:`, e));
-      });
     }
   }
 });

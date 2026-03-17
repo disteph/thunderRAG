@@ -13,6 +13,9 @@
 */
 
 const DEFAULT_SERVER_BASE = "http://localhost:8080";
+const TASK_LIST_REFRESH_MS = 15000;
+const FYI_REFRESH_MS = 5000;
+const DB_STATS_REFRESH_MS = 10000;
 async function getServerBase() {
   try {
     const data = await browser.storage.local.get("ragServerBase");
@@ -46,6 +49,62 @@ let dragSourceTaskId = null;     // Task being dragged
 let pauseState = { tasks_paused: false, ingest_paused: false };
 let fyiEntries = [];      // Array of FYI email summaries from /fyi/list
 let fyiSortAsc = false;   // Sort direction for FYI pane (false = newest first)
+let selectedFyiIds = new Set();
+let lastClickedFyiIdx = -1;
+let activeEmailHoverPopup = null;
+let dbStatsRefreshInFlight = false;
+
+function stableJson(value) {
+  try {
+    return JSON.stringify(value);
+  } catch (_) {
+    return "";
+  }
+}
+
+function formatLocalDateTime(value) {
+  const s = String(value || "").trim();
+  if (!s) return "";
+  let normalized = s;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(normalized)) {
+    normalized = normalized.replace(" ", "T") + "Z";
+  } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(normalized)) {
+    normalized = normalized + "Z";
+  }
+  const d = new Date(normalized);
+  if (Number.isNaN(d.getTime())) return s;
+  return d.toLocaleString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function formatLocalDate(value) {
+  const s = String(value || "").trim();
+  if (!s) return "";
+  let d;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [y, m, day] = s.split("-").map(Number);
+    d = new Date(y, m - 1, day, 12, 0, 0);
+  } else {
+    let normalized = s;
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(normalized)) {
+      normalized = normalized.replace(" ", "T") + "Z";
+    } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(normalized)) {
+      normalized = normalized + "Z";
+    }
+    d = new Date(normalized);
+  }
+  if (Number.isNaN(d.getTime())) return s;
+  return d.toLocaleDateString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
 
 /* ── Initialization ── */
 
@@ -73,24 +132,28 @@ async function init() {
   // General chat click handler (static HTML element)
   document.getElementById("generalChatItem").addEventListener("click", () => {
     selectedTaskIds.clear();
+    selectedFyiIds.clear();
     selectTask("general");
   });
 
   // FYI click handler
   document.getElementById("fyiItem").addEventListener("click", () => {
     selectedTaskIds.clear();
+    selectedFyiIds.clear();
     selectTask("fyi");
   });
 
   // Title click → DB Stats
   document.getElementById("titleLink").addEventListener("click", () => {
     selectedTaskIds.clear();
+    selectedFyiIds.clear();
     selectTask("dbstats");
   });
 
   // Memories button
   document.getElementById("memoriesBtn").addEventListener("click", () => {
     selectedTaskIds.clear();
+    selectedFyiIds.clear();
     selectTask("memories");
   });
 
@@ -138,7 +201,11 @@ async function init() {
   });
 
   // Fallback poll every 15s for async changes (prefetch daemon, context readiness)
-  setInterval(refreshTaskList, 15000);
+  setInterval(refreshTaskList, TASK_LIST_REFRESH_MS);
+  setInterval(() => {
+    if (activeTaskId === "fyi") refreshFyiPane();
+  }, FYI_REFRESH_MS);
+  setInterval(refreshDbStatsPane, DB_STATS_REFRESH_MS);
 }
 
 /* ── Model management ── */
@@ -204,9 +271,12 @@ async function refreshTaskList() {
   const prevIds = new Set(tasks.map(t => t.task_id));
   await loadTaskList(filterEmailIds);
   if (activeTaskId === "fyi") {
-    await loadFyiList();
-    renderMidPane();
-    renderRightPane();
+    const changed = await loadFyiList();
+    if (changed) {
+      clearActiveEmailHoverPopup();
+      renderMidPane();
+      renderRightPane();
+    }
     return;
   }
   if (activeTaskId && activeTaskId !== "general" && activeTaskId !== "memories" && activeTaskId !== "dbstats") {
@@ -304,7 +374,7 @@ function renderTaskList() {
     if (draggable) el.draggable = true;
 
     const badge = statusBadge(t.status);
-    const deadline = t.deadline ? `<span style="font-size:10px;">${esc(t.deadline)}</span>` : "";
+    const deadline = t.deadline ? `<span style="font-size:10px;">${esc(formatLocalDate(t.deadline))}</span>` : "";
     const pip = readinessPip(t.context_ready);
     const score = t.importance_score != null ? `<span class="ti-score">${t.importance_score}</span>` : "";
 
@@ -471,6 +541,10 @@ function esc(s) {
 async function selectTask(taskId) {
   activeTaskId = taskId;
   activeDraftIdx = 0;
+  if (taskId !== "fyi") {
+    selectedFyiIds.clear();
+    lastClickedFyiIdx = -1;
+  }
   renderTaskList();
 
   if (taskId === "general") {
@@ -523,7 +597,130 @@ async function selectTask(taskId) {
   renderRightPane();
 }
 
+async function notifyThunderRagStateChanged() {
+  try {
+    await browser.runtime.sendMessage({ type: "refreshThunderRagState" });
+  } catch (_) {}
+}
+
+async function refreshFyiPane() {
+  if (activeTaskId !== "fyi") return;
+  const changed = await loadFyiList();
+  if (!changed) return;
+  clearActiveEmailHoverPopup();
+  renderMidPane();
+  renderRightPane();
+}
+
 /* ── Email row helpers ── */
+
+function clearActiveEmailHoverPopup() {
+  if (!activeEmailHoverPopup) return;
+  const state = activeEmailHoverPopup;
+  activeEmailHoverPopup = null;
+  if (state.hideTimer) {
+    clearTimeout(state.hideTimer);
+    state.hideTimer = null;
+  }
+  if (state.popup && state.popup.parentNode) {
+    state.popup.remove();
+  }
+  state.popup = null;
+}
+
+function attachEmailHoverPopup(targets, email) {
+  const els = Array.isArray(targets) ? targets.filter(Boolean) : [targets];
+  if (els.length === 0) return;
+  const state = { popup: null, hideTimer: null };
+  const removePopup = () => {
+    if (state.hideTimer) {
+      clearTimeout(state.hideTimer);
+      state.hideTimer = null;
+    }
+    if (state.popup && state.popup.parentNode) {
+      state.popup.remove();
+    }
+    state.popup = null;
+    if (activeEmailHoverPopup === state) activeEmailHoverPopup = null;
+  };
+  const showPopup = async (ev) => {
+    if (state.hideTimer) {
+      clearTimeout(state.hideTimer);
+      state.hideTimer = null;
+    }
+    if (state.popup) return;
+    clearActiveEmailHoverPopup();
+    state.popup = document.createElement("div");
+    state.popup.className = "email-hover-popup";
+    state.popup.textContent = "Loading…";
+    state.popup.addEventListener("mouseenter", keepPopup);
+    state.popup.addEventListener("mouseleave", dismissPopup);
+    document.body.appendChild(state.popup);
+    activeEmailHoverPopup = state;
+    const rect = (ev.currentTarget || ev.target || els[0]).getBoundingClientRect();
+    state.popup.style.left = Math.max(0, rect.left + 120) + "px";
+    state.popup.style.top = Math.max(0, rect.top - 2) + "px";
+    try {
+      const base = await getServerBase();
+      const resp = await fetch(`${base}/admin/email_detail`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doc_id: email.doc_id }),
+      });
+      if (!resp.ok) throw new Error("not found");
+      const detail = await resp.json();
+      if (!detail.body_text) {
+        try {
+          const extracted = await browser.runtime.sendMessage({
+            type: "extractBody",
+            headerMessageId: email.doc_id,
+            endpoint: base,
+            summarize: false,
+          });
+          if (extracted?.body_text && String(extracted.body_text).trim()) {
+            detail.body_text = String(extracted.body_text).trim();
+          }
+        } catch (_) {}
+      }
+      if (activeEmailHoverPopup !== state || !state.popup || !state.popup.parentNode) return;
+      state.popup.textContent = "";
+      const lines = [];
+      if (detail.sender) lines.push("From: " + detail.sender);
+      if (detail.recipient) lines.push("To: " + detail.recipient);
+      if (detail.cc) lines.push("Cc: " + detail.cc);
+      if (detail.subject) lines.push("Subject: " + detail.subject);
+      if (detail.email_date) lines.push("Date: " + formatLocalDateTime(detail.email_date));
+      if (detail.attachments && detail.attachments.length) lines.push("Attachments: " + detail.attachments.join(", "));
+      if (detail.action_score != null) lines.push("Action: " + detail.action_score + "/100");
+      if (detail.importance_score != null) lines.push("Importance: " + detail.importance_score + "/100");
+      if (detail.reply_by) lines.push("Reply by: " + formatLocalDate(detail.reply_by));
+      lines.push(detail.processed ? "✔ Processed" : "✗ Not processed");
+      if (detail.body_text) {
+        lines.push("───────────");
+        lines.push(detail.body_text);
+      }
+      state.popup.textContent = lines.join("\n");
+    } catch (_) {
+      if (activeEmailHoverPopup === state && state.popup && state.popup.parentNode) {
+        state.popup.textContent = "(no ingested data)";
+      }
+    }
+  };
+  const keepPopup = () => {
+    if (state.hideTimer) {
+      clearTimeout(state.hideTimer);
+      state.hideTimer = null;
+    }
+  };
+  const dismissPopup = () => {
+    if (state.hideTimer) clearTimeout(state.hideTimer);
+    state.hideTimer = setTimeout(removePopup, 200);
+  };
+  for (const el of els) {
+    el.addEventListener("mouseenter", showPopup);
+    el.addEventListener("mouseleave", dismissPopup);
+  }
+}
 
 function buildEmailRow(e) {
   const row = document.createElement("div");
@@ -571,76 +768,13 @@ function buildEmailRow(e) {
       browser.tabs.create({ url });
     } catch (_) {}
   });
-
-  // Hover popup with ingested data
-  let popup = null;
-  let hideTimer = null;
-  const showPopup = async (ev) => {
-    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
-    if (popup) return;
-    popup = document.createElement("div");
-    popup.className = "email-hover-popup";
-    popup.textContent = "Loading…";
-    document.body.appendChild(popup);
-    const rect = (ev.target || link).getBoundingClientRect();
-    popup.style.left = Math.max(0, rect.left + 120) + "px";
-    popup.style.top = (rect.bottom + 4) + "px";
-    try {
-      const base = await getServerBase();
-      const resp = await fetch(`${base}/admin/email_detail`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ doc_id: e.doc_id }),
-      });
-      if (!resp.ok) throw new Error("not found");
-      const detail = await resp.json();
-      if (!popup || !popup.parentNode) return;
-      popup.textContent = "";
-      const lines = [];
-      if (detail.sender) lines.push("From: " + detail.sender);
-      if (detail.recipient) lines.push("To: " + detail.recipient);
-      if (detail.cc) lines.push("Cc: " + detail.cc);
-      if (detail.subject) lines.push("Subject: " + detail.subject);
-      if (detail.email_date) lines.push("Date: " + detail.email_date);
-      if (detail.attachments && detail.attachments.length) lines.push("Attachments: " + detail.attachments.join(", "));
-      if (detail.action_score != null) lines.push("Action: " + detail.action_score + "/100");
-      if (detail.importance_score != null) lines.push("Importance: " + detail.importance_score + "/100");
-      if (detail.reply_by) lines.push("Reply by: " + detail.reply_by);
-      lines.push(detail.processed ? "✔ Processed" : "✗ Not processed");
-      if (detail.body_text) {
-        lines.push("───────────");
-        lines.push(detail.body_text);
-      }
-      popup.textContent = lines.join("\n");
-    } catch (_) {
-      if (popup && popup.parentNode) popup.textContent = "(no ingested data)";
-    }
-  };
-  const keepPopup = () => {
-    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
-  };
-  const dismissPopup = () => {
-    hideTimer = setTimeout(() => {
-      if (popup) { popup.remove(); popup = null; }
-    }, 200);
-  };
-  const showAndWire = async (ev) => {
-    await showPopup(ev);
-    if (popup) {
-      popup.addEventListener("mouseenter", keepPopup);
-      popup.addEventListener("mouseleave", dismissPopup);
-    }
-  };
-  link.addEventListener("mouseenter", showAndWire);
-  link.addEventListener("mouseleave", dismissPopup);
-  tankBtn.addEventListener("mouseenter", showAndWire);
-  tankBtn.addEventListener("mouseleave", dismissPopup);
+  attachEmailHoverPopup([link, tankBtn], e);
 
   row.appendChild(link);
   if (date) {
     const dateSpan = document.createElement("span");
     dateSpan.className = "email-date";
-    dateSpan.textContent = date;
+    dateSpan.textContent = formatLocalDateTime(date);
     row.appendChild(dateSpan);
   }
   row.appendChild(tankBtn);
@@ -717,6 +851,7 @@ function buildCollapsibleTextSection(label, text) {
 /* ── Mid pane: conversation ── */
 
 function renderMidPane() {
+  clearActiveEmailHoverPopup();
   const pane = document.getElementById("midPane");
   const right = document.getElementById("rightPane");
   const dividerRight = document.getElementById("dividerRight");
@@ -781,7 +916,7 @@ function renderMidPane() {
   titleMeta.className = "mh-title-meta";
   if (activeTask.deadline) {
     const dl = document.createElement("span");
-    dl.textContent = `📅 ${activeTask.deadline}`;
+    dl.textContent = `📅 ${formatLocalDate(activeTask.deadline)}`;
     titleMeta.appendChild(dl);
   }
   if (activeTask.importance_score != null) {
@@ -1160,6 +1295,8 @@ function showTaskContextMenu(ev, taskId, title) {
 function dismissTaskContextMenu() {
   const m = document.getElementById("taskCtxMenu");
   if (m) m.remove();
+  const f = document.getElementById("fyiCtxMenu");
+  if (f) f.remove();
 }
 
 async function deleteTask(taskId, title) {
@@ -1477,6 +1614,13 @@ async function dismissDraft(idx) {
 }
 
 async function loadFyiList() {
+  const prevSignature = stableJson(fyiEntries.map((item) => ({
+    doc_id: item.doc_id || "",
+    summary: item.summary || "",
+    date: item.date || "",
+    sender: item.sender || "",
+    subject: item.subject || "",
+  })));
   try {
     const base = await getServerBase();
     const resp = await fetch(`${base}/fyi/list`);
@@ -1487,6 +1631,17 @@ async function loadFyiList() {
     console.error("[fyi.list]", e);
     fyiEntries = [];
   }
+  const visibleIds = new Set(fyiEntries.map((item) => item.doc_id));
+  selectedFyiIds = new Set([...selectedFyiIds].filter((id) => visibleIds.has(id)));
+  if (lastClickedFyiIdx >= fyiEntries.length) lastClickedFyiIdx = fyiEntries.length - 1;
+  const nextSignature = stableJson(fyiEntries.map((item) => ({
+    doc_id: item.doc_id || "",
+    summary: item.summary || "",
+    date: item.date || "",
+    sender: item.sender || "",
+    subject: item.subject || "",
+  })));
+  return prevSignature !== nextSignature;
 }
 
 function sortFyiEntries(entries) {
@@ -1497,20 +1652,27 @@ function sortFyiEntries(entries) {
   });
 }
 
-async function createTaskFromFyi(docId) {
+async function createTaskFromFyi(docIds, selectCreated = true) {
   try {
     const base = await getServerBase();
-    const resp = await fetch(`${base}/fyi/create_task`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ doc_id: docId }),
-    });
-    if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
-    const data = await resp.json();
+    const ids = Array.isArray(docIds) ? docIds : [docIds];
+    let taskId = "";
+    for (const docId of ids) {
+      const resp = await fetch(`${base}/email/force_task`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: docId }),
+      });
+      if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+      const data = await resp.json();
+      if (!taskId && data.task_id) taskId = data.task_id;
+    }
+    selectedFyiIds = new Set([...selectedFyiIds].filter((id) => !ids.includes(id)));
     await loadFyiList();
     await loadTaskList(filterEmailIds);
-    if (data.task_id) {
-      await selectTask(data.task_id);
+    await notifyThunderRagStateChanged();
+    if (selectCreated && ids.length === 1 && taskId) {
+      await selectTask(taskId);
     } else {
       renderMidPane();
       renderRightPane();
@@ -1519,6 +1681,208 @@ async function createTaskFromFyi(docId) {
     console.error("[fyi.create_task]", e);
     alert(`Failed to create task: ${e.message}`);
   }
+}
+
+async function refreshFyiAfterMutation(removedIds = []) {
+  if (removedIds.length) {
+    selectedFyiIds = new Set([...selectedFyiIds].filter((id) => !removedIds.includes(id)));
+  }
+  await loadFyiList();
+  await loadTaskList(filterEmailIds);
+  await notifyThunderRagStateChanged();
+  renderMidPane();
+  renderRightPane();
+}
+
+function getFyiItemsByIds(docIds) {
+  const ids = Array.isArray(docIds) ? docIds : [docIds];
+  const byId = new Map(fyiEntries.map((item) => [item.doc_id, item]));
+  return ids.map((id) => byId.get(id)).filter(Boolean);
+}
+
+async function openFyiEmails(docIds) {
+  try {
+    const ids = Array.isArray(docIds) ? docIds : [docIds];
+    for (const docId of ids) {
+      await browser.runtime.sendMessage({
+        type: "openMessageByHeaderMessageId",
+        headerMessageId: docId,
+      });
+    }
+  } catch (e) {
+    console.error("[fyi.open_email]", e);
+    alert(`Failed to open email: ${e.message}`);
+  }
+}
+
+async function ingestFyiEmails(docIds) {
+  try {
+    const base = await getServerBase();
+    const ids = Array.isArray(docIds) ? docIds : [docIds];
+    for (const docId of ids) {
+      const result = await browser.runtime.sendMessage({
+        type: "ingestMessageByHeaderMessageId",
+        headerMessageId: docId,
+        endpoint: `${base}/ingest`,
+      });
+      if (!result?.ok) {
+        throw new Error(result?.body || `Server error: ${result?.status ?? "unknown"}`);
+      }
+    }
+    await refreshFyiAfterMutation();
+  } catch (e) {
+    console.error("[fyi.ingest]", e);
+    alert(`Failed to ingest email: ${e.message}`);
+  }
+}
+
+async function deingestFyiEmails(docIds) {
+  try {
+    const base = await getServerBase();
+    const ids = Array.isArray(docIds) ? docIds : [docIds];
+    for (const docId of ids) {
+      const resp = await fetch(`${base}/admin/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: docId }),
+      });
+      if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+    }
+    await refreshFyiAfterMutation(ids);
+  } catch (e) {
+    console.error("[fyi.deingest]", e);
+    alert(`Failed to de-ingest email: ${e.message}`);
+  }
+}
+
+async function showFyiIngestedData(docIds) {
+  try {
+    const base = await getServerBase();
+    const items = getFyiItemsByIds(docIds);
+    const msgs = items.map((item) => ({
+      id: item.doc_id,
+      from: item.sender || "",
+      subject: item.subject || "",
+      date: item.date || "",
+    }));
+    if (!msgs.length) return;
+    const url = browser.runtime.getURL("ui/ingested-detail.html")
+      + `?msgs=${encodeURIComponent(JSON.stringify(msgs))}&endpoint=${encodeURIComponent(base)}`;
+    browser.tabs.create({ url });
+  } catch (e) {
+    console.error("[fyi.show_ingested]", e);
+    alert(`Failed to show ingested data: ${e.message}`);
+  }
+}
+
+async function setFyiProcessed(docIds, processed) {
+  try {
+    const base = await getServerBase();
+    const ids = Array.isArray(docIds) ? docIds : [docIds];
+    const path = processed ? "/admin/mark_processed" : "/admin/mark_unprocessed";
+    for (const docId of ids) {
+      const resp = await fetch(`${base}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: docId }),
+      });
+      if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+    }
+    await refreshFyiAfterMutation(processed ? ids : []);
+  } catch (e) {
+    console.error("[fyi.set_processed]", e);
+    alert(`Failed to mark ${processed ? "processed" : "unprocessed"}: ${e.message}`);
+  }
+}
+
+async function markFyiProcessed(docIds) {
+  await setFyiProcessed(docIds, true);
+}
+
+async function markFyiUnprocessed(docIds) {
+  await setFyiProcessed(docIds, false);
+}
+
+async function showTasksForFyi(docIds) {
+  try {
+    const ids = Array.isArray(docIds) ? docIds : [docIds];
+    if (!ids.length) return;
+    const url = browser.runtime.getURL("ui/tasks.html")
+      + `?email_ids=${encodeURIComponent(JSON.stringify(ids))}`;
+    browser.tabs.create({ url });
+  } catch (e) {
+    console.error("[fyi.show_tasks]", e);
+    alert(`Failed to show tasks: ${e.message}`);
+  }
+}
+
+async function recomputeFyiTasks(docIds) {
+  try {
+    const base = await getServerBase();
+    const ids = Array.isArray(docIds) ? docIds : [docIds];
+    for (const docId of ids) {
+      const got = await browser.runtime.sendMessage({
+        type: "getRawMessageByHeaderMessageId",
+        headerMessageId: docId,
+      });
+      const raw = got?.raw || "";
+      if (!raw) throw new Error(`Missing raw email for ${docId}`);
+      const resp = await fetch(`${base}/email/recompute_tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doc_id: docId, raw }),
+      });
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(text || `Server error: ${resp.status}`);
+      }
+    }
+    await refreshFyiAfterMutation();
+  } catch (e) {
+    console.error("[fyi.recompute_tasks]", e);
+    alert(`Failed to recompute tasks: ${e.message}`);
+  }
+}
+
+function showFyiContextMenu(ev, docId) {
+  ev.preventDefault();
+  dismissTaskContextMenu();
+  const targetIds = selectedFyiIds.has(docId) && selectedFyiIds.size > 0
+    ? [...selectedFyiIds]
+    : [docId];
+  const count = targetIds.length;
+  const menu = document.createElement("div");
+  menu.className = "task-context-menu";
+  menu.id = "fyiCtxMenu";
+  const addItem = (text, cls, handler) => {
+    const item = document.createElement("div");
+    item.className = "ctx-item" + (cls ? " " + cls : "");
+    item.textContent = text;
+    item.addEventListener("click", () => { dismissTaskContextMenu(); handler(); });
+    menu.appendChild(item);
+  };
+  const addSep = () => {
+    const sep = document.createElement("div");
+    sep.className = "ctx-sep";
+    menu.appendChild(sep);
+  };
+  addItem(count > 1 ? `Open ${count} emails` : "Open email", "", () => openFyiEmails(targetIds));
+  addSep();
+  addItem("Ingest selected emails" + (count > 1 ? ` (${count})` : ""), "", () => ingestFyiEmails(targetIds));
+  addItem("De-ingest selected emails" + (count > 1 ? ` (${count})` : ""), "", () => deingestFyiEmails(targetIds));
+  addItem("Show ingested data" + (count > 1 ? ` (${count})` : ""), "", () => showFyiIngestedData(targetIds));
+  addSep();
+  addItem("Mark processed" + (count > 1 ? ` (${count})` : ""), "", () => markFyiProcessed(targetIds));
+  addItem("Mark unprocessed" + (count > 1 ? ` (${count})` : ""), "", () => markFyiUnprocessed(targetIds));
+  addItem("Force task" + (count > 1 ? ` (${count})` : ""), "", () => createTaskFromFyi(targetIds, count === 1));
+  addItem("Show tasks" + (count > 1 ? ` (${count})` : ""), "", () => showTasksForFyi(targetIds));
+  addItem("Recompute tasks" + (count > 1 ? ` (${count})` : ""), "", () => recomputeFyiTasks(targetIds));
+  menu.style.left = ev.clientX + "px";
+  menu.style.top = ev.clientY + "px";
+  document.body.appendChild(menu);
+  setTimeout(() => {
+    document.addEventListener("click", dismissTaskContextMenu, { once: true });
+  }, 0);
 }
 
 function renderFyiPane() {
@@ -1533,7 +1897,7 @@ function renderFyiPane() {
   title.textContent = "FYI";
   const count = document.createElement("span");
   count.className = "fyi-count";
-  count.textContent = `${fyiEntries.length} email${fyiEntries.length === 1 ? "" : "s"}`;
+  count.textContent = `${fyiEntries.length} unprocessed email${fyiEntries.length === 1 ? "" : "s"}`;
   const sortBtn = document.createElement("button");
   sortBtn.textContent = fyiSortAsc ? "Oldest first" : "Newest first";
   sortBtn.addEventListener("click", () => {
@@ -1556,39 +1920,76 @@ function renderFyiPane() {
 
   const list = document.createElement("ul");
   list.className = "fyi-list";
-  for (const item of sortFyiEntries(fyiEntries)) {
+  const items = sortFyiEntries(fyiEntries);
+  items.forEach((item, idx) => {
     const li = document.createElement("li");
+    if (selectedFyiIds.has(item.doc_id)) li.classList.add("selected");
     const text = document.createElement("div");
+    text.className = "fyi-summary";
     text.textContent = item.summary || "(no summary)";
     li.appendChild(text);
 
     if (item.date) {
       const dateEl = document.createElement("span");
       dateEl.className = "fyi-date";
-      dateEl.textContent = item.date;
+      dateEl.textContent = formatLocalDateTime(item.date);
       text.appendChild(dateEl);
     }
 
-    li.addEventListener("click", async () => {
-      try {
-        await browser.runtime.sendMessage({
-          type: "openMessageByHeaderMessageId",
-          headerMessageId: item.doc_id,
-        });
-      } catch (_) {}
+    li.addEventListener("click", (ev) => {
+      if (ev.shiftKey && lastClickedFyiIdx >= 0) {
+        const from = Math.min(lastClickedFyiIdx, idx);
+        const to = Math.max(lastClickedFyiIdx, idx);
+        for (let i = from; i <= to; i++) {
+          selectedFyiIds.add(items[i].doc_id);
+        }
+      } else if (ev.metaKey || ev.ctrlKey) {
+        if (selectedFyiIds.has(item.doc_id)) selectedFyiIds.delete(item.doc_id);
+        else selectedFyiIds.add(item.doc_id);
+        lastClickedFyiIdx = idx;
+      } else {
+        selectedFyiIds.clear();
+        selectedFyiIds.add(item.doc_id);
+        lastClickedFyiIdx = idx;
+      }
+      renderFyiPane();
     });
 
+    li.addEventListener("contextmenu", (ev) => {
+      if (!selectedFyiIds.has(item.doc_id)) {
+        selectedFyiIds.clear();
+        selectedFyiIds.add(item.doc_id);
+        lastClickedFyiIdx = idx;
+        renderFyiPane();
+      }
+      showFyiContextMenu(ev, item.doc_id);
+    });
+
+    attachEmailHoverPopup(li, item);
+
+    const actions = document.createElement("div");
+    actions.className = "fyi-actions";
     const createBtn = document.createElement("button");
     createBtn.className = "fyi-create-btn";
-    createBtn.title = "Create task";
-    createBtn.textContent = "➕";
+    createBtn.title = "Force task";
+    createBtn.textContent = "Force task";
     createBtn.addEventListener("click", async (ev) => {
       ev.stopPropagation();
-      await createTaskFromFyi(item.doc_id);
+      await createTaskFromFyi(item.doc_id, true);
     });
-    li.appendChild(createBtn);
+    const processedBtn = document.createElement("button");
+    processedBtn.className = "fyi-process-btn";
+    processedBtn.title = "Mark processed";
+    processedBtn.textContent = "Processed";
+    processedBtn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      await markFyiProcessed(item.doc_id);
+    });
+    actions.appendChild(createBtn);
+    actions.appendChild(processedBtn);
+    li.appendChild(actions);
     list.appendChild(li);
-  }
+  });
   pane.appendChild(list);
 }
 
@@ -1950,6 +2351,17 @@ async function loadDbStats() {
   }
 }
 
+async function refreshDbStatsPane() {
+  if (activeTaskId !== "dbstats" || dbStatsRefreshInFlight) return;
+  dbStatsRefreshInFlight = true;
+  try {
+    await loadDbStats();
+    if (activeTaskId === "dbstats") renderDbStatsPane();
+  } finally {
+    dbStatsRefreshInFlight = false;
+  }
+}
+
 function renderDbStatsPane() {
   const pane = document.getElementById("midPane");
   pane.innerHTML = "";
@@ -1974,10 +2386,10 @@ function renderDbStatsPane() {
 
   // Group tables by category
   const catMeta = {
-    email:  { label: "Email (metadata & embeddings only — no bodies stored)", clearable: false },
-    task:   { label: "Tasks (stores compressed email bodies)", clearable: true, endpoint: "/admin/clear_tasks" },
-    memory: { label: "Memories (derived from emails)", clearable: true, endpoint: "/admin/clear_memories" },
-    other:  { label: "Other", clearable: false }
+    email:  { label: "Email (metadata & embeddings only — no bodies stored, except ingest_queue, which stores full raw RFC822 emails pending ingestion)", endpoint: "/admin/clear_rag", buttonLabel: "Clear RAG" },
+    task:   { label: "Tasks (stores compressed email bodies)", endpoint: "/admin/clear_tasks", buttonLabel: "Clear Tasks" },
+    memory: { label: "Memories (derived from emails)", endpoint: "/admin/clear_memories", buttonLabel: "Clear Memories" },
+    other:  { label: "Other" }
   };
   const groups = {};
   let totalRows = 0;
@@ -1990,6 +2402,30 @@ function renderDbStatsPane() {
 
   const table = document.createElement("table");
   table.style.cssText = "width:100%;border-collapse:collapse;font-size:13px;";
+  const runAction = async (btn, endpoint, label, names) => {
+    if (!endpoint) return;
+    const confirmMessage =
+      endpoint === "/admin/clear_rag"
+        ? `MASSIVE WARNING\n\nClear RAG will permanently delete ALL stored RAG/email data from: ${names}.\n\nThis includes indexed email metadata, embeddings, pending processed markers, and related stored retrieval data.\n\nTHIS IS IRRETRIEVABLE DATA LOSS.\n\nThis cannot be undone.\n\nProceed?`
+        : names
+          ? `Delete ALL data from: ${names}?\n\nThis cannot be undone.`
+          : "";
+    if (confirmMessage && !confirm(confirmMessage)) return;
+    const prev = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Clearing…";
+    try {
+      const base = await getServerBase();
+      const resp = await fetch(`${base}${endpoint}`, { method: "POST" });
+      if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+      await loadDbStats();
+      renderDbStatsPane();
+    } catch (e) {
+      alert(`Error: ${e.message}`);
+      btn.disabled = false;
+      btn.textContent = prev || label;
+    }
+  };
 
   // Header row
   const thead = document.createElement("thead");
@@ -1998,31 +2434,63 @@ function renderDbStatsPane() {
     <th style="padding:6px 12px;">Description</th>
     <th style="padding:6px 12px;text-align:right;">Rows</th>
     <th style="padding:6px 0 6px 12px;text-align:right;">Size</th>
+    <th style="padding:6px 0 6px 12px;text-align:right;"></th>
   </tr>`;
   table.appendChild(thead);
 
   const tbody = document.createElement("tbody");
   for (const cat of ["email", "task", "memory", "other"]) {
-    const rows = groups[cat];
+    let rows = groups[cat];
     if (!rows || rows.length === 0) continue;
     const meta = catMeta[cat] || catMeta.other;
+    if (cat === "email") {
+      rows = rows.slice().sort((a, b) => {
+        if (a.name === "ingest_queue") return 1;
+        if (b.name === "ingest_queue") return -1;
+        return 0;
+      });
+    }
 
-    // Category header row
     const catTr = document.createElement("tr");
-    catTr.innerHTML = `<td colspan="4" style="padding:10px 0 4px 0;font-weight:bold;font-size:12px;color:var(--fg,#333);border-bottom:1px solid var(--border,#ddd);">
-      ${esc(meta.label)}</td>`;
+    const catRows = rows.map(t => t.name).join(", ");
+    const catHasData = rows.some(t => t.rows > 0);
+    let catAction = "";
+    if (meta.endpoint) {
+      catAction = `<button data-endpoint="${esc(meta.endpoint)}" data-label="${esc(meta.buttonLabel || "")}" data-names="${esc(catRows)}" style="font-size:12px;color:#c00;"${catHasData ? "" : " disabled"}>${esc(meta.buttonLabel || "")}</button>`;
+    }
+    catTr.innerHTML = `
+      <td colspan="4" style="padding:10px 12px 4px 0;font-weight:bold;font-size:12px;color:FieldText;border-bottom:1px solid var(--border,#ddd);">${esc(meta.label)}</td>
+      <td style="padding:10px 0 4px 12px;text-align:right;border-bottom:1px solid var(--border,#ddd);white-space:nowrap;">${catAction}</td>
+    `;
     tbody.appendChild(catTr);
+    const catBtn = catTr.querySelector("button[data-endpoint]");
+    if (catBtn) {
+      catBtn.addEventListener("click", () =>
+        runAction(catBtn, catBtn.dataset.endpoint, catBtn.dataset.label || "", catBtn.dataset.names || "")
+      );
+    }
 
     for (const t of rows) {
       const tr = document.createElement("tr");
       tr.style.borderBottom = "1px solid var(--border,#eee)";
+      let rowAction = "";
+      if (t.name === "ingest_queue") {
+        rowAction = `<button data-endpoint="/admin/clear_ingest_queue" data-label="Clear" style="font-size:12px;color:#c00;"${t.rows > 0 ? "" : " disabled"}>Clear</button>`;
+      }
       tr.innerHTML = `
         <td style="padding:5px 12px 5px 12px;font-family:monospace;font-size:12px;">${esc(t.name)}</td>
         <td style="padding:5px 12px;font-size:12px;color:var(--muted,#888);">${esc(t.description || '')}</td>
         <td style="padding:5px 12px;text-align:right;">${t.rows.toLocaleString()}</td>
         <td style="padding:5px 0 5px 12px;text-align:right;">${esc(t.size)}</td>
+        <td style="padding:5px 0 5px 12px;text-align:right;white-space:nowrap;">${rowAction}</td>
       `;
       tbody.appendChild(tr);
+      const rowBtn = tr.querySelector("button[data-endpoint]");
+      if (rowBtn) {
+        rowBtn.addEventListener("click", () =>
+          runAction(rowBtn, rowBtn.dataset.endpoint, rowBtn.dataset.label || "", t.name)
+        );
+      }
     }
   }
 
@@ -2034,15 +2502,15 @@ function renderDbStatsPane() {
     <td style="padding:6px 12px;"></td>
     <td style="padding:6px 12px;text-align:right;">${totalRows.toLocaleString()}</td>
     <td style="padding:6px 0 6px 12px;text-align:right;">${esc(dbStatsTotalSize)}</td>
+    <td style="padding:6px 0 6px 12px;"></td>
   `;
   tbody.appendChild(totalTr);
 
   table.appendChild(tbody);
   wrapper.appendChild(table);
 
-  // Button row
   const btnRow = document.createElement("div");
-  btnRow.style.cssText = "margin-top:12px;display:flex;gap:8px;align-items:center;";
+  btnRow.style.cssText = "margin-top:12px;display:flex;justify-content:flex-end;";
 
   const refreshBtn = document.createElement("button");
   refreshBtn.textContent = "Refresh";
@@ -2054,37 +2522,6 @@ function renderDbStatsPane() {
     renderDbStatsPane();
   });
   btnRow.appendChild(refreshBtn);
-
-  for (const cat of ["task", "memory"]) {
-    const meta = catMeta[cat];
-    if (!meta || !meta.clearable || !groups[cat]) continue;
-    const catRows = groups[cat];
-    const hasData = catRows.some(t => t.rows > 0);
-    if (!hasData) continue;
-
-    const catLabel = cat === "memory" ? "Memories" : cat.charAt(0).toUpperCase() + cat.slice(1) + "s";
-    const btn = document.createElement("button");
-    btn.textContent = `Clear ${catLabel}`;
-    btn.style.cssText = "font-size:12px;color:#c00;";
-    btn.addEventListener("click", async () => {
-      const names = catRows.map(t => t.name).join(", ");
-      if (!confirm(`Delete ALL data from: ${names}?\n\nThis cannot be undone.`)) return;
-      btn.disabled = true;
-      btn.textContent = "Clearing…";
-      try {
-        const base = await getServerBase();
-        const resp = await fetch(`${base}${meta.endpoint}`, { method: "POST" });
-        if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
-        await loadDbStats();
-        renderDbStatsPane();
-      } catch (e) {
-        alert(`Error: ${e.message}`);
-        btn.disabled = false;
-        btn.textContent = `Clear ${catLabel}`;
-      }
-    });
-    btnRow.appendChild(btn);
-  }
 
   wrapper.appendChild(btnRow);
   pane.appendChild(wrapper);

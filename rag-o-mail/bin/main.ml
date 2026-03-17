@@ -508,6 +508,11 @@ let extract_email_addresses (text : string) : string list =
       if String.contains after '.' then Some (String.lowercase_ascii tok) else None
     else None)
 
+let sender_matches_user ~(whoami : string) ~(from_ : string) : bool =
+  let user_emails = extract_email_addresses whoami in
+  let from_emails = extract_email_addresses from_ in
+  user_emails <> [] && List.exists (fun addr -> List.mem addr user_emails) from_emails
+
 (* Build user-identity string for LLM prompts.
    ~long:true  → "The user (the email account owner) is: NAME (email: EMAIL).\n"
    ~long:false → "The user is: NAME (email: EMAIL). "                           *)
@@ -827,9 +832,124 @@ let high_priority_count = Atomic.make 0
 let tasks_paused  = Atomic.make false
 let ingest_paused = Atomic.make false
 
+let debug_now () = Unix.gettimeofday ()
+let debug_json_age ts = if ts <= 0. then `Null else `Float (debug_now () -. ts)
+let debug_json_string_opt s = if String.trim s = "" then `Null else `String s
+let daemon_triage_timeout_seconds = 180.0
+let daemon_triage_stale_claim_seconds = 600
+let daemon_ingest_stale_claim_seconds = 120
+let daemon_safety_wake_seconds = 30.0
+
+let is_retryable_ingest_error (msg : string) : bool =
+  let lower = String.lowercase_ascii (String.trim msg) in
+  lower <> "" && (
+    contains_substring ~sub:"ollama" lower
+    || contains_substring ~sub:"connection refused" lower
+    || contains_substring ~sub:"connect" lower
+    || contains_substring ~sub:"timed out" lower
+    || contains_substring ~sub:"timeout" lower
+    || contains_substring ~sub:"failed to fetch" lower
+    || contains_substring ~sub:"econnrefused" lower
+    || contains_substring ~sub:"connection reset" lower
+    || contains_substring ~sub:"temporarily unavailable" lower
+    || contains_substring ~sub:"broken pipe" lower
+  )
+
+let last_high_priority_entered_at = ref 0.0
+let last_high_priority_exited_at = ref 0.0
+let prefetch_notify_count = ref 0
+let last_prefetch_notify_at = ref 0.0
+let last_prefetch_notify_ok = ref true
+let last_prefetch_notify_error = ref ""
+let daemon_loop_count = ref 0
+let daemon_last_loop_started_at = ref 0.0
+let daemon_last_loop_finished_at = ref 0.0
+let daemon_last_sleep_seconds = ref 0.0
+let daemon_current_phase = ref "idle"
+let daemon_current_phase_started_at = ref 0.0
+let daemon_current_ingest_doc_id = ref ""
+let daemon_current_ingest_started_at = ref 0.0
+let daemon_current_triage_doc_id = ref ""
+let daemon_current_triage_started_at = ref 0.0
+let daemon_current_triage_stage = ref "idle"
+let daemon_current_triage_stage_started_at = ref 0.0
+let daemon_last_ingest_doc_id = ref ""
+let daemon_last_ingest_started_at = ref 0.0
+let daemon_last_ingest_finished_at = ref 0.0
+let daemon_last_ingest_result = ref ""
+let daemon_last_triage_doc_id = ref ""
+let daemon_last_triage_started_at = ref 0.0
+let daemon_last_triage_finished_at = ref 0.0
+let daemon_last_triage_stage = ref ""
+let daemon_last_triage_result = ref ""
+let ingest_request_active_count = ref 0
+let ingest_request_last_doc_id = ref ""
+let ingest_request_last_started_at = ref 0.0
+let ingest_request_last_finished_at = ref 0.0
+let ingest_request_last_result = ref ""
+let ingest_batch_active_count = ref 0
+let ingest_batch_last_started_at = ref 0.0
+let ingest_batch_last_finished_at = ref 0.0
+let ingest_batch_last_queued = ref 0
+let ingest_batch_last_errors = ref 0
+let ingest_batch_last_result = ref ""
+let current_ingest_origin = ref ""
+let current_ingest_doc_id = ref ""
+let current_ingest_stage = ref "idle"
+let current_ingest_stage_started_at = ref 0.0
+let last_ingest_origin = ref ""
+let last_ingest_doc_id = ref ""
+let last_ingest_started_at = ref 0.0
+let last_ingest_finished_at = ref 0.0
+let last_ingest_stage = ref ""
+let last_ingest_result = ref ""
+
+let ingest_queue_status_json () =
+  match Rag_lib.Pg.ingest_queue_status () with
+  | Ok (pending, processing, done_, errored) ->
+      `Assoc
+        [ ("pending", `Int pending)
+        ; ("processing", `Int processing)
+        ; ("done", `Int done_)
+        ; ("error", `Int errored)
+        ; ("total", `Int (pending + processing + done_ + errored))
+        ]
+  | Error e ->
+      `Assoc [ ("error", `String e) ]
+
+let triage_queue_status_json () =
+  match Rag_lib.Pg.triage_queue_status () with
+  | Ok (pending, processing, errored) ->
+      `Assoc
+        [ ("pending", `Int pending)
+        ; ("processing", `Int processing)
+        ; ("error", `Int errored)
+        ; ("total", `Int (pending + processing + errored))
+        ]
+  | Error e ->
+      `Assoc [ ("error", `String e) ]
+
+let log_ingest_queue_status label =
+  match Rag_lib.Pg.ingest_queue_status () with
+  | Ok (pending, processing, done_, errored) ->
+      Printf.printf "[%s.queue] pending=%d processing=%d done=%d error=%d high_priority=%d ingest_paused=%b tasks_paused=%b\n%!"
+        label pending processing done_ errored
+        (Atomic.get high_priority_count) (Atomic.get ingest_paused) (Atomic.get tasks_paused)
+  | Error e ->
+      Printf.eprintf "[%s.queue] error=%s\n%!" label e
+
 let with_high_priority f =
+  let started = debug_now () in
+  last_high_priority_entered_at := started;
   Atomic.incr high_priority_count;
-  Fun.protect f ~finally:(fun () -> Atomic.decr high_priority_count)
+  Printf.printf "[high_priority] enter count=%d\n%!" (Atomic.get high_priority_count);
+  Fun.protect f ~finally:(fun () ->
+    Atomic.decr high_priority_count;
+    last_high_priority_exited_at := debug_now ();
+    Printf.printf "[high_priority] exit count=%d held=%.3fs\n%!"
+      (Atomic.get high_priority_count) (!last_high_priority_exited_at -. started);
+    if Atomic.get high_priority_count = 0 then
+      !notify_prefetch ())
 
 (* Generate a UUID v4 task ID using /dev/urandom for proper randomness. *)
 let generate_task_id () =
@@ -849,6 +969,70 @@ let generate_task_id () =
     (Char.code (Bytes.get buf 10)) (Char.code (Bytes.get buf 11))
     (Char.code (Bytes.get buf 12)) (Char.code (Bytes.get buf 13))
     (Char.code (Bytes.get buf 14)) (Char.code (Bytes.get buf 15))
+
+let lookup_fyi_summary (doc_id : string) : string =
+  let ndoc = Rag_lib.Pg.normalize_doc_id doc_id in
+  match Rag_lib.Pg.list_fyi () with
+  | Ok rows ->
+      (match List.find_opt (fun (did, _, _, _, _) -> did = ndoc) rows with
+      | Some (_, summary, _, _, _) -> summary
+      | None -> "")
+  | Error _ -> ""
+
+let forced_task_summary ~(doc_id : string) ~(sender : string) ~(subject : string) ~(date_ : string) : string =
+  let sender = String.trim sender in
+  let subject = String.trim subject in
+  let date_ = String.trim date_ in
+  let date_suffix = if date_ = "" then "" else Printf.sprintf " (%s)" date_ in
+  if sender <> "" && subject <> "" then
+    Printf.sprintf "Follow up on email from %s about \"%s\"%s" sender subject date_suffix
+  else if subject <> "" then
+    Printf.sprintf "Follow up on email about \"%s\"%s" subject date_suffix
+  else if sender <> "" then
+    Printf.sprintf "Follow up on email from %s%s" sender date_suffix
+  else
+    Printf.sprintf "Task from email %s" (Rag_lib.Pg.normalize_doc_id doc_id)
+
+let force_create_task_for_email ~client ~sw ~(doc_id : string) ~(summary : string) ~(subject : string)
+    : ([ `Created of string | `Existing of string ], string) result =
+  let ndoc = Rag_lib.Pg.normalize_doc_id doc_id in
+  match Rag_lib.Pg.tasks_by_trigger_doc_id ndoc with
+  | Error e -> Error e
+  | Ok (task_id :: _) -> Ok (`Existing task_id)
+  | Ok [] ->
+      let summary =
+        let s = String.trim summary in
+        if s <> "" then s else forced_task_summary ~doc_id:ndoc ~sender:"" ~subject ~date_:""
+      in
+      let title_base =
+        let s = String.trim subject in
+        if s <> "" then s else summary
+      in
+      let title =
+        if String.length title_base > 80 then String.sub title_base 0 77 ^ "..." else title_base
+      in
+      let task_id = generate_task_id () in
+      let embedding =
+        match ollama_embed ~client ~sw ~task:Search_document ~label:"force_create_task" ~text:title () with
+        | Ok v -> l2_normalize v
+        | Error _ -> []
+      in
+      (match Rag_lib.Pg.create_task ~task_id ~title ~description:summary
+          ~importance_score:(Some 50) ~deadline:""
+          ~embedding ~conversation_json:"[]" ~drafts_json:"[]" () with
+      | Error e -> Error e
+      | Ok () ->
+          match Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:ndoc ~role:"trigger"
+              ~compressed_body:summary () with
+          | Error e ->
+              ignore (Rag_lib.Pg.delete_task task_id);
+              Error e
+          | Ok () ->
+              ignore (Rag_lib.Pg.delete_fyi ndoc);
+              ignore (Rag_lib.Pg.delete_triage_entry ndoc);
+              !notify_prefetch ();
+              Printf.printf "[force_task] created task %s from doc_id=%s\n%!" task_id ndoc;
+              Ok (`Created task_id))
 
 (*
   Task proposal processing (Phase D)
@@ -1914,8 +2098,8 @@ let ingest_text_of_raw ~(doc_id : string) ~(raw : string) : (string * Yojson.Saf
   in
   let body_text =
     let parts = List.filter (fun s -> s <> "")
-      [ (if quoted_capped = "" then "" else "QUOTED CONTEXT:\n" ^ quoted_capped)
-      ; "NEW CONTENT:\n" ^ new_body
+      [ "NEW CONTENT:\n" ^ new_body
+      ; (if quoted_capped = "" then "" else "QUOTED CONTEXT:\n" ^ quoted_capped)
       ]
     in
     String.concat "\n\n" parts
@@ -1931,14 +2115,59 @@ let ingest_text_of_raw ~(doc_id : string) ~(raw : string) : (string * Yojson.Saf
   - chunk + embed each chunk (Ollama /api/embed)
   - store email metadata + chunk embeddings in PostgreSQL via Pg module
 *)
-let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
+let forward_ingest_raw ~client ~sw ~log ~origin ~(whoami : string) ~(doc_id : string)
     ~(headers : (string, string) Hashtbl.t) ~(raw : string) : (Http.Response.t * string) =
-  (* Skip re-ingestion if already ingested with the same embed + triage models *)
-  (match Rag_lib.Pg.ingested_models doc_id with
+  let t0 = debug_now () in
+  let ndoc = Rag_lib.Pg.normalize_doc_id doc_id in
+  let result_tag = ref "started" in
+  last_ingest_origin := origin;
+  last_ingest_doc_id := ndoc;
+  last_ingest_started_at := t0;
+  current_ingest_origin := origin;
+  current_ingest_doc_id := ndoc;
+  current_ingest_stage := "start";
+  current_ingest_stage_started_at := t0;
+  let set_stage stage =
+    current_ingest_stage := stage;
+    current_ingest_stage_started_at := debug_now ();
+    Printf.printf "[ingest.stage] origin=%s doc_id=%s stage=%s elapsed=%.3fs\n%!"
+      origin ndoc stage (!current_ingest_stage_started_at -. t0)
+  in
+  let apply_pending_processed doc_id =
+    match Rag_lib.Pg.consume_pending_processed doc_id with
+    | Ok true ->
+        Printf.printf "[ingest.pending_processed] applying queued processed mark for %s\n%!" doc_id;
+        (match Rag_lib.Pg.set_processed doc_id true with
+        | Ok true ->
+            ignore (Rag_lib.Pg.delete_fyi doc_id);
+            (match Rag_lib.Pg.auto_complete_tasks_for_email doc_id with
+            | Ok completed ->
+                List.iter (fun tid ->
+                  Printf.printf "[ingest.pending_processed] auto-completed task %s (all triggers processed)\n%!" tid
+                ) completed
+            | Error e ->
+                Printf.eprintf "[ingest.pending_processed] auto-complete check error: %s\n%!" e)
+        | Ok false ->
+            Printf.eprintf "[ingest.pending_processed] failed to set processed for %s after queue consume\n%!" doc_id
+        | Error e ->
+            Printf.eprintf "[ingest.pending_processed] set_processed error for %s: %s\n%!" doc_id e)
+    | Ok false -> ()
+    | Error e ->
+        Printf.eprintf "[ingest.pending_processed] consume error for %s: %s\n%!" doc_id e
+  in
+  Printf.printf "[ingest.start] origin=%s doc_id=%s bytes=%d high_priority=%d\n%!"
+    origin ndoc (String.length raw) (Atomic.get high_priority_count);
+  Fun.protect
+    (fun () ->
+  try
+  set_stage "check_existing";
+  match Rag_lib.Pg.ingested_models doc_id with
    | Ok (Some (em, tm, sm))
      when em = !ollama_embed_model && tm = !ollama_triage_model && sm = !ollama_summarize_model ->
        if log then
          Printf.eprintf "[ingest.skip] %s already ingested with same models (embed=%s triage=%s summarize=%s)\n%!" doc_id em tm sm;
+       result_tag := "skipped_existing";
+       apply_pending_processed ndoc;
        let body = Yojson.Safe.to_string
          (`Assoc [ ("ok", `Bool true); ("doc_id", `String doc_id); ("skipped", `Bool true)
                  ; ("reason", `String "already ingested with current models") ]) in
@@ -1954,248 +2183,270 @@ let forward_ingest_raw ~client ~sw ~log ~(whoami : string) ~(doc_id : string)
   let in_reply_to = header_or_empty headers "in-reply-to" |> String.trim in
   (* Reject emails with completely empty metadata — likely encrypted/unreadable *)
   if String.trim from_ = "" && String.trim to_ = "" && String.trim subject = "" then (
-    let ndoc = Rag_lib.Pg.normalize_doc_id doc_id in
+    result_tag := "rejected_empty_metadata";
     Printf.eprintf "[ingest.rejected] doc_id=%s reason=empty_metadata (from, to, subject all empty — likely encrypted)\n%!" ndoc;
     let resp = Http.Response.make ~status:`Bad_request () in
     (resp, Yojson.Safe.to_string
       (`Assoc [ ("ok", `Bool false); ("doc_id", `String doc_id)
               ; ("error", `String "email metadata is empty (from, to, subject all blank) — likely encrypted or unreadable") ])))
-  else
-  let parts = extract_body_parts raw in
-  let new_body = String.trim parts.new_text |> sanitize_utf8 in
-  let quoted_raw = String.trim parts.quoted_text |> sanitize_utf8 in
-  (* Partial ingestion: body contains [ERROR:] markers (e.g. encrypted/encoded body) —
-     skip triage, summarization, and embedding but still store metadata *)
-  if body_text_has_error_marker new_body || body_text_has_error_marker quoted_raw then (
-    let ndoc = Rag_lib.Pg.normalize_doc_id doc_id in
-    Printf.printf "[ingest.partial] doc_id=%s reason=error_marker_in_body — storing metadata only\n%!" ndoc;
-    let attachments = extract_attachment_filenames raw in
-    let att_pg_array =
-      let escaped = List.map (fun f ->
-        "\"" ^ String.concat "\\\"" (String.split_on_char '"' f) ^ "\"") attachments in
-      "{" ^ String.concat "," escaped ^ "}"
-    in
-    (match Rag_lib.Pg.upsert_email
-        ~doc_id ~embed_model:!ollama_embed_model ~triage_model:!ollama_triage_model
-        ~summarize_model:!ollama_summarize_model
-        ~sender:from_ ~recipient:to_ ~cc:cc_ ~bcc:bcc_ ~subject
-        ~email_date:(parse_rfc822_to_iso8601 date_)
-        ~attachments_json:att_pg_array
-        ~action_score:None ~importance_score:None ~reply_by:""
-        ~ingested_at:(now_utc_iso8601 ())
-        ~whoami ~in_reply_to
-        ~on_done:(record stats_pg_upsert) ()
-    with
-    | Error e ->
-        Printf.eprintf "[ingest.partial.error] upsert_email: %s\n%!" e;
-        let resp = Http.Response.make ~status:`Internal_server_error () in
-        (resp, Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
-    | Ok () ->
-        Printf.printf "[ingest.partial.ok] doc_id=%s metadata_only=true\n%!" ndoc;
-        let resp = Http.Response.make ~status:`OK () in
-        (resp, Yojson.Safe.to_string
-          (`Assoc [ ("ok", `Bool true); ("doc_id", `String doc_id)
-                  ; ("partial", `Bool true)
-                  ; ("reason", `String "body encrypted/unreadable — metadata only") ]))))
-  else
-  let attachment_summaries = attachment_summaries_of_raw ~client ~sw ~raw in
-  let attachments_section = format_attachment_summaries_for_text attachment_summaries in
-  let quoted_capped_untrimmed =
-    if String.trim quoted_raw = "" then ""
-    else
-      truncate_lines quoted_raw ~max_lines:!rag_quoted_context_max_lines
-      |> truncate_chars ~max_chars:!rag_quoted_context_max_input_chars
-  in
-  let quoted_capped = String.trim quoted_capped_untrimmed in
-  let overflow_start = String.length quoted_capped_untrimmed in
-  let has_overflow = overflow_start < String.length quoted_raw in
-  let overflow =
-    if has_overflow then
-      String.sub quoted_raw overflow_start (String.length quoted_raw - overflow_start) |> String.trim
-    else ""
-  in
-  let overflow_summary =
-    if overflow = "" then None
-    else summarize_quoted_context ~client ~sw ~quoted_text:overflow
-  in
-  let qs =
-    match overflow_summary with
-    | Some s when String.trim s <> "" -> "QUOTED CONTEXT (older, summarized):\n" ^ String.trim s
-    | _ -> ""
-  in
-  let qc =
-    if quoted_capped = "" then ""
-    else if has_overflow then "QUOTED CONTEXT (recent):\n" ^ quoted_capped
-    else "QUOTED CONTEXT:\n" ^ quoted_capped
-  in
-  let att = if attachments_section = "" then "" else attachments_section in
-  let new_body_capped =
-    summarize_to_fit ~client ~sw
-      ~system_prompt:(get_prompt "compress_new_content_ingest" ~default:"Compress email body. Preserve all facts. Third person. Do not invent." ~vars:[])
-      ~max_input_chars:!rag_summarize_max_input_chars
-      ~max_chars:!rag_new_content_max_chars
-      ~label:"new_content"
-      new_body
-  in
-  let body_text =
-    let parts = List.filter (fun s -> s <> "") [qs; qc; att; "NEW CONTENT:\n" ^ new_body_capped] in
-    String.concat "\n\n" parts
-  in
-  let has_any_content =
-    String.trim new_body <> "" || String.trim quoted_raw <> "" || String.trim attachments_section <> ""
-  in
-
-  let ndoc = Rag_lib.Pg.normalize_doc_id doc_id in
-  if not has_any_content then
-    Printf.printf "[ingest.note] doc_id=%s note=empty_body\n%!" ndoc;
-  (
-    if body_text_has_error_marker body_text then
-      Printf.printf
-        "[ingest.note] doc_id=%s note=body_text_contains_error_marker\n%!" ndoc;
-
-    if log then (
-      Printf.printf "\n[email being processed]\n";
-      Printf.printf "From: %s\n" from_;
-      Printf.printf "To: %s\n" to_;
-      Printf.printf "Cc: %s\n" cc_;
-      Printf.printf "Bcc: %s\n" bcc_;
-      Printf.printf "Title: %s\n" subject;
-      Printf.printf "Id: %s\n" doc_id;
-      Printf.printf "Body:\n%s\n" body_text;
-      flush stdout);
-
-  let _index_text, _metadata_json =
-    make_ingest_data ~doc_id ~headers ~raw ~body_text
-  in
-  let truncate_field s max_len =
-    if String.length s <= max_len then s
-    else String.sub s 0 max_len ^ "..."
-  in
-  let preamble =
-    Printf.sprintf "From: %s | To: %s | Subject: %s | Date: %s"
-      (truncate_field from_ 80) (truncate_field to_ 120)
-      (truncate_field subject 120) date_
-  in
-  let qs_text = match overflow_summary with
-    | Some s when String.trim s <> "" -> String.trim s
-    | _ -> ""
-  in
-  let sections =
-    List.filter (fun (_, t) -> String.trim t <> "")
-      [ ("quoted_context_old", qs_text)
-      ; ("quoted_context", quoted_capped)
-      ; ("attachments", attachments_section)
-      ; ("new_content", new_body_capped)
-      ]
-  in
-  let sectioned_chunks = chunk_sections ~preamble sections in
-  let embed_one_chunk (i, section, ch) =
-    let rec try_embed text attempt =
-      match ollama_embed ~client ~sw ~task:Search_document ~label:"ingest" ~stats:stats_embed_ingest ~text () with
-      | Ok v -> [(i, section, l2_normalize v)]
-      | Error msg when is_truncation_error msg && attempt < 3 ->
-          (* Split the chunk text in half (preserving the preamble prefix) and retry each half *)
-          let half = String.length text / 2 in
-          if half < 100 then (
-            Printf.eprintf "[ingest.truncated] doc_id=%s chunk=%d section=%s chars=%d — chunk too small to split further\n%!"
-              ndoc i section (String.length text);
-            raise (Failure (Printf.sprintf "embedding truncated for chunk %d (%d chars) of %s — text too dense for embed model" i (String.length text) ndoc)))
-          else (
-            Printf.eprintf "[ingest.truncated] doc_id=%s chunk=%d section=%s chars=%d — splitting and retrying (attempt %d)\n%!"
-              ndoc i section (String.length text) (attempt + 1);
-            let left = String.sub text 0 half in
-            let right = String.sub text half (String.length text - half) in
-            try_embed left (attempt + 1) @ try_embed right (attempt + 1))
-      | Error msg when is_truncation_error msg ->
-          Printf.eprintf "[ingest.truncated] doc_id=%s chunk=%d section=%s chars=%d — max retries exceeded\n%!"
-            ndoc i section (String.length text);
-          raise (Failure (Printf.sprintf "embedding truncated for chunk %d (%d chars) of %s after %d split attempts" i (String.length text) ndoc attempt))
-      | Error msg -> raise (Failure ("ollama_embed failed: " ^ msg))
-    in
-    try_embed ch 0
-  in
-  let embedded_chunks = List.concat_map embed_one_chunk sectioned_chunks in
-  let attachments = extract_attachment_filenames raw in
-  (* Format as PostgreSQL TEXT[] literal: {"file1.pdf","file2.xlsx"} *)
-  let att_pg_array =
-    let escaped = List.map (fun f ->
-      "\"" ^ String.concat "\\\"" (String.split_on_char '"' f) ^ "\"") attachments in
-    "{" ^ String.concat "," escaped ^ "}"
-  in
-  let strict_ok = not (body_text_has_error_marker body_text) in
-  if not strict_ok then (
-    Printf.eprintf "[ingest.strict] not recording success for doc_id=%s because body_text contains [ERROR:] markers\n%!" ndoc;
-    let resp = Http.Response.make ~status:`OK () in
-    (resp, {|{"ok":true,"warning":"error_markers"}|}))
-  else
-    match Rag_lib.Pg.upsert_email
-      ~doc_id ~embed_model:!ollama_embed_model ~triage_model:!ollama_triage_model
-      ~summarize_model:!ollama_summarize_model
-      ~sender:from_ ~recipient:to_ ~cc:cc_ ~bcc:bcc_ ~subject
-      ~email_date:(parse_rfc822_to_iso8601 date_)
-      ~attachments_json:att_pg_array
-      ~action_score:None ~importance_score:None ~reply_by:""
-      ~ingested_at:(now_utc_iso8601 ())
-      ~whoami ~in_reply_to
-      ~on_done:(record stats_pg_upsert) ()
-    with
-    | Error e ->
-        Printf.eprintf "[ingest.pg.error] upsert_email: %s\n%!" e;
-        let resp = Http.Response.make ~status:`Internal_server_error () in
-        (resp, Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
-    | Ok () ->
-        match Rag_lib.Pg.insert_chunks ~doc_id ~on_done:(record stats_pg_insert) embedded_chunks with
+  else (
+    let parts = extract_body_parts raw in
+    let new_body = String.trim parts.new_text |> sanitize_utf8 in
+    let quoted_raw = String.trim parts.quoted_text |> sanitize_utf8 in
+    if body_text_has_error_marker new_body || body_text_has_error_marker quoted_raw then
+      let attachments = extract_attachment_filenames raw in
+      let att_pg_array =
+        let escaped = List.map (fun f ->
+          "\"" ^ String.concat "\\\"" (String.split_on_char '"' f) ^ "\"") attachments in
+        "{" ^ String.concat "," escaped ^ "}"
+      in
+      result_tag := "partial_metadata_only";
+      Printf.printf "[ingest.partial] doc_id=%s reason=error_marker_in_body — storing metadata only\n%!" ndoc;
+      set_stage "pg_upsert_partial";
+      let partial_response =
+        match Rag_lib.Pg.upsert_email
+            ~doc_id ~embed_model:!ollama_embed_model ~triage_model:!ollama_triage_model
+            ~summarize_model:!ollama_summarize_model
+            ~sender:from_ ~recipient:to_ ~cc:cc_ ~bcc:bcc_ ~subject
+            ~email_date:(parse_rfc822_to_iso8601 date_)
+            ~attachments_json:att_pg_array
+            ~action_score:None ~importance_score:None ~reply_by:""
+            ~ingested_at:(now_utc_iso8601 ())
+            ~whoami ~in_reply_to
+            ~on_done:(record stats_pg_upsert) ()
+        with
         | Error e ->
-            Printf.eprintf "[ingest.pg.error] insert_chunks: %s\n%!" e;
+            result_tag := "partial_upsert_error";
+            Printf.eprintf "[ingest.partial.error] upsert_email: %s\n%!" e;
             let resp = Http.Response.make ~status:`Internal_server_error () in
             (resp, Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
         | Ok () ->
-            Printf.printf "[ingest.ok] doc_id=%s chunks=%d\n%!" ndoc (List.length embedded_chunks);
-            (* Reply-chain linking: if this is a sent email replying to a task trigger,
-               link it to the task and record the actual reply content *)
-            if in_reply_to <> "" then begin
-              let irt_normalized = Rag_lib.Pg.normalize_doc_id in_reply_to in
-              match Rag_lib.Pg.tasks_by_trigger_doc_id irt_normalized with
-              | Ok task_ids when task_ids <> [] ->
-                  List.iter (fun task_id ->
-                    Printf.printf "[reply-link] sent email %s is a reply to trigger %s on task %s\n%!"
-                      ndoc irt_normalized task_id;
-                    (* Link the reply email to the task *)
-                    (match Rag_lib.Pg.link_email_to_task ~task_id ~doc_id ~role:"reply"
-                        ~compressed_body:new_body_capped () with
-                    | Ok () ->
-                        Printf.printf "[reply-link] linked reply %s to task %s\n%!" ndoc task_id
-                    | Error e ->
-                        Printf.eprintf "[reply-link] link error: %s\n%!" e);
-                    (* Auto-mark task as done if it's still open/in_progress *)
-                    (match Rag_lib.Pg.get_task task_id with
-                    | Ok (Some json) ->
-                        let kv = match json with `Assoc kv -> kv | _ -> [] in
-                        let status = match List.assoc_opt "status" kv with Some (`String s) -> s | _ -> "" in
-                        if status = "open" || status = "in_progress" then begin
-                          (match Rag_lib.Pg.update_task ~task_id ~status:"done" () with
-                          | Ok _ ->
-                              Printf.printf "[reply-link] auto-marked task %s as done (user replied)\n%!" task_id
-                          | Error e ->
-                              Printf.eprintf "[reply-link] auto-done error: %s\n%!" e)
-                        end
-                    | _ -> ())
-                  ) task_ids
-              | Ok _ -> ()
-              | Error e ->
-                  Printf.eprintf "[reply-link] lookup error for in_reply_to=%s: %s\n%!" irt_normalized e
-            end;
-            (* Enqueue for async triage by the daemon (propose_tasks + process_task_proposals) *)
-            if !task_auto_create then begin
-              (match Rag_lib.Pg.enqueue_triage ~doc_id ~body_text ~compressed_body:new_body_capped () with
-              | Ok () ->
-                  Printf.printf "[ingest.enqueue] doc_id=%s queued for triage\n%!" ndoc;
-                  !notify_prefetch ()
-              | Error e ->
-                  Printf.eprintf "[ingest.enqueue] error for %s: %s\n%!" ndoc e)
-            end;
+            Printf.printf "[ingest.partial.ok] doc_id=%s metadata_only=true\n%!" ndoc;
+            apply_pending_processed ndoc;
             let resp = Http.Response.make ~status:`OK () in
-            (resp, {|{"ok":true}|})))
+            (resp, Yojson.Safe.to_string
+              (`Assoc [ ("ok", `Bool true); ("doc_id", `String doc_id)
+                      ; ("partial", `Bool true)
+                      ; ("reason", `String "body encrypted/unreadable — metadata only") ]))
+      in
+      partial_response
+    else (
+      set_stage "attachments";
+      let attachment_summaries = attachment_summaries_of_raw ~client ~sw ~raw in
+      let attachments_section = format_attachment_summaries_for_text attachment_summaries in
+      let quoted_capped_untrimmed =
+        if String.trim quoted_raw = "" then ""
+        else
+          truncate_lines quoted_raw ~max_lines:!rag_quoted_context_max_lines
+          |> truncate_chars ~max_chars:!rag_quoted_context_max_input_chars
+      in
+      let quoted_capped = String.trim quoted_capped_untrimmed in
+      let overflow_start = String.length quoted_capped_untrimmed in
+      let has_overflow = overflow_start < String.length quoted_raw in
+      let overflow =
+        if has_overflow then
+          String.sub quoted_raw overflow_start (String.length quoted_raw - overflow_start) |> String.trim
+        else ""
+      in
+      let overflow_summary =
+        if overflow = "" then None
+        else (set_stage "summarize_quoted_context"; summarize_quoted_context ~client ~sw ~quoted_text:overflow)
+      in
+      let qs =
+        match overflow_summary with
+        | Some s when String.trim s <> "" -> "QUOTED CONTEXT (older, summarized):\n" ^ String.trim s
+        | _ -> ""
+      in
+      let qc =
+        if quoted_capped = "" then ""
+        else if has_overflow then "QUOTED CONTEXT (recent):\n" ^ quoted_capped
+        else "QUOTED CONTEXT:\n" ^ quoted_capped
+      in
+      let att = if attachments_section = "" then "" else attachments_section in
+      set_stage "compress_new_content";
+      let new_body_capped =
+        summarize_to_fit ~client ~sw
+          ~system_prompt:(get_prompt "compress_new_content_ingest" ~default:"Compress email body. Preserve all facts. Third person. Do not invent." ~vars:[])
+          ~max_input_chars:!rag_summarize_max_input_chars
+          ~max_chars:!rag_new_content_max_chars
+          ~label:"new_content"
+          new_body
+      in
+      let body_text =
+        let parts = List.filter (fun s -> s <> "") ["NEW CONTENT:\n" ^ new_body_capped; qc; qs; att] in
+        String.concat "\n\n" parts
+      in
+      let has_any_content =
+        String.trim new_body <> "" || String.trim quoted_raw <> "" || String.trim attachments_section <> ""
+      in
+      if not has_any_content then
+        Printf.printf "[ingest.note] doc_id=%s note=empty_body\n%!" ndoc;
+      if body_text_has_error_marker body_text then
+        Printf.printf
+          "[ingest.note] doc_id=%s note=body_text_contains_error_marker\n%!" ndoc;
+      if log then (
+        Printf.printf "\n[email being processed]\n";
+        Printf.printf "From: %s\n" from_;
+        Printf.printf "To: %s\n" to_;
+        Printf.printf "Cc: %s\n" cc_;
+        Printf.printf "Bcc: %s\n" bcc_;
+        Printf.printf "Title: %s\n" subject;
+        Printf.printf "Id: %s\n" doc_id;
+        Printf.printf "Body:\n%s\n" body_text;
+        flush stdout);
+      let _index_text, _metadata_json =
+        make_ingest_data ~doc_id ~headers ~raw ~body_text
+      in
+      let truncate_field s max_len =
+        if String.length s <= max_len then s
+        else String.sub s 0 max_len ^ "..."
+      in
+      let preamble =
+        Printf.sprintf "From: %s | To: %s | Subject: %s | Date: %s"
+          (truncate_field from_ 80) (truncate_field to_ 120)
+          (truncate_field subject 120) date_
+      in
+      let qs_text = match overflow_summary with
+        | Some s when String.trim s <> "" -> String.trim s
+        | _ -> ""
+      in
+      let sections =
+        List.filter (fun (_, t) -> String.trim t <> "")
+          [ ("quoted_context_old", qs_text)
+          ; ("quoted_context", quoted_capped)
+          ; ("attachments", attachments_section)
+          ; ("new_content", new_body_capped)
+          ]
+      in
+      let sectioned_chunks = chunk_sections ~preamble sections in
+      set_stage "embed_chunks";
+      let embed_one_chunk (i, section, ch) =
+        let rec try_embed text attempt =
+          match ollama_embed ~client ~sw ~task:Search_document ~label:"ingest" ~stats:stats_embed_ingest ~text () with
+          | Ok v -> [(i, section, l2_normalize v)]
+          | Error msg when is_truncation_error msg && attempt < 3 ->
+              let half = String.length text / 2 in
+              if half < 100 then (
+                Printf.eprintf "[ingest.truncated] doc_id=%s chunk=%d section=%s chars=%d — chunk too small to split further\n%!"
+                  ndoc i section (String.length text);
+                raise (Failure (Printf.sprintf "embedding truncated for chunk %d (%d chars) of %s — text too dense for embed model" i (String.length text) ndoc)))
+              else (
+                Printf.eprintf "[ingest.truncated] doc_id=%s chunk=%d section=%s chars=%d — splitting and retrying (attempt %d)\n%!"
+                  ndoc i section (String.length text) (attempt + 1);
+                let left = String.sub text 0 half in
+                let right = String.sub text half (String.length text - half) in
+                try_embed left (attempt + 1) @ try_embed right (attempt + 1))
+          | Error msg when is_truncation_error msg ->
+              Printf.eprintf "[ingest.truncated] doc_id=%s chunk=%d section=%s chars=%d — max retries exceeded\n%!"
+                ndoc i section (String.length text);
+              raise (Failure (Printf.sprintf "embedding truncated for chunk %d (%d chars) of %s after %d split attempts" i (String.length text) ndoc attempt))
+          | Error msg -> raise (Failure ("ollama_embed failed: " ^ msg))
+        in
+        try_embed ch 0
+      in
+      let embedded_chunks = List.concat_map embed_one_chunk sectioned_chunks in
+      let attachments = extract_attachment_filenames raw in
+      let att_pg_array =
+        let escaped = List.map (fun f ->
+          "\"" ^ String.concat "\\\"" (String.split_on_char '"' f) ^ "\"") attachments in
+        "{" ^ String.concat "," escaped ^ "}"
+      in
+      let strict_ok = not (body_text_has_error_marker body_text) in
+      if not strict_ok then (
+        result_tag := "warning_error_markers";
+        Printf.eprintf "[ingest.strict] not recording success for doc_id=%s because body_text contains [ERROR:] markers\n%!" ndoc;
+        let resp = Http.Response.make ~status:`OK () in
+        (resp, {|{"ok":true,"warning":"error_markers"}|})
+      ) else (
+        set_stage "pg_upsert_email";
+        match Rag_lib.Pg.upsert_email
+          ~doc_id ~embed_model:!ollama_embed_model ~triage_model:!ollama_triage_model
+          ~summarize_model:!ollama_summarize_model
+          ~sender:from_ ~recipient:to_ ~cc:cc_ ~bcc:bcc_ ~subject
+          ~email_date:(parse_rfc822_to_iso8601 date_)
+          ~attachments_json:att_pg_array
+          ~action_score:None ~importance_score:None ~reply_by:""
+          ~ingested_at:(now_utc_iso8601 ())
+          ~whoami ~in_reply_to
+          ~on_done:(record stats_pg_upsert) ()
+        with
+        | Error e ->
+            result_tag := "upsert_email_error";
+            Printf.eprintf "[ingest.pg.error] upsert_email: %s\n%!" e;
+            let resp = Http.Response.make ~status:`Internal_server_error () in
+            (resp, Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
+        | Ok () ->
+            set_stage "pg_insert_chunks";
+            match Rag_lib.Pg.insert_chunks ~doc_id ~on_done:(record stats_pg_insert) embedded_chunks with
+            | Error e ->
+                result_tag := "insert_chunks_error";
+                Printf.eprintf "[ingest.pg.error] insert_chunks: %s\n%!" e;
+                let resp = Http.Response.make ~status:`Internal_server_error () in
+                (resp, Printf.sprintf {|{"error":"%s"}|} (String.escaped e))
+            | Ok () ->
+                result_tag := "ok";
+                Printf.printf "[ingest.ok] doc_id=%s chunks=%d\n%!" ndoc (List.length embedded_chunks);
+                if in_reply_to <> "" then begin
+                  let irt_normalized = Rag_lib.Pg.normalize_doc_id in_reply_to in
+                  match Rag_lib.Pg.tasks_by_trigger_doc_id irt_normalized with
+                  | Ok task_ids when task_ids <> [] ->
+                      List.iter (fun task_id ->
+                        Printf.printf "[reply-link] sent email %s is a reply to trigger %s on task %s\n%!"
+                          ndoc irt_normalized task_id;
+                        (match Rag_lib.Pg.link_email_to_task ~task_id ~doc_id ~role:"reply"
+                            ~compressed_body:new_body_capped () with
+                        | Ok () ->
+                            Printf.printf "[reply-link] linked reply %s to task %s\n%!" ndoc task_id
+                        | Error e ->
+                            Printf.eprintf "[reply-link] link error: %s\n%!" e);
+                        (match Rag_lib.Pg.get_task task_id with
+                        | Ok (Some json) ->
+                            let kv = match json with `Assoc kv -> kv | _ -> [] in
+                            let status = match List.assoc_opt "status" kv with Some (`String s) -> s | _ -> "" in
+                            if status = "open" || status = "in_progress" then begin
+                              (match Rag_lib.Pg.update_task ~task_id ~status:"done" () with
+                              | Ok _ ->
+                                  Printf.printf "[reply-link] auto-marked task %s as done (user replied)\n%!" task_id
+                              | Error e ->
+                                  Printf.eprintf "[reply-link] auto-done error: %s\n%!" e)
+                            end
+                        | _ -> ())
+                      ) task_ids
+                  | Ok _ -> ()
+                  | Error e ->
+                      Printf.eprintf "[reply-link] lookup error for in_reply_to=%s: %s\n%!" irt_normalized e
+                end;
+                if !task_auto_create then begin
+                  set_stage "enqueue_triage";
+                  (match Rag_lib.Pg.enqueue_triage ~doc_id ~body_text ~compressed_body:new_body_capped () with
+                  | Ok () ->
+                      Printf.printf "[ingest.enqueue] doc_id=%s queued for triage\n%!" ndoc;
+                      !notify_prefetch ()
+                  | Error e ->
+                      Printf.eprintf "[ingest.enqueue] error for %s: %s\n%!" ndoc e)
+                end;
+                apply_pending_processed ndoc;
+                let resp = Http.Response.make ~status:`OK () in
+                (resp, {|{"ok":true}|})
+      )
+    )
+  )
+  with e ->
+    result_tag := "exception";
+    Printf.eprintf "[ingest.exception] origin=%s doc_id=%s stage=%s error=%s\n%!"
+      origin ndoc !current_ingest_stage (Printexc.to_string e);
+    raise e)
+    ~finally:(fun () ->
+      let finished = debug_now () in
+      last_ingest_finished_at := finished;
+      last_ingest_stage := !current_ingest_stage;
+      last_ingest_result := !result_tag;
+      Printf.printf "[ingest.finish] origin=%s doc_id=%s result=%s stage=%s dt=%.3fs\n%!"
+        origin ndoc !result_tag !current_ingest_stage (finished -. t0);
+      current_ingest_origin := "";
+      current_ingest_doc_id := "";
+      current_ingest_stage := "idle";
+      current_ingest_stage_started_at := 0.0)
 
 (*
   Mbox file discovery and streaming
@@ -2715,7 +2966,7 @@ let handle_bulk_ingest ~client ~sw ~clock (body : string) : (Http.Response.t * s
                   let headers = parse_headers raw in
                   let doc_id = doc_id_of_raw headers raw in
                   let resp, _body =
-                    forward_ingest_raw ~client ~sw ~log:false ~whoami:(String.trim !whoami) ~doc_id ~headers ~raw
+                    forward_ingest_raw ~client ~sw ~log:false ~origin:"bulk_ingest_worker" ~whoami:(String.trim !whoami) ~doc_id ~headers ~raw
                   in
                   let code = Cohttp.Code.code_of_status (Http.Response.status resp) in
                   let ok = code >= 200 && code < 300 in
@@ -3669,6 +3920,77 @@ let handler ~client ~sw ~clock _socket request body =
         ]) in
       let body = Yojson.Safe.to_string (`List entries) in
       Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
+  | `GET, "/admin/queue_debug" ->
+      let body =
+        `Assoc
+          [ ("server_time", `Float (debug_now ()))
+          ; ("high_priority_count", `Int (Atomic.get high_priority_count))
+          ; ("last_high_priority_entered_age_s", debug_json_age !last_high_priority_entered_at)
+          ; ("last_high_priority_exited_age_s", debug_json_age !last_high_priority_exited_at)
+          ; ("tasks_paused", `Bool (Atomic.get tasks_paused))
+          ; ("ingest_paused", `Bool (Atomic.get ingest_paused))
+          ; ("ingest_queue", ingest_queue_status_json ())
+          ; ("triage_queue", triage_queue_status_json ())
+          ; ("prefetch_notify", `Assoc
+              [ ("count", `Int !prefetch_notify_count)
+              ; ("last_age_s", debug_json_age !last_prefetch_notify_at)
+              ; ("last_ok", `Bool !last_prefetch_notify_ok)
+              ; ("last_error", debug_json_string_opt !last_prefetch_notify_error)
+              ])
+          ; ("daemon", `Assoc
+              [ ("loop_count", `Int !daemon_loop_count)
+              ; ("current_phase", `String !daemon_current_phase)
+              ; ("current_phase_age_s", debug_json_age !daemon_current_phase_started_at)
+              ; ("last_loop_started_age_s", debug_json_age !daemon_last_loop_started_at)
+              ; ("last_loop_finished_age_s", debug_json_age !daemon_last_loop_finished_at)
+              ; ("last_sleep_seconds", `Float !daemon_last_sleep_seconds)
+              ; ("current_ingest_doc_id", debug_json_string_opt !daemon_current_ingest_doc_id)
+              ; ("current_ingest_age_s", debug_json_age !daemon_current_ingest_started_at)
+              ; ("last_ingest_doc_id", debug_json_string_opt !daemon_last_ingest_doc_id)
+              ; ("last_ingest_started_age_s", debug_json_age !daemon_last_ingest_started_at)
+              ; ("last_ingest_finished_age_s", debug_json_age !daemon_last_ingest_finished_at)
+              ; ("last_ingest_result", debug_json_string_opt !daemon_last_ingest_result)
+              ; ("current_triage_doc_id", debug_json_string_opt !daemon_current_triage_doc_id)
+              ; ("current_triage_age_s", debug_json_age !daemon_current_triage_started_at)
+              ; ("current_triage_stage", `String !daemon_current_triage_stage)
+              ; ("current_triage_stage_age_s", debug_json_age !daemon_current_triage_stage_started_at)
+              ; ("last_triage_doc_id", debug_json_string_opt !daemon_last_triage_doc_id)
+              ; ("last_triage_started_age_s", debug_json_age !daemon_last_triage_started_at)
+              ; ("last_triage_finished_age_s", debug_json_age !daemon_last_triage_finished_at)
+              ; ("last_triage_stage", debug_json_string_opt !daemon_last_triage_stage)
+              ; ("last_triage_result", debug_json_string_opt !daemon_last_triage_result)
+              ])
+          ; ("ingest_request", `Assoc
+              [ ("active_count", `Int !ingest_request_active_count)
+              ; ("last_doc_id", debug_json_string_opt !ingest_request_last_doc_id)
+              ; ("last_started_age_s", debug_json_age !ingest_request_last_started_at)
+              ; ("last_finished_age_s", debug_json_age !ingest_request_last_finished_at)
+              ; ("last_result", debug_json_string_opt !ingest_request_last_result)
+              ])
+          ; ("ingest_batch", `Assoc
+              [ ("active_count", `Int !ingest_batch_active_count)
+              ; ("last_started_age_s", debug_json_age !ingest_batch_last_started_at)
+              ; ("last_finished_age_s", debug_json_age !ingest_batch_last_finished_at)
+              ; ("last_queued", `Int !ingest_batch_last_queued)
+              ; ("last_errors", `Int !ingest_batch_last_errors)
+              ; ("last_result", debug_json_string_opt !ingest_batch_last_result)
+              ])
+          ; ("forward_ingest", `Assoc
+              [ ("current_origin", debug_json_string_opt !current_ingest_origin)
+              ; ("current_doc_id", debug_json_string_opt !current_ingest_doc_id)
+              ; ("current_stage", `String !current_ingest_stage)
+              ; ("current_stage_age_s", debug_json_age !current_ingest_stage_started_at)
+              ; ("last_origin", debug_json_string_opt !last_ingest_origin)
+              ; ("last_doc_id", debug_json_string_opt !last_ingest_doc_id)
+              ; ("last_started_age_s", debug_json_age !last_ingest_started_at)
+              ; ("last_finished_age_s", debug_json_age !last_ingest_finished_at)
+              ; ("last_stage", debug_json_string_opt !last_ingest_stage)
+              ; ("last_result", debug_json_string_opt !last_ingest_result)
+              ])
+          ]
+        |> Yojson.Safe.to_string
+      in
+      Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
   | `GET, "/admin/config" ->
       (* Return current settings.json and prompts.json content for test archival *)
       let read_file_opt path =
@@ -3709,6 +4031,25 @@ let handler ~client ~sw ~clock _socket request body =
       (match Rag_lib.Pg.clear_tasks () with
       | Ok () ->
           Printf.printf "[admin] cleared all task tables\n%!";
+          Cohttp_eio.Server.respond_string ~status:`OK
+            ~body:{|{"ok":true}|} ~headers:json_headers ()
+      | Error e ->
+          Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+            ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped e)) ~headers:json_headers ())
+
+  | `POST, "/admin/clear_rag" ->
+      (match Rag_lib.Pg.clear_rag () with
+      | Ok () ->
+          Printf.printf "[admin] cleared RAG/email tables\n%!";
+          Cohttp_eio.Server.respond_string ~status:`OK
+            ~body:{|{"ok":true}|} ~headers:json_headers ()
+      | Error e ->
+          Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+            ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped e)) ~headers:json_headers ())
+
+  | `POST, "/admin/clear_ingest_queue" ->
+      (match Rag_lib.Pg.clear_ingest_queue () with
+      | Ok () ->
           Cohttp_eio.Server.respond_string ~status:`OK
             ~body:{|{"ok":true}|} ~headers:json_headers ()
       | Error e ->
@@ -3871,35 +4212,54 @@ let handler ~client ~sw ~clock _socket request body =
     - bulk ingestion tooling (which ultimately calls forward_ingest_raw per message).
   *)
   | `POST, "/ingest" ->
+      let request_started = debug_now () in
       let raw = read_all body in
       let headers = parse_headers raw in
       let doc_id = doc_id_of_ingest request headers raw in
-
-      if Atomic.get ingest_paused then begin
-        (* Ingestion paused — queue for later processing instead of dropping *)
-        (match Rag_lib.Pg.enqueue_ingest ~doc_id ~raw () with
-        | Ok () ->
-            Printf.printf "[ingest] paused — queued doc_id=%s for later\n%!" doc_id;
-            Cohttp_eio.Server.respond_string ~status:`OK
-              ~body:(Printf.sprintf {|{"ok":true,"queued":true,"doc_id":"%s"}|} (String.escaped doc_id))
-              ~headers:json_headers ()
-        | Error msg ->
-            Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-              ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped msg))
-              ~headers:json_headers ())
-      end else begin
-        let whoami = String.trim !whoami in
-        if whoami = "" then
-          Cohttp_eio.Server.respond_string ~status:`Bad_request
-            ~body:{|{"error":"whoami is required for ingestion. Set it in settings.json."}|}
-            ~headers:json_headers ()
-        else
-        let resp, resp_body =
-          forward_ingest_raw ~client ~sw ~log:true ~whoami ~doc_id ~headers ~raw
-        in
-        let status = Http.Response.status resp in
-        Cohttp_eio.Server.respond_string ~status ~body:resp_body ~headers:json_headers ()
-      end
+      let ndoc = Rag_lib.Pg.normalize_doc_id doc_id in
+      let request_result = ref "started" in
+      incr ingest_request_active_count;
+      ingest_request_last_doc_id := ndoc;
+      ingest_request_last_started_at := request_started;
+      Printf.printf "[ingest.req.start] doc_id=%s bytes=%d paused=%b high_priority=%d active=%d\n%!"
+        ndoc (String.length raw) (Atomic.get ingest_paused) (Atomic.get high_priority_count) !ingest_request_active_count;
+      Fun.protect
+        (fun () ->
+          if Atomic.get ingest_paused then begin
+            (match Rag_lib.Pg.enqueue_ingest ~doc_id ~raw () with
+            | Ok () ->
+                request_result := "queued_paused";
+                Printf.printf "[ingest] paused — queued doc_id=%s for later\n%!" doc_id;
+                log_ingest_queue_status "ingest.paused";
+                Cohttp_eio.Server.respond_string ~status:`OK
+                  ~body:(Printf.sprintf {|{"ok":true,"queued":true,"doc_id":"%s"}|} (String.escaped doc_id))
+                  ~headers:json_headers ()
+            | Error msg ->
+                request_result := "queue_error";
+                Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+                  ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped msg))
+                  ~headers:json_headers ())
+          end else begin
+            let whoami = String.trim !whoami in
+            if whoami = "" then begin
+              request_result := "missing_whoami";
+              Cohttp_eio.Server.respond_string ~status:`Bad_request
+                ~body:{|{"error":"whoami is required for ingestion. Set it in settings.json."}|}
+                ~headers:json_headers ()
+            end else
+            let resp, resp_body =
+              forward_ingest_raw ~client ~sw ~log:true ~origin:"http_ingest" ~whoami ~doc_id ~headers ~raw
+            in
+            let status = Http.Response.status resp in
+            request_result := Printf.sprintf "http_%d" (Cohttp.Code.code_of_status status);
+            Cohttp_eio.Server.respond_string ~status ~body:resp_body ~headers:json_headers ()
+          end)
+        ~finally:(fun () ->
+          decr ingest_request_active_count;
+          ingest_request_last_finished_at := debug_now ();
+          ingest_request_last_result := !request_result;
+          Printf.printf "[ingest.req.finish] doc_id=%s result=%s active=%d dt=%.3fs\n%!"
+            ndoc !request_result !ingest_request_active_count (!ingest_request_last_finished_at -. request_started))
 
   (*
     Batch ingestion endpoint (async).
@@ -3909,45 +4269,64 @@ let handler ~client ~sw ~clock _socket request body =
     Returns immediately with the number of items queued.
   *)
   | `POST, "/ingest/batch" ->
+      let batch_started = debug_now () in
       let raw_body = read_all body in
-      (try
-        let json = Yojson.Safe.from_string raw_body in
-        let items = match json with
-          | `Assoc kv ->
-              (match List.assoc_opt "items" kv with
-              | Some (`List items) -> items | _ -> [])
-          | `List items -> items
-          | _ -> []
-        in
-        let queued = ref 0 in
-        let errors = ref [] in
-        List.iter (fun item ->
-          let kv = match item with `Assoc kv -> kv | _ -> [] in
-          let doc_id = match List.assoc_opt "doc_id" kv with
-            | Some (`String s) -> String.trim s | _ -> "" in
-          let raw = match List.assoc_opt "raw" kv with
-            | Some (`String s) -> s | _ -> "" in
-          if doc_id = "" || raw = "" then
-            errors := "missing doc_id or raw" :: !errors
-          else begin
-            match Rag_lib.Pg.enqueue_ingest ~doc_id ~raw () with
-            | Ok () -> incr queued
-            | Error e -> errors := e :: !errors
-          end
-        ) items;
-        Printf.printf "[ingest/batch] queued %d item(s)\n%!" !queued;
-        if !queued > 0 then !notify_prefetch ();
-        let json = `Assoc
-          [ ("ok", `Bool true)
-          ; ("queued", `Int !queued)
-          ; ("errors", `List (List.map (fun e -> `String e) (List.rev !errors)))
-          ] in
-        Cohttp_eio.Server.respond_string ~status:`OK
-          ~body:(Yojson.Safe.to_string json) ~headers:json_headers ()
-      with e ->
-        Cohttp_eio.Server.respond_string ~status:`Bad_request
-          ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped (Printexc.to_string e)))
-          ~headers:json_headers ())
+      let batch_result = ref "started" in
+      incr ingest_batch_active_count;
+      ingest_batch_last_started_at := batch_started;
+      Printf.printf "[ingest/batch.start] bytes=%d active=%d\n%!"
+        (String.length raw_body) !ingest_batch_active_count;
+      Fun.protect
+        (fun () ->
+          try
+            let json = Yojson.Safe.from_string raw_body in
+            let items = match json with
+              | `Assoc kv ->
+                  (match List.assoc_opt "items" kv with
+                  | Some (`List items) -> items | _ -> [])
+              | `List items -> items
+              | _ -> []
+            in
+            let queued = ref 0 in
+            let errors = ref [] in
+            List.iter (fun item ->
+              let kv = match item with `Assoc kv -> kv | _ -> [] in
+              let doc_id = match List.assoc_opt "doc_id" kv with
+                | Some (`String s) -> String.trim s | _ -> "" in
+              let raw = match List.assoc_opt "raw" kv with
+                | Some (`String s) -> s | _ -> "" in
+              if doc_id = "" || raw = "" then
+                errors := "missing doc_id or raw" :: !errors
+              else begin
+                match Rag_lib.Pg.enqueue_ingest ~doc_id ~raw () with
+                | Ok () -> incr queued
+                | Error e -> errors := e :: !errors
+              end
+            ) items;
+            ingest_batch_last_queued := !queued;
+            ingest_batch_last_errors := List.length !errors;
+            batch_result := Printf.sprintf "ok_queued=%d_errors=%d" !queued (List.length !errors);
+            Printf.printf "[ingest/batch] queued %d item(s)\n%!" !queued;
+            if !queued > 0 then !notify_prefetch ();
+            log_ingest_queue_status "ingest/batch";
+            let json = `Assoc
+              [ ("ok", `Bool true)
+              ; ("queued", `Int !queued)
+              ; ("errors", `List (List.map (fun e -> `String e) (List.rev !errors)))
+              ] in
+            Cohttp_eio.Server.respond_string ~status:`OK
+              ~body:(Yojson.Safe.to_string json) ~headers:json_headers ()
+          with e ->
+            batch_result := "bad_request";
+            Cohttp_eio.Server.respond_string ~status:`Bad_request
+              ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped (Printexc.to_string e)))
+              ~headers:json_headers ())
+        ~finally:(fun () ->
+          decr ingest_batch_active_count;
+          ingest_batch_last_finished_at := debug_now ();
+          ingest_batch_last_result := !batch_result;
+          Printf.printf "[ingest/batch.finish] result=%s active=%d dt=%.3fs\n%!"
+            !batch_result !ingest_batch_active_count (!ingest_batch_last_finished_at -. batch_started))
 
   | `GET, "/ingest/status" ->
       (match Rag_lib.Pg.ingest_queue_status () with
@@ -4911,9 +5290,13 @@ let handler ~client ~sw ~clock _socket request body =
             let int_opt k = match List.assoc_opt k md with Some (`Int n) -> Some n | _ -> None in
             let bool_opt k = match List.assoc_opt k md with Some (`Bool b) -> Some b | _ -> None in
             let att = match List.assoc_opt "attachments" md with Some (`List l) -> l | _ -> [] in
-            let body_text = match Rag_lib.Pg.get_body_preview doc_id with
+            let body_text =
+              match Rag_lib.Pg.get_body_preview doc_id with
               | Ok (Some s) when String.trim s <> "" -> Some (String.trim s)
-              | _ -> None
+              | _ ->
+                  (match Rag_lib.Pg.get_fyi_body_preview doc_id with
+                  | Ok (Some s) when String.trim s <> "" -> Some (String.trim s)
+                  | _ -> None)
             in
             let result = `Assoc (
               [ ("sender", `String (str "from"))
@@ -4997,7 +5380,7 @@ let handler ~client ~sw ~clock _socket request body =
             else "QUOTED CONTEXT:\n" ^ quoted_capped
           in
           let att = if attachments_section = "" then "" else attachments_section in
-          let parts = List.filter (fun s -> s <> "") [qs; qc; att; "NEW CONTENT:\n" ^ new_body] in
+          let parts = List.filter (fun s -> s <> "") ["NEW CONTENT:\n" ^ new_body; qc; qs; att] in
           String.concat "\n\n" parts
         in
         let _index_text, metadata_json =
@@ -5269,6 +5652,8 @@ let handler ~client ~sw ~clock _socket request body =
   | `POST, "/admin/pause" ->
       let raw = read_all body in
       (try
+        let prev_tasks_paused = Atomic.get tasks_paused in
+        let prev_ingest_paused = Atomic.get ingest_paused in
         let json = Yojson.Safe.from_string raw in
         let kv = match json with `Assoc kv -> kv | _ -> [] in
         (match List.assoc_opt "tasks" kv with
@@ -5279,6 +5664,9 @@ let handler ~client ~sw ~clock _socket request body =
         | _ -> ());
         Printf.printf "[admin.pause] tasks_paused=%b ingest_paused=%b\n%!"
           (Atomic.get tasks_paused) (Atomic.get ingest_paused);
+        if (prev_tasks_paused && not (Atomic.get tasks_paused))
+           || (prev_ingest_paused && not (Atomic.get ingest_paused)) then
+          !notify_prefetch ();
         let json = `Assoc
           [ ("ok", `Bool true)
           ; ("tasks_paused", `Bool (Atomic.get tasks_paused))
@@ -5346,34 +5734,29 @@ let handler ~client ~sw ~clock _socket request body =
         match Rag_lib.Pg.set_processed id true with
         | Ok true ->
             Printf.printf "[admin.mark_processed] %s -> processed=true\n%!" id;
+            ignore (Rag_lib.Pg.delete_pending_processed id);
+            ignore (Rag_lib.Pg.delete_fyi id);
             check_auto_complete id;
             Cohttp_eio.Server.respond_string ~status:`OK
               ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool true); ("id", `String id); ("processed", `Bool true) ]))
               ~headers:json_headers ()
-        | Ok false | Error _ when not is_json ->
-            (* Not yet ingested but we have raw RFC822 — ingest first, then mark processed *)
-            Printf.eprintf "[admin.mark_processed] %s not ingested, auto-ingesting from RFC822\n%!" id;
-            let rfc_headers = parse_headers raw in
-            let doc_id = doc_id_of_ingest request rfc_headers raw in
-            let whoami = String.trim !whoami in
-            let resp, _resp_body =
-              forward_ingest_raw ~client ~sw ~log:true ~whoami ~doc_id ~headers:rfc_headers ~raw
-            in
-            let code = Cohttp.Code.code_of_status (Http.Response.status resp) in
-            if code >= 200 && code < 300 then (
-              ignore (Rag_lib.Pg.set_processed doc_id true);
-              check_auto_complete doc_id;
-              Cohttp_eio.Server.respond_string ~status:`OK
-                ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool true); ("id", `String doc_id); ("processed", `Bool true); ("auto_ingested", `Bool true) ]))
-                ~headers:json_headers ())
-            else
-              Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-                ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String "auto-ingest failed") ]))
-                ~headers:json_headers ()
         | Ok false | Error _ ->
-            Cohttp_eio.Server.respond_string ~status:`Not_found
-              ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String "not ingested") ]))
-              ~headers:json_headers ())
+            (match Rag_lib.Pg.enqueue_pending_processed id with
+            | Ok () ->
+                Printf.printf "[admin.mark_processed] queued pending processed mark for %s\n%!" id;
+                Cohttp_eio.Server.respond_string ~status:`OK
+                  ~body:(Yojson.Safe.to_string
+                    (`Assoc
+                      [ ("ok", `Bool true)
+                      ; ("id", `String id)
+                      ; ("processed", `Bool false)
+                      ; ("queued", `Bool true)
+                      ]))
+                  ~headers:json_headers ()
+            | Error e ->
+                Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+                  ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool false); ("error", `String e) ]))
+                  ~headers:json_headers ()))
 
   | `POST, "/admin/mark_unprocessed" ->
       let raw = read_all body in
@@ -5398,10 +5781,21 @@ let handler ~client ~sw ~clock _socket request body =
       if id = "" then
         Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing id\n" ()
       else (
+        let queued_removed =
+          match Rag_lib.Pg.delete_pending_processed id with
+          | Ok b -> b
+          | Error e ->
+              Printf.eprintf "[admin.mark_unprocessed] delete_pending_processed error: %s\n%!" e;
+              false
+        in
         match Rag_lib.Pg.set_processed id false with
         | Ok true ->
             Cohttp_eio.Server.respond_string ~status:`OK
-              ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool true); ("id", `String id); ("processed", `Bool false) ]))
+              ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool true); ("id", `String id); ("processed", `Bool false); ("queued_removed", `Bool queued_removed) ]))
+              ~headers:json_headers ()
+        | Ok false | Error _ when queued_removed ->
+            Cohttp_eio.Server.respond_string ~status:`OK
+              ~body:(Yojson.Safe.to_string (`Assoc [ ("ok", `Bool true); ("id", `String id); ("processed", `Bool false); ("queued_removed", `Bool true) ]))
               ~headers:json_headers ()
         | Ok false | Error _ ->
             Cohttp_eio.Server.respond_string ~status:`Not_found
@@ -5431,6 +5825,11 @@ let handler ~client ~sw ~clock _socket request body =
   | `GET, "/fyi/list" ->
       (match Rag_lib.Pg.list_fyi () with
       | Ok rows ->
+          let rows =
+            List.filter (fun (_, _, _, sender, _) ->
+              not (sender_matches_user ~whoami:!whoami ~from_:sender)
+            ) rows
+          in
           let items = List.map (fun (doc_id, summary, date, sender, subject) ->
             `Assoc [ ("doc_id", `String doc_id)
                    ; ("summary", `String summary)
@@ -5464,23 +5863,16 @@ let handler ~client ~sw ~clock _socket request body =
                 | None -> "Task from FYI email")
             | Error _ -> "Task from FYI email"
           in
-          let title = if String.length summary > 80 then String.sub summary 0 77 ^ "..." else summary in
-          let task_id = generate_task_id () in
-          (* Embed the title for vector search *)
-          let embedding = match ollama_embed ~client ~sw ~task:Search_document
-              ~label:"fyi_create_task" ~text:title () with
-            | Ok v -> l2_normalize v
-            | Error _ -> []
+          let detail = match Rag_lib.Pg.get_email_detail doc_id with
+            | Ok (Some (`Assoc kv)) ->
+                (match List.assoc_opt "metadata" kv with Some (`Assoc m) -> m | _ -> [])
+            | _ -> []
           in
-          (match Rag_lib.Pg.create_task ~task_id ~title ~description:summary
-              ~importance_score:(Some 50) ~deadline:""
-              ~embedding ~conversation_json:"[]" ~drafts_json:"[]" () with
-          | Ok () ->
-              ignore (Rag_lib.Pg.link_email_to_task ~task_id ~doc_id ~role:"trigger"
-                ~compressed_body:summary ());
-              ignore (Rag_lib.Pg.delete_fyi doc_id);
-              !notify_prefetch ();
-              Printf.printf "[fyi.create_task] created task %s from FYI doc_id=%s\n%!" task_id doc_id;
+          let subject =
+            match List.assoc_opt "subject" detail with Some (`String s) -> s | _ -> ""
+          in
+          (match force_create_task_for_email ~client ~sw ~doc_id ~summary ~subject with
+          | Ok (`Created task_id) | Ok (`Existing task_id) ->
               Cohttp_eio.Server.respond_string ~status:`OK
                 ~body:(Yojson.Safe.to_string (`Assoc [("task_id", `String task_id)]))
                 ~headers:json_headers ()
@@ -5974,12 +6366,15 @@ let handler ~client ~sw ~clock _socket request body =
             | Some dbg -> ignore (Rag_lib.Pg.set_propose_tasks_debug ndoc (Yojson.Safe.to_string dbg))
             | None -> ());
             (* 9. Create new tasks or store FYI *)
+            let sender_is_user = sender_matches_user ~whoami ~from_ in
             if task_proposals <> [] then begin
               process_task_proposals ~client ~sw ~doc_id:ndoc ~body_text
                 ~email_date:date_ ~proposals:task_proposals ();
               ignore (Rag_lib.Pg.delete_fyi ndoc)
-            end else if fyi_summary <> "" then
-              ignore (Rag_lib.Pg.insert_fyi ~doc_id:ndoc ~summary:fyi_summary ~email_date:date_ ());
+            end else if fyi_summary <> "" && not sender_is_user then
+              ignore (Rag_lib.Pg.insert_fyi ~doc_id:ndoc ~summary:fyi_summary ~compressed_body:body_text ~email_date:date_ ());
+            if fyi_summary <> "" && sender_is_user then
+              ignore (Rag_lib.Pg.delete_fyi ndoc);
             Printf.printf "[email.recompute_tasks] doc_id=%s proposals=%d\n%!" ndoc (List.length task_proposals);
             let result = `Assoc
               [ ("status", `String "ok")
@@ -5991,6 +6386,97 @@ let handler ~client ~sw ~clock _socket request body =
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
           ~body:(Printf.sprintf "email/recompute_tasks error: %s\n" (Printexc.to_string e)) ())
+
+  | `POST, "/email/force_task" ->
+      let raw_body = read_all body in
+      (try
+        let json = Yojson.Safe.from_string raw_body in
+        let kv = match json with `Assoc kv -> kv | _ -> [] in
+        let get_str k = match List.assoc_opt k kv with Some (`String s) -> String.trim s | _ -> "" in
+        let doc_id =
+          let id = get_str "id" in
+          if id <> "" then id else get_str "doc_id"
+        in
+        let raw_email = get_str "raw" in
+        if doc_id = "" then
+          Cohttp_eio.Server.respond_string ~status:`Bad_request
+            ~body:{|{"error":"missing id"}|} ~headers:json_headers ()
+        else begin
+          let ndoc = Rag_lib.Pg.normalize_doc_id doc_id in
+          let existing =
+            match Rag_lib.Pg.tasks_by_trigger_doc_id ndoc with
+            | Ok ids -> ids
+            | Error _ -> []
+          in
+          if existing <> [] then
+            let task_id = List.hd existing in
+            Cohttp_eio.Server.respond_string ~status:`OK
+              ~body:(Yojson.Safe.to_string (`Assoc
+                [ ("ok", `Bool true)
+                ; ("task_id", `String task_id)
+                ; ("existing", `Bool true)
+                ]))
+              ~headers:json_headers ()
+          else begin
+            let detail0 = match Rag_lib.Pg.get_email_detail ndoc with
+              | Ok (Some (`Assoc kv)) ->
+                  (match List.assoc_opt "metadata" kv with Some (`Assoc m) -> m | _ -> [])
+              | _ -> []
+            in
+            let detail =
+              if detail0 <> [] || raw_email = "" then detail0
+              else
+                let headers = parse_headers raw_email in
+                let whoami = String.trim !whoami in
+                if whoami = "" then detail0
+                else
+                  let resp, _ =
+                    forward_ingest_raw ~client ~sw ~log:true ~origin:"email_force_task" ~whoami
+                      ~doc_id:ndoc ~headers ~raw:raw_email
+                  in
+                  let code = Cohttp.Code.code_of_status (Http.Response.status resp) in
+                  if code >= 200 && code < 300 then
+                    (match Rag_lib.Pg.get_email_detail ndoc with
+                    | Ok (Some (`Assoc kv)) ->
+                        (match List.assoc_opt "metadata" kv with Some (`Assoc m) -> m | _ -> [])
+                    | _ -> [])
+                  else detail0
+            in
+            let md k = match List.assoc_opt k detail with Some (`String s) -> s | _ -> "" in
+            let sender = md "from" in
+            let subject = md "subject" in
+            let date_ = md "date" in
+            let summary =
+              let fyi_summary = lookup_fyi_summary ndoc in
+              let s = String.trim fyi_summary in
+              if s <> "" then s else forced_task_summary ~doc_id:ndoc ~sender ~subject ~date_
+            in
+            (match force_create_task_for_email ~client ~sw ~doc_id:ndoc ~summary ~subject with
+            | Ok (`Created task_id) ->
+                Cohttp_eio.Server.respond_string ~status:`OK
+                  ~body:(Yojson.Safe.to_string (`Assoc
+                    [ ("ok", `Bool true)
+                    ; ("task_id", `String task_id)
+                    ; ("created", `Bool true)
+                    ]))
+                  ~headers:json_headers ()
+            | Ok (`Existing task_id) ->
+                Cohttp_eio.Server.respond_string ~status:`OK
+                  ~body:(Yojson.Safe.to_string (`Assoc
+                    [ ("ok", `Bool true)
+                    ; ("task_id", `String task_id)
+                    ; ("existing", `Bool true)
+                    ]))
+                  ~headers:json_headers ()
+            | Error e ->
+                Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+                  ~body:(Yojson.Safe.to_string (`Assoc [ ("error", `String e) ]))
+                  ~headers:json_headers ())
+          end
+        end
+      with e ->
+        Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+          ~body:(Printf.sprintf "email/force_task error: %s\n" (Printexc.to_string e)) ())
 
   (* GET /task/needs_evidence — TB polls this to find doc_ids needing raw body upload.
      Returns { tasks: [ { task_id, doc_ids: [string] } ] } *)
@@ -7152,11 +7638,29 @@ let () =
   (* --- Background task context prefetch daemon --- *)
   let prefetch_wake = Eio.Stream.create 10 in
   notify_prefetch := (fun () ->
-    try Eio.Stream.add prefetch_wake () with _ -> ());
+    incr prefetch_notify_count;
+    last_prefetch_notify_at := debug_now ();
+    last_prefetch_notify_ok := true;
+    last_prefetch_notify_error := "";
+    try
+      Eio.Stream.add prefetch_wake ();
+      Printf.printf "[prefetch.notify] count=%d high_priority=%d ingest_paused=%b tasks_paused=%b\n%!"
+        !prefetch_notify_count (Atomic.get high_priority_count)
+        (Atomic.get ingest_paused) (Atomic.get tasks_paused)
+    with e ->
+      last_prefetch_notify_ok := false;
+      last_prefetch_notify_error := Printexc.to_string e;
+      Printf.eprintf "[prefetch.notify] add failed: %s\n%!" !last_prefetch_notify_error);
   (* Phase 0: triage — run propose_tasks + process_task_proposals for queued emails *)
   let triage_one_email ~client ~sw (doc_id : string) (body_text : string) (compressed_body : string) : unit =
     Printf.printf "[daemon.triage] processing doc_id=%s\n%!" doc_id;
+    let set_triage_stage stage =
+      daemon_current_triage_stage := stage;
+      daemon_current_triage_stage_started_at := debug_now ();
+      Printf.printf "[daemon.triage.stage] doc_id=%s stage=%s\n%!" doc_id stage
+    in
     (* Get email metadata from DB *)
+    set_triage_stage "get_email_detail";
     let from_, to_, cc_, bcc_, subject, date_, attachments =
       match Rag_lib.Pg.get_email_detail doc_id with
       | Ok (Some detail) ->
@@ -7176,6 +7680,7 @@ let () =
           ("", "", "", "", "", "", [])
     in
     if from_ = "" && to_ = "" && subject = "" then begin
+      set_triage_stage "delete_empty";
       Printf.eprintf "[daemon.triage] empty metadata for %s, deleting from queue\n%!" doc_id;
       ignore (Rag_lib.Pg.delete_triage_entry doc_id)
     end else begin
@@ -7184,16 +7689,19 @@ let () =
       let memories_text =
         if not !memory_enabled then ""
         else begin
+          set_triage_stage "get_doc_embedding";
           let repr_embedding = match Rag_lib.Pg.get_doc_embedding doc_id with
             | Ok (Some emb) -> emb | _ -> []
           in
-          if repr_embedding <> [] then
+          if repr_embedding <> [] then begin
+            set_triage_stage "retrieve_memories_embedding";
             let text, _ = retrieve_and_format_memories
               ~sender:from_ ~recipient:to_ ~cc:cc_ ~bcc:bcc_
               ~subject ~date:date_ ~attachments
               ~embedding:repr_embedding () in
             text
-          else begin
+          end else begin
+            set_triage_stage "retrieve_memories_symbolic";
             let sym = retrieve_memories_symbolic
               ~sender:from_ ~recipient:to_ ~cc:cc_ ~bcc:bcc_
               ~subject ~date:date_ ~attachments () in
@@ -7205,18 +7713,30 @@ let () =
           end
         end
       in
+      set_triage_stage "propose_tasks";
       let (task_proposals, fyi_summary, pt_debug) = propose_tasks ~client ~sw ~whoami
         ~from_ ~to_ ~cc_ ~bcc_ ~subject ~date_ ~body_text
         ~memories_text in
+      set_triage_stage "store_debug";
       (match pt_debug with
       | Some dbg -> ignore (Rag_lib.Pg.set_propose_tasks_debug doc_id (Yojson.Safe.to_string dbg))
       | None -> ());
+      let sender_is_user = sender_matches_user ~whoami ~from_ in
       if task_proposals <> [] then begin
+        set_triage_stage "process_task_proposals";
         process_task_proposals ~client ~sw ~doc_id ~body_text:compressed_body
           ~email_date:date_ ~proposals:task_proposals ();
+        set_triage_stage "delete_fyi";
         ignore (Rag_lib.Pg.delete_fyi doc_id)
-      end else if fyi_summary <> "" then
-        ignore (Rag_lib.Pg.insert_fyi ~doc_id ~summary:fyi_summary ~email_date:date_ ());
+      end else if fyi_summary <> "" && not sender_is_user then begin
+        set_triage_stage "insert_fyi";
+        ignore (Rag_lib.Pg.insert_fyi ~doc_id ~summary:fyi_summary ~compressed_body ~email_date:date_ ());
+      end;
+      if fyi_summary <> "" && sender_is_user then begin
+        set_triage_stage "delete_self_fyi";
+        ignore (Rag_lib.Pg.delete_fyi doc_id);
+      end;
+      set_triage_stage "delete_triage_entry";
       Printf.printf "[daemon.triage] doc_id=%s proposals=%d\n%!" doc_id (List.length task_proposals);
       ignore (Rag_lib.Pg.delete_triage_entry doc_id)
     end
@@ -7614,61 +8134,151 @@ let () =
   in
   Eio.Fiber.fork_daemon ~sw (fun () ->
     Printf.printf "[prefetch] background daemon started\n%!";
+    let rec drain_prefetch_wake () =
+      try
+        ignore (Eio.Stream.take_nonblocking prefetch_wake);
+        drain_prefetch_wake ()
+      with _ -> ()
+    in
     let rec loop () =
-      (* Wait for notification or poll every 30s *)
-      (try
-        ignore (Eio.Stream.take_nonblocking prefetch_wake)
-      with _ -> ());
+      incr daemon_loop_count;
+      daemon_last_loop_started_at := debug_now ();
+      daemon_current_phase := "poll";
+      daemon_current_phase_started_at := !daemon_last_loop_started_at;
+      drain_prefetch_wake ();
       let did_work = ref false in
+      let ingest_claimed = ref false in
+      let ingest_pending_after = ref false in
       (* Phase -1: async ingestion — highest daemon priority, runs even during high-priority *)
-      (if Atomic.get ingest_paused then ()
-      else match Rag_lib.Pg.dequeue_ingest () with
+      (if Atomic.get ingest_paused then (
+        daemon_current_phase := "ingest_paused";
+        daemon_current_phase_started_at := debug_now ()
+      )
+      else match Rag_lib.Pg.dequeue_ingest ~stale_after_seconds:daemon_ingest_stale_claim_seconds () with
       | Ok (Some (doc_id, raw)) ->
           did_work := true;
+          ingest_claimed := true;
+          daemon_current_phase := "ingest";
+          daemon_current_phase_started_at := debug_now ();
+          daemon_current_ingest_doc_id := doc_id;
+          daemon_current_ingest_started_at := !daemon_current_phase_started_at;
+          daemon_last_ingest_doc_id := doc_id;
+          daemon_last_ingest_started_at := !daemon_current_phase_started_at;
+          daemon_last_ingest_result := "running";
           Printf.printf "[daemon.ingest] processing doc_id=%s (%d bytes)\n%!" doc_id (String.length raw);
           let whoami = String.trim !whoami in
           if whoami = "" then begin
             Printf.eprintf "[daemon.ingest] skipping %s — whoami not set\n%!" doc_id;
-            ignore (Rag_lib.Pg.fail_ingest doc_id "whoami not configured")
+            daemon_last_ingest_result := "missing_whoami";
+            ignore (Rag_lib.Pg.delete_ingest_entry doc_id)
           end else begin
             (try
               let headers = parse_headers raw in
-              let resp, _resp_body =
-                forward_ingest_raw ~client ~sw ~log:true ~whoami ~doc_id ~headers ~raw
+              let resp, resp_body =
+                forward_ingest_raw ~client ~sw ~log:true ~origin:"daemon_ingest" ~whoami ~doc_id ~headers ~raw
               in
               let code = Cohttp.Code.code_of_status (Http.Response.status resp) in
               if code >= 200 && code < 300 then begin
                 Printf.printf "[daemon.ingest] ok doc_id=%s\n%!" doc_id;
-                ignore (Rag_lib.Pg.finish_ingest doc_id)
+                daemon_last_ingest_result := Printf.sprintf "http_%d" code;
+                ignore (Rag_lib.Pg.delete_ingest_entry doc_id)
               end else begin
                 Printf.eprintf "[daemon.ingest] failed doc_id=%s status=%d\n%!" doc_id code;
-                ignore (Rag_lib.Pg.fail_ingest doc_id (Printf.sprintf "HTTP %d" code))
+                let error_msg = Printf.sprintf "HTTP %d: %s" code resp_body in
+                if is_retryable_ingest_error error_msg then begin
+                  daemon_last_ingest_result := Printf.sprintf "retry_http_%d" code;
+                  ignore (Rag_lib.Pg.requeue_ingest doc_id error_msg);
+                  !notify_prefetch ()
+                end else begin
+                  daemon_last_ingest_result := Printf.sprintf "dropped_http_%d" code;
+                  ignore (Rag_lib.Pg.delete_ingest_entry doc_id)
+                end
               end
             with e ->
               let msg = Printexc.to_string e in
               Printf.eprintf "[daemon.ingest] error for %s: %s\n%!" doc_id msg;
-              ignore (Rag_lib.Pg.fail_ingest doc_id msg))
-          end
-      | _ -> ());
+              if is_retryable_ingest_error msg then begin
+                daemon_last_ingest_result := "retry_exception";
+                ignore (Rag_lib.Pg.requeue_ingest doc_id msg);
+                !notify_prefetch ()
+              end else begin
+                daemon_last_ingest_result := "dropped_exception";
+                ignore (Rag_lib.Pg.delete_ingest_entry doc_id)
+              end)
+          end;
+          daemon_last_ingest_finished_at := debug_now ();
+          daemon_current_ingest_doc_id := "";
+          daemon_current_ingest_started_at := 0.0;
+          (match Rag_lib.Pg.ingest_queue_pending_count () with
+          | Ok pending -> ingest_pending_after := pending > 0
+          | Error _ -> ingest_pending_after := true);
+          log_ingest_queue_status "daemon.ingest"
+      | Ok None -> ()
+      | Error e ->
+          daemon_current_phase := "ingest_dequeue_error";
+          daemon_current_phase_started_at := debug_now ();
+          Printf.eprintf "[daemon.ingest] dequeue error: %s\n%!" e);
       (* Defer to high-priority work (ingestion, user queries/chat) *)
       if Atomic.get tasks_paused then ()
+      else if !ingest_claimed && !ingest_pending_after then ()
       else if Atomic.get high_priority_count > 0 then
-        Printf.printf "[prefetch] deferring — high-priority request active\n%!"
+        begin
+          daemon_current_phase := "defer_high_priority";
+          daemon_current_phase_started_at := debug_now ();
+          match Rag_lib.Pg.ingest_queue_pending_count () with
+          | Ok pending when pending > 0 ->
+              Printf.printf "[prefetch] deferring — high-priority request active count=%d pending_ingest=%d\n%!"
+                (Atomic.get high_priority_count) pending
+          | Ok _ ->
+              Printf.printf "[prefetch] deferring — high-priority request active count=%d\n%!"
+                (Atomic.get high_priority_count)
+          | Error e ->
+              Printf.eprintf "[prefetch] deferring — high-priority request active but ingest count failed: %s\n%!" e
+        end
       else begin
         (* Phase 0: triage — propose tasks for queued emails *)
-        (match Rag_lib.Pg.dequeue_triage () with
+        (match Rag_lib.Pg.dequeue_triage ~stale_after_seconds:daemon_triage_stale_claim_seconds () with
         | Ok (Some (doc_id, body_text, compressed_body)) ->
             did_work := true;
-            (try triage_one_email ~client ~sw doc_id body_text compressed_body
-            with e ->
-              Printf.eprintf "[daemon.triage] error for %s: %s\n%!" doc_id (Printexc.to_string e);
-              ignore (Rag_lib.Pg.delete_triage_entry doc_id))
+            daemon_current_phase := "triage";
+            daemon_current_phase_started_at := debug_now ();
+            daemon_current_triage_doc_id := doc_id;
+            daemon_current_triage_started_at := !daemon_current_phase_started_at;
+            daemon_current_triage_stage := "start";
+            daemon_current_triage_stage_started_at := !daemon_current_phase_started_at;
+            daemon_last_triage_doc_id := doc_id;
+            daemon_last_triage_started_at := !daemon_current_phase_started_at;
+            daemon_last_triage_result := "running";
+            (try
+              Eio.Time.with_timeout_exn env#clock daemon_triage_timeout_seconds (fun () ->
+                triage_one_email ~client ~sw doc_id body_text compressed_body);
+              daemon_last_triage_result := "ok"
+            with
+            | Eio.Time.Timeout ->
+                daemon_last_triage_result := "timeout";
+                Printf.eprintf "[daemon.triage] timeout for %s at stage=%s after %.0fs\n%!"
+                  doc_id !daemon_current_triage_stage daemon_triage_timeout_seconds;
+                ignore (Rag_lib.Pg.fail_triage doc_id
+                  (Printf.sprintf "triage timeout at stage=%s after %.0fs"
+                    !daemon_current_triage_stage daemon_triage_timeout_seconds))
+            | e ->
+                daemon_last_triage_result := "exception";
+                Printf.eprintf "[daemon.triage] error for %s: %s\n%!" doc_id (Printexc.to_string e);
+                ignore (Rag_lib.Pg.fail_triage doc_id (Printexc.to_string e)));
+            daemon_last_triage_finished_at := debug_now ();
+            daemon_last_triage_stage := !daemon_current_triage_stage;
+            daemon_current_triage_doc_id := "";
+            daemon_current_triage_started_at := 0.0;
+            daemon_current_triage_stage := "idle";
+            daemon_current_triage_stage_started_at := 0.0
         | _ -> ());
         (* Phase 1: kNN + selection for tasks needing prefetch *)
         (if Atomic.get high_priority_count = 0 then
           match Rag_lib.Pg.tasks_needing_prefetch ~limit:1 () with
           | Ok ((task_id, title) :: _) ->
               did_work := true;
+              daemon_current_phase := "prefetch";
+              daemon_current_phase_started_at := debug_now ();
               (try prefetch_one_task ~client ~sw task_id title
               with e ->
                 Printf.eprintf "[prefetch] error processing %s: %s\n%!" task_id (Printexc.to_string e))
@@ -7678,12 +8288,32 @@ let () =
           match Rag_lib.Pg.tasks_ready_for_generation ~limit:1 () with
           | Ok ((task_id, title) :: _) ->
               did_work := true;
+              daemon_current_phase := "generate";
+              daemon_current_phase_started_at := debug_now ();
               (try generate_first_message ~client ~sw task_id title
               with e ->
                 Printf.eprintf "[prefetch.gen] error for %s: %s\n%!" task_id (Printexc.to_string e))
           | _ -> ())
       end;
-      Eio.Time.sleep env#clock (if !did_work then 2.0 else 30.0);
+      daemon_last_loop_finished_at := debug_now ();
+      if !did_work then begin
+        daemon_last_sleep_seconds := 0.0;
+        loop ()
+      end else begin
+        daemon_last_sleep_seconds := 0.0;
+        daemon_current_phase := "wait";
+        daemon_current_phase_started_at := debug_now ();
+        drain_prefetch_wake ();
+        ignore (Eio.Stream.take prefetch_wake);
+        loop ()
+      end
+    in
+    loop ());
+
+  Eio.Fiber.fork_daemon ~sw (fun () ->
+    let rec loop () =
+      Eio.Time.sleep env#clock daemon_safety_wake_seconds;
+      !notify_prefetch ();
       loop ()
     in
     loop ());

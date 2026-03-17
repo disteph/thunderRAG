@@ -635,20 +635,12 @@ function getBackgroundWebextApi() {
    messages.getRaw with decrypt:true and POST to the endpoint. */
 async function delegateIngestToBackground(msgHdr, endpoint) {
   try {
-    const api = getBackgroundWebextApi();
     const headerMessageId = (msgHdr?.messageId || "").trim();
-    if (!api || !api.runtime || typeof api.runtime.sendMessage !== "function") {
-      return { ok: false, error: "background runtime.sendMessage unavailable" };
-    }
     if (!headerMessageId) {
       return { ok: false, error: "missing msgHdr.messageId" };
     }
-    const res = await api.runtime.sendMessage({
-      type: "ingestMessageByHeaderMessageId",
-      headerMessageId,
-      endpoint,
-    });
-    return { ok: true, res };
+    enqueueIngest(headerMessageId, endpoint);
+    return { ok: true };
   } catch (e) {
     return { ok: false, error: String(e || "") };
   }
@@ -1295,6 +1287,18 @@ function ensureMsgWindowForConversion(msgWindow) {
   }
 }
 
+const POST_TIMEOUT_MS = 15000;
+
+async function fetchWithTimeout(url, init, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /* POST raw RFC822 bytes to the OCaml ingest endpoint as message/rfc822.
    Retries with 127.0.0.1 if localhost fails (common IPv6/IPv4 mismatch). */
 async function postMessage(endpoint, rawBytes, msgHdr) {
@@ -1311,11 +1315,11 @@ async function postMessage(endpoint, rawBytes, msgHdr) {
 
   let resp;
   try {
-    resp = await fetch(endpoint, {
+    resp = await fetchWithTimeout(endpoint, {
       method: "POST",
       headers,
       body: blob,
-    });
+    }, POST_TIMEOUT_MS);
   } catch (e) {
     const msg = String(e || "");
     const isNetworkError = msg.includes("NetworkError") || msg.includes("Failed to fetch");
@@ -1327,11 +1331,11 @@ async function postMessage(endpoint, rawBytes, msgHdr) {
         consoleService.logStringMessage(
           `[ragFilterAction] postMessage: retrying with endpoint=${endpoint2} after NetworkError (localhost->127.0.0.1) messageId=${msgId}`
         );
-        resp = await fetch(endpoint2, {
+        resp = await fetchWithTimeout(endpoint2, {
           method: "POST",
           headers,
           body: blob,
-        });
+        }, POST_TIMEOUT_MS);
       } catch (e2) {
         consoleService.logStringMessage(
           `[ragFilterAction] postMessage: fetch failed endpoint=${endpoint} messageId=${msgId} error=${e}`

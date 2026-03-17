@@ -38,6 +38,58 @@ function esc(s) {
   return d.innerHTML;
 }
 
+function formatLocalDateTime(value) {
+  const s = String(value || "").trim();
+  if (!s) return "";
+  let normalized = s;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(normalized)) {
+    normalized = normalized.replace(" ", "T") + "Z";
+  } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(normalized)) {
+    normalized = normalized + "Z";
+  }
+  const d = new Date(normalized);
+  if (Number.isNaN(d.getTime())) return s;
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(d);
+  } catch (_e) {
+    return d.toLocaleString();
+  }
+}
+
+function formatLocalDate(value) {
+  const s = String(value || "").trim();
+  if (!s) return "";
+  let d;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [y, m, day] = s.split("-").map(Number);
+    d = new Date(y, m - 1, day, 12, 0, 0);
+  } else {
+    let normalized = s;
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(normalized)) {
+      normalized = normalized.replace(" ", "T") + "Z";
+    } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(normalized)) {
+      normalized = normalized + "Z";
+    }
+    d = new Date(normalized);
+  }
+  if (Number.isNaN(d.getTime())) return s;
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    }).format(d);
+  } catch (_e) {
+    return d.toLocaleDateString();
+  }
+}
+
 /* Render the metadata tiles for a single email.  Returns HTML string.
    Does NOT include the body-text card (caller decides based on isSingle). */
 function renderMetadataHtml(data, entry) {
@@ -50,7 +102,7 @@ function renderMetadataHtml(data, entry) {
       h += `<div class="card"><div class="label">Email</div><div class="meta-grid">`;
       if (entry.from) h += `<div class="meta-key">from</div><div>${esc(entry.from)}</div>`;
       if (entry.subject) h += `<div class="meta-key">subject</div><div>${esc(entry.subject)}</div>`;
-      if (entry.date) h += `<div class="meta-key">date</div><div>${esc(entry.date)}</div>`;
+      if (entry.date) h += `<div class="meta-key">date</div><div>${esc(formatLocalDateTime(entry.date))}</div>`;
       h += `<div class="meta-key">message_id</div><div>${esc(msgId)}</div>`;
       h += `</div></div>`;
     }
@@ -64,7 +116,7 @@ function renderMetadataHtml(data, entry) {
       h += `<div class="card"><div class="label">Email</div><div class="meta-grid">`;
       if (entry.from) h += `<div class="meta-key">from</div><div>${esc(entry.from)}</div>`;
       if (entry.subject) h += `<div class="meta-key">subject</div><div>${esc(entry.subject)}</div>`;
-      if (entry.date) h += `<div class="meta-key">date</div><div>${esc(entry.date)}</div>`;
+      if (entry.date) h += `<div class="meta-key">date</div><div>${esc(formatLocalDateTime(entry.date))}</div>`;
       h += `<div class="meta-key">message_id</div><div>${esc(msgId)}</div>`;
       h += `</div></div>`;
     }
@@ -86,7 +138,8 @@ function renderMetadataHtml(data, entry) {
     for (const key of ["from", "to", "cc", "bcc", "subject", "date", "message_id"]) {
       const val = md[key];
       if (val && typeof val === "string" && val.trim()) {
-        html += `<div class="meta-key">${esc(key)}</div><div>${esc(val)}</div>`;
+        const display = key === "date" ? formatLocalDateTime(val) : val;
+        html += `<div class="meta-key">${esc(key)}</div><div>${esc(display)}</div>`;
       }
     }
     if (Array.isArray(md.attachments) && md.attachments.length) {
@@ -98,7 +151,7 @@ function renderMetadataHtml(data, entry) {
   // ── Tile 2: Status (ingestion info + triage + processed — all in one card) ──
   html += `<div class="card"><div class="label">Status</div><div class="meta-grid">`;
   if (md && md.ingested_at) {
-    html += `<div class="meta-key">ingested at</div><div>${esc(md.ingested_at)}</div>`;
+    html += `<div class="meta-key">ingested at</div><div>${esc(formatLocalDateTime(md.ingested_at))}</div>`;
   }
   if (data.embed_model) {
     html += `<div class="meta-key">embedding model</div><div>${esc(data.embed_model)}</div>`;
@@ -118,12 +171,12 @@ function renderMetadataHtml(data, entry) {
     }
     {
       const rb = (md.reply_by && typeof md.reply_by === "string" && md.reply_by !== "none")
-        ? esc(md.reply_by) : "None";
+        ? esc(formatLocalDate(md.reply_by)) : "None";
       html += `<div class="meta-key">reply by</div><div>${rb}</div>`;
     }
     {
       const processedText = (md.processed === true)
-        ? (md.processed_at ? `Processed on ${esc(md.processed_at)}` : "Processed")
+        ? (md.processed_at ? `Processed on ${esc(formatLocalDateTime(md.processed_at))}` : "Processed")
         : "Not processed";
       html += `<div class="meta-key">processed</div><div>${processedText}</div>`;
     }

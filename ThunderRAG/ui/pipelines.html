@@ -186,8 +186,17 @@
   <div class="arrow"></div>
   <div class="step">
     <div class="node wide">
+      <div class="node-title">Similar resolved tasks (kNN)</div>
+      <div class="node-desc">Search done/dismissed tasks by vector similarity; collect resolution notes &amp; draft bodies</div>
+      <span class="data-tag">tasks table (pgvector)</span>
+    </div>
+    <div class="side-note">Top-k nearest resolved tasks within distance threshold. Stored as <code>prior_resolutions</code> text on the new task. Injected into first-message and chat prompts.</div>
+  </div>
+  <div class="arrow"></div>
+  <div class="step">
+    <div class="node wide">
       <div class="node-title">Create or merge task</div>
-      <div class="node-desc">Insert new task or update existing one in DB. Link triggering email.</div>
+      <div class="node-desc">Insert new task or update existing one in DB. Link triggering email. Attach prior resolutions.</div>
       <span class="data-tag">tasks table</span>
       <span class="data-tag">task_emails table</span>
     </div>
@@ -219,6 +228,7 @@
       <span class="prompt-tag">task_first_message</span>
     </div>
     <div class="side-note">
+      Injects email context, style context, user memories, and <strong>prior resolutions</strong> (how similar past tasks were handled).<br/>
       Sets <code>context_ready = true</code>. The task now appears fully loaded in the UI.
     </div>
   </div>
@@ -304,11 +314,12 @@
   <div class="step">
     <div class="node wide">
       <div class="node-title">Build prompt</div>
-      <div class="node-desc">System prompt + trigger/context/style emails + retrieved emails (if any) + memories + history summary + conversation tail</div>
+      <div class="node-desc">System prompt + trigger/context/style emails + prior resolutions + retrieved emails (if any) + memories + history summary + conversation tail</div>
       <span class="prompt-tag">task_interview</span>
     </div>
     <div class="side-note">
       Email bodies from <code>task_emails</code>, labeled [trigger], [context], [style].<br/>
+      <strong>Prior resolutions</strong>: notes &amp; drafts from similar resolved tasks, for continuity.<br/>
       On completion calls: ephemeral [retrieved] emails are injected into the context too.
     </div>
   </div>
@@ -336,7 +347,7 @@
   <div class="step">
     <div class="node wide">
       <div class="node-title">Parse markers</div>
-      <div class="node-desc">[DRAFT], [SCORE], [DEADLINE], [TITLE], [DONE], [TASK_NEW], [LINK], [MEMORY], [RETRIEVE]</div>
+      <div class="node-desc">[DRAFT], [SCORE], [DEADLINE], [TITLE], [DONE], [DISMISS], [DELETE], [RECOMPUTE], [NEXT], [PREVIOUS], [TASK_NEW], [LINK], [MEMORY], [RETRIEVE]</div>
     </div>
     <div class="side-note">Each marker triggers a side effect: create/revise draft, update fields, spawn new task, search archive, etc.</div>
   </div>

@@ -169,15 +169,25 @@ let schema_statements () =
        doc_id          TEXT PRIMARY KEY REFERENCES emails(doc_id) ON DELETE CASCADE,
        body_text       TEXT NOT NULL,
        compressed_body TEXT NOT NULL,
-       created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+       status          TEXT NOT NULL DEFAULT 'pending',
+       error           TEXT NOT NULL DEFAULT '',
+       created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+       started_at      TIMESTAMPTZ,
+       finished_at     TIMESTAMPTZ
      )|}
+  ; {|ALTER TABLE triage_queue ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'|}
+  ; {|ALTER TABLE triage_queue ADD COLUMN IF NOT EXISTS error TEXT NOT NULL DEFAULT ''|}
+  ; {|ALTER TABLE triage_queue ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ|}
+  ; {|ALTER TABLE triage_queue ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ|}
   (* --- FYI emails: triaged emails that did not produce tasks --- *)
   ; {|CREATE TABLE IF NOT EXISTS fyi_emails (
        doc_id     TEXT PRIMARY KEY,
        summary    TEXT NOT NULL,
+       compressed_body TEXT NOT NULL DEFAULT '',
        email_date TIMESTAMPTZ,
        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
      )|}
+  ; {|ALTER TABLE fyi_emails ADD COLUMN IF NOT EXISTS compressed_body TEXT NOT NULL DEFAULT ''|}
   (* --- ingest queue: raw emails waiting for async ingestion --- *)
   ; {|CREATE TABLE IF NOT EXISTS ingest_queue (
        doc_id      TEXT PRIMARY KEY,
@@ -187,6 +197,10 @@ let schema_statements () =
        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
        started_at  TIMESTAMPTZ,
        finished_at TIMESTAMPTZ
+     )|}
+  ; {|CREATE TABLE IF NOT EXISTS pending_processed (
+       doc_id      TEXT PRIMARY KEY,
+       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
      )|}
   ]
 
@@ -534,6 +548,10 @@ let delete_email (doc_id : string)
     let iq_sql = "DELETE FROM ingest_queue WHERE doc_id = $1" in
     let iq_req = Caqti_request.Infix.(string ->. unit) ~oneshot:true iq_sql in
     (match C.exec iq_req doc_id with Error _ as e -> e | Ok () ->
+    (* 5c. Delete from pending_processed queue *)
+    let pp_sql = "DELETE FROM pending_processed WHERE doc_id = $1" in
+    let pp_req = Caqti_request.Infix.(string ->. unit) ~oneshot:true pp_sql in
+    (match C.exec pp_req doc_id with Error _ as e -> e | Ok () ->
     (* 6. Delete from emails (cascades to email_chunks, triage_queue) *)
     let del_sql = "DELETE FROM emails WHERE doc_id = $1 RETURNING doc_id" in
     let del_req = Caqti_request.Infix.(string ->? string) ~oneshot:true del_sql in
@@ -551,7 +569,7 @@ let delete_email (doc_id : string)
           match C.find check_req tid with
           | Ok 0 -> true | _ -> false
         ) affected_task_ids in
-        Ok (existed, triggerless))))))))
+        Ok (existed, triggerless)))))))))
 
 let get_propose_tasks_debug (doc_id : string) : (string option, string) result =
   let doc_id = normalize_doc_id doc_id in
@@ -588,6 +606,31 @@ let set_processed (doc_id : string) (value : bool) : (bool, string) result =
       | Ok (Some _) -> Ok true
       | Ok None -> Ok false
       | Error _ as e -> e)
+
+let enqueue_pending_processed (doc_id : string) : (unit, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  let sql = {|
+    INSERT INTO pending_processed (doc_id, created_at)
+    VALUES ($1, NOW())
+    ON CONFLICT (doc_id) DO UPDATE
+      SET created_at = NOW()
+  |} in
+  let req = Caqti_request.Infix.(Caqti_type.string ->. Caqti_type.unit) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    C.exec req doc_id)
+
+let delete_pending_processed (doc_id : string) : (bool, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  let sql = "DELETE FROM pending_processed WHERE doc_id = $1 RETURNING doc_id" in
+  let req = Caqti_request.Infix.(Caqti_type.string ->? Caqti_type.string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.find_opt req doc_id with
+    | Ok (Some _) -> Ok true
+    | Ok None -> Ok false
+    | Error _ as e -> e)
+
+let consume_pending_processed (doc_id : string) : (bool, string) result =
+  delete_pending_processed doc_id
 
 (* ---------- kNN retrieval ---------- *)
 
@@ -1752,25 +1795,35 @@ let enqueue_ingest ~(doc_id : string) ~(raw : string) ()
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
     C.exec req (doc_id, raw))
 
-(* Dequeue oldest pending entry from ingest queue and mark it 'processing'.
-   Returns (doc_id, raw) or None. *)
-let dequeue_ingest ()
+(* Dequeue oldest entry from ingest queue.
+   Returns (doc_id, raw) or None. Reclaims stale 'processing' rows too. *)
+let dequeue_ingest ~(stale_after_seconds : int) ()
     : ((string * string) option, string) result =
   let sql = {|
-    UPDATE ingest_queue
-    SET status = 'processing', started_at = NOW()
-    WHERE doc_id = (
-      SELECT doc_id FROM ingest_queue
+    WITH next AS (
+      SELECT doc_id
+      FROM ingest_queue
       WHERE status = 'pending'
+         OR (status = 'processing'
+             AND started_at IS NOT NULL
+             AND started_at < NOW() - make_interval(secs => $1))
       ORDER BY created_at ASC
       LIMIT 1
+      FOR UPDATE SKIP LOCKED
     )
-    RETURNING doc_id, raw
+    UPDATE ingest_queue iq
+    SET status = 'processing',
+        error = '',
+        started_at = NOW(),
+        finished_at = NULL
+    FROM next
+    WHERE iq.doc_id = next.doc_id
+    RETURNING iq.doc_id, iq.raw
   |} in
   let open Caqti_type in
-  let req = Caqti_request.Infix.(unit ->? t2 string string) ~oneshot:true sql in
+  let req = Caqti_request.Infix.(int ->? t2 string string) ~oneshot:true sql in
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
-    C.find_opt req ())
+    C.find_opt req stale_after_seconds)
 
 let finish_ingest (doc_id : string) : (unit, string) result =
   let doc_id = normalize_doc_id doc_id in
@@ -1788,6 +1841,21 @@ let fail_ingest (doc_id : string) (error : string) : (unit, string) result =
   let sql = {|
     UPDATE ingest_queue
     SET status = 'error', error = $2, finished_at = NOW()
+    WHERE doc_id = $1
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(t2 string string ->. unit) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    C.exec req (doc_id, error))
+
+let requeue_ingest (doc_id : string) (error : string) : (unit, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  let sql = {|
+    UPDATE ingest_queue
+    SET status = 'pending',
+        error = $2,
+        started_at = NULL,
+        finished_at = NULL
     WHERE doc_id = $1
   |} in
   let open Caqti_type in
@@ -1838,11 +1906,15 @@ let enqueue_triage ~(doc_id : string) ~(body_text : string)
     ~(compressed_body : string) () : (unit, string) result =
   let doc_id = normalize_doc_id doc_id in
   let sql = {|
-    INSERT INTO triage_queue (doc_id, body_text, compressed_body)
-    VALUES ($1, $2, $3)
+    INSERT INTO triage_queue (doc_id, body_text, compressed_body, status, error, started_at, finished_at)
+    VALUES ($1, $2, $3, 'pending', '', NULL, NULL)
     ON CONFLICT (doc_id) DO UPDATE
       SET body_text = EXCLUDED.body_text,
           compressed_body = EXCLUDED.compressed_body,
+          status = 'pending',
+          error = '',
+          started_at = NULL,
+          finished_at = NULL,
           created_at = NOW()
   |} in
   let open Caqti_type in
@@ -1852,18 +1924,33 @@ let enqueue_triage ~(doc_id : string) ~(body_text : string)
 
 (* Dequeue oldest entry from triage queue.
    Returns (doc_id, body_text, compressed_body) or None. *)
-let dequeue_triage ()
+let dequeue_triage ~(stale_after_seconds : int) ()
     : ((string * string * string) option, string) result =
   let sql = {|
-    SELECT doc_id, body_text, compressed_body
-    FROM triage_queue
-    ORDER BY created_at ASC
-    LIMIT 1
+    WITH next AS (
+      SELECT doc_id
+      FROM triage_queue
+      WHERE status = 'pending'
+         OR (status = 'processing'
+             AND started_at IS NOT NULL
+             AND started_at < NOW() - make_interval(secs => $1))
+      ORDER BY created_at ASC
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+    )
+    UPDATE triage_queue tq
+    SET status = 'processing',
+        error = '',
+        started_at = NOW(),
+        finished_at = NULL
+    FROM next
+    WHERE tq.doc_id = next.doc_id
+    RETURNING tq.doc_id, tq.body_text, tq.compressed_body
   |} in
   let open Caqti_type in
-  let req = Caqti_request.Infix.(unit ->? t3 string string string) ~oneshot:true sql in
+  let req = Caqti_request.Infix.(int ->? t3 string string string) ~oneshot:true sql in
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
-    C.find_opt req ())
+    C.find_opt req stale_after_seconds)
 
 let delete_triage_entry (doc_id : string) : (unit, string) result =
   let doc_id = normalize_doc_id doc_id in
@@ -1872,6 +1959,32 @@ let delete_triage_entry (doc_id : string) : (unit, string) result =
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
     C.exec req doc_id)
 
+let fail_triage (doc_id : string) (error : string) : (unit, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  let sql = {|
+    UPDATE triage_queue
+    SET status = 'error', error = $2, finished_at = NOW()
+    WHERE doc_id = $1
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(t2 string string ->. unit) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    C.exec req (doc_id, error))
+
+let triage_queue_status ()
+    : ((int * int * int), string) result =
+  let sql = {|
+    SELECT
+      COUNT(*) FILTER (WHERE status = 'pending'),
+      COUNT(*) FILTER (WHERE status = 'processing'),
+      COUNT(*) FILTER (WHERE status = 'error')
+    FROM triage_queue
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(unit ->! t3 int int int) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    C.find req ())
+
 (* Database statistics: row count + total size per table, plus overall total size *)
 
 let table_description (name : string) : string =
@@ -1879,19 +1992,20 @@ let table_description (name : string) : string =
   | "emails"            -> "Email metadata & headers"
   | "email_chunks"      -> "Vector embeddings for email search"
   | "tasks"             -> "Task definitions & state"
-  | "task_emails"       -> "Email\xe2\x86\x94task links (trigger/context/style)"
+  | "task_emails"       -> "Email→task links (trigger/context/style)"
   | "propose_tasks_log" -> "Triage LLM debug log"
   | "triage_queue"      -> "Daemon Phase 0 pending queue"
   | "fyi_emails"        -> "Triaged emails with no tasks (FYI)"
   | "ingest_queue"      -> "Async ingestion pending queue"
+  | "pending_processed" -> "Pending mark-processed queue"
   | "memories"          -> "User memories & preferences"
-  | "memory_emails"     -> "Memory\xe2\x86\x94email source links"
+  | "memory_emails"     -> "Memory→email source links"
   | "memory_templates"  -> "Vector embeddings for memory retrieval"
   | _ -> ""
 
 let table_category (name : string) : string =
   match name with
-  | "emails" | "email_chunks" | "ingest_queue" -> "email"
+  | "emails" | "email_chunks" | "ingest_queue" | "pending_processed" -> "email"
   | "tasks" | "task_emails" | "propose_tasks_log" | "triage_queue" | "fyi_emails" -> "task"
   | "memories" | "memory_emails" | "memory_templates" -> "memory"
   | _ -> "other"
@@ -1950,6 +2064,41 @@ let clear_tasks () : (unit, string) result =
     | Ok () ->
     exec "DELETE FROM tasks")
 
+(* Clear email/RAG storage tables *)
+let clear_rag () : (unit, string) result =
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    let exec sql =
+      let req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true sql in
+      C.exec req ()
+    in
+    match exec "DELETE FROM fyi_emails WHERE doc_id NOT IN (SELECT doc_id FROM emails)" with
+    | Error _ as e -> e
+    | Ok () ->
+    match exec "DELETE FROM propose_tasks_log WHERE doc_id NOT IN (SELECT doc_id FROM emails)" with
+    | Error _ as e -> e
+    | Ok () ->
+    match exec "DELETE FROM pending_processed" with
+    | Error _ as e -> e
+    | Ok () ->
+    match exec "DELETE FROM email_chunks" with
+    | Error _ as e -> e
+    | Ok () ->
+    match exec "DELETE FROM emails" with
+    | Error _ as e -> e
+    | Ok () ->
+    match exec {|DELETE FROM task_emails te
+      WHERE NOT EXISTS (SELECT 1 FROM emails e WHERE e.doc_id = te.doc_id)|} with
+    | Error _ as e -> e
+    | Ok () ->
+    exec {|DELETE FROM tasks
+      WHERE NOT EXISTS (SELECT 1 FROM task_emails te WHERE te.task_id = tasks.task_id AND te.role = 'trigger')|})
+
+let clear_ingest_queue () : (unit, string) result =
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    let req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
+      "DELETE FROM ingest_queue" in
+    C.exec req ())
+
 (* Clear all memory-related tables *)
 let clear_memories () : (unit, string) result =
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
@@ -1968,19 +2117,20 @@ let clear_memories () : (unit, string) result =
 (* --- FYI emails --- *)
 
 let insert_fyi ~(doc_id : string) ~(summary : string)
-    ~(email_date : string) () : (unit, string) result =
+    ~(compressed_body : string) ~(email_date : string) () : (unit, string) result =
   let doc_id = normalize_doc_id doc_id in
   let sql = {|
-    INSERT INTO fyi_emails (doc_id, summary, email_date)
-    VALUES ($1, $2, CASE WHEN $3 = '' THEN NULL ELSE $3::timestamptz END)
+    INSERT INTO fyi_emails (doc_id, summary, compressed_body, email_date)
+    VALUES ($1, $2, $3, CASE WHEN $4 = '' THEN NULL ELSE $4::timestamptz END)
     ON CONFLICT (doc_id) DO UPDATE
       SET summary = EXCLUDED.summary,
+          compressed_body = EXCLUDED.compressed_body,
           email_date = EXCLUDED.email_date
   |} in
   let open Caqti_type in
-  let req = Caqti_request.Infix.(t3 string string string ->. unit) ~oneshot:true sql in
+  let req = Caqti_request.Infix.(t2 (t2 string string) (t2 string string) ->. unit) ~oneshot:true sql in
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
-    C.exec req (doc_id, summary, email_date))
+    C.exec req ((doc_id, summary), (compressed_body, email_date)))
 
 let delete_fyi (doc_id : string) : (unit, string) result =
   let doc_id = normalize_doc_id doc_id in
@@ -1998,6 +2148,7 @@ let list_fyi () : ((string * string * string * string * string) list, string) re
            COALESCE(e.sender, ''), COALESCE(e.subject, '')
     FROM fyi_emails f
     LEFT JOIN emails e ON e.doc_id = f.doc_id
+    WHERE COALESCE(e.processed, FALSE) IS NOT TRUE
     ORDER BY f.email_date DESC NULLS LAST
   |} in
   let open Caqti_type in
@@ -2008,3 +2159,17 @@ let list_fyi () : ((string * string * string * string * string) list, string) re
     | Ok rows ->
         Ok (List.map (fun ((doc_id, summary, date), (sender, subject)) ->
           (doc_id, summary, date, sender, subject)) rows))
+
+let get_fyi_body_preview (doc_id : string) : (string option, string) result =
+  let doc_id = normalize_doc_id doc_id in
+  let sql = {|
+    SELECT compressed_body FROM fyi_emails
+    WHERE doc_id = $1 AND compressed_body <> ''
+    LIMIT 1
+  |} in
+  let open Caqti_type in
+  let req = Caqti_request.Infix.(string ->? string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.find_opt req doc_id with
+    | Error _ as e -> e
+    | Ok v -> Ok v)
