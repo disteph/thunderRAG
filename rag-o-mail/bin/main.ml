@@ -970,6 +970,45 @@ let generate_task_id () =
     (Char.code (Bytes.get buf 12)) (Char.code (Bytes.get buf 13))
     (Char.code (Bytes.get buf 14)) (Char.code (Bytes.get buf 15))
 
+let generate_memory_id () =
+  "mem-" ^ generate_task_id ()
+
+let auto_complete_tasks_for_trigger ~(doc_id : string) ~(log_prefix : string) : unit =
+  match Rag_lib.Pg.auto_complete_tasks_for_email doc_id with
+  | Ok completed ->
+      List.iter (fun tid ->
+        Printf.printf "[%s] auto-completed task %s (all triggers processed)\n%!" log_prefix tid
+      ) completed
+  | Error e ->
+      Printf.eprintf "[%s] auto-complete check error: %s\n%!" log_prefix e
+
+let set_task_trigger_processed_state ~(task_id : string) ~(value : bool) ~(log_prefix : string) : unit =
+  match Rag_lib.Pg.task_trigger_doc_ids task_id with
+  | Ok doc_ids ->
+      List.iter (fun did ->
+        match Rag_lib.Pg.set_processed did value with
+        | Ok _ -> ()
+        | Error e ->
+            Printf.eprintf "[%s] failed to set processed=%b for trigger %s: %s\n%!"
+              log_prefix value did e
+      ) doc_ids
+  | Error e ->
+      Printf.eprintf "[%s] failed to fetch trigger doc_ids: %s\n%!" log_prefix e
+
+let create_memory_with_generated_id ~(text : string) ?rule ?source_task_id ()
+    : (string, string) result =
+  let rec attempt remaining =
+    if remaining <= 0 then Error "failed to generate unique memory_id"
+    else
+      let memory_id = generate_memory_id () in
+      match Rag_lib.Pg.create_memory ~memory_id ~text ?rule ?source_task_id () with
+      | Ok () -> Ok memory_id
+      | Error e when contains_substring ~sub:"duplicate key value violates unique constraint" e ->
+          attempt (remaining - 1)
+      | Error e -> Error e
+  in
+  attempt 5
+
 let lookup_fyi_summary (doc_id : string) : string =
   let ndoc = Rag_lib.Pg.normalize_doc_id doc_id in
   match Rag_lib.Pg.list_fyi () with
@@ -1028,6 +1067,7 @@ let force_create_task_for_email ~client ~sw ~(doc_id : string) ~(summary : strin
               ignore (Rag_lib.Pg.delete_task task_id);
               Error e
           | Ok () ->
+              auto_complete_tasks_for_trigger ~doc_id:ndoc ~log_prefix:"force_task";
               ignore (Rag_lib.Pg.delete_fyi ndoc);
               ignore (Rag_lib.Pg.delete_triage_entry ndoc);
               !notify_prefetch ();
@@ -1069,6 +1109,24 @@ let format_prior_resolutions ~(embedding : float list) () : string =
         let max_chars = 4000 in
         if String.length text > max_chars then String.sub text 0 max_chars else text
       end
+
+let current_prior_resolutions_for_task ~(task_id : string) : string =
+  match Rag_lib.Pg.get_task_embedding task_id with
+  | Ok (Some embedding) -> format_prior_resolutions ~embedding ()
+  | Ok None -> ""
+  | Error e ->
+      Printf.eprintf "[prior_resolutions] task embedding error for %s: %s\n%!" task_id e;
+      ""
+
+let refresh_task_prior_resolutions_json (task_json : Yojson.Safe.t) : Yojson.Safe.t =
+  match task_json with
+  | `Assoc kv ->
+      let task_id = match List.assoc_opt "task_id" kv with Some (`String s) -> String.trim s | _ -> "" in
+      if task_id = "" then task_json
+      else
+        let prior_resolutions = current_prior_resolutions_for_task ~task_id in
+        `Assoc (("prior_resolutions", `String prior_resolutions) :: List.remove_assoc "prior_resolutions" kv)
+  | _ -> task_json
 
 let process_task_proposals ~client ~sw ~(doc_id : string)
     ~(body_text : string) ~(email_date : string)
@@ -1143,7 +1201,8 @@ let process_task_proposals ~client ~sw ~(doc_id : string)
             ~prior_resolutions:prior () with
         | Ok () ->
             (match Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:ndoc ~role:"trigger" ~compressed_body:body_text () with
-            | Ok () -> ()
+            | Ok () ->
+                auto_complete_tasks_for_trigger ~doc_id:ndoc ~log_prefix:"task_dedup"
             | Error e -> Printf.eprintf "[task_dedup] link error: %s\n%!" e);
             Printf.printf "[task_dedup] NEW task %s: %s (no neighbors)\n%!" task_id tp.tp_title;
             !notify_prefetch ()
@@ -1197,7 +1256,11 @@ let process_task_proposals ~client ~sw ~(doc_id : string)
                 ~embedding ~conversation_json:"[]" ~drafts_json:"[]"
                 ~prior_resolutions:prior () with
             | Ok () ->
-                ignore (Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:ndoc ~role:"trigger" ~compressed_body:body_text ());
+                (match Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:ndoc ~role:"trigger" ~compressed_body:body_text () with
+                | Ok () ->
+                    auto_complete_tasks_for_trigger ~doc_id:ndoc ~log_prefix:"task_dedup"
+                | Error e ->
+                    Printf.eprintf "[task_dedup] link error: %s\n%!" e);
                 Printf.printf "[task_dedup] NEW task %s: %s (dedup LLM failed)\n%!" task_id tp.tp_title;
                 !notify_prefetch ()
             | Error e -> Printf.eprintf "[task_dedup] create error: %s\n%!" e)
@@ -1234,7 +1297,8 @@ let process_task_proposals ~client ~sw ~(doc_id : string)
             if decision = "same" && existing_id <> "" then begin
               (* Update existing task: link email, optionally revise description, update embedding *)
               (match Rag_lib.Pg.link_email_to_task ~task_id:existing_id ~doc_id:ndoc ~role:"trigger" ~compressed_body:body_text () with
-              | Ok () -> ()
+              | Ok () ->
+                  auto_complete_tasks_for_trigger ~doc_id:ndoc ~log_prefix:"task_dedup"
               | Error e -> Printf.eprintf "[task_dedup] link error: %s\n%!" e);
               let desc_update = if update_desc <> "" then Some update_desc else None in
               let imp_update = match merged_importance with
@@ -1281,7 +1345,8 @@ let process_task_proposals ~client ~sw ~(doc_id : string)
                   ~prior_resolutions:prior () with
               | Ok () ->
                   (match Rag_lib.Pg.link_email_to_task ~task_id ~doc_id:ndoc ~role:"trigger" ~compressed_body:body_text () with
-                  | Ok () -> ()
+                  | Ok () ->
+                      auto_complete_tasks_for_trigger ~doc_id:ndoc ~log_prefix:"task_dedup"
                   | Error e -> Printf.eprintf "[task_dedup] link error: %s\n%!" e);
                   Printf.printf "[task_dedup] NEW task %s: %s\n%!" task_id tp.tp_title;
                   !notify_prefetch ()
@@ -5945,6 +6010,7 @@ let handler ~client ~sw ~clock _socket request body =
         else
           (match Rag_lib.Pg.get_task task_id with
           | Ok (Some task_json) ->
+              let task_json = refresh_task_prior_resolutions_json task_json in
               Cohttp_eio.Server.respond_string ~status:`OK
                 ~body:(Yojson.Safe.to_string task_json) ~headers:json_headers ()
           | Ok None ->
@@ -6008,15 +6074,10 @@ let handler ~client ~sw ~clock _socket request body =
                       ~conversation:conv ~history_summary:hist ~title:t ()
                 | _ -> ()
               end;
-              (* Mark trigger emails as processed when task is done *)
-              if status = Some "done" then
-                (match Rag_lib.Pg.task_trigger_doc_ids task_id with
-                | Ok doc_ids ->
-                    List.iter (fun did ->
-                      ignore (Rag_lib.Pg.set_processed did true)
-                    ) doc_ids
-                | Error e ->
-                    Printf.eprintf "[task.update.done] failed to mark triggers processed: %s\n%!" e);
+              if status = Some "done" || status = Some "dismissed" then
+                set_task_trigger_processed_state ~task_id ~value:true ~log_prefix:"task.update.done"
+              else if status = Some "open" || status = Some "in_progress" then
+                set_task_trigger_processed_state ~task_id ~value:false ~log_prefix:"task.update.reopen";
               let body = `Assoc [ ("status", `String "ok") ] |> Yojson.Safe.to_string in
               Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
           | Ok false ->
@@ -6124,16 +6185,19 @@ let handler ~client ~sw ~clock _socket request body =
         if text = "" then
           Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing text\n" ()
         else
-        let memory_id =
-          let provided = get_str "memory_id" in
-          if provided <> "" then provided
-          else Printf.sprintf "mem-%08x-%04x-%04x"
-            (Random.bits ()) (Random.int 0xFFFF) (Random.int 0xFFFF)
-        in
+        let provided_memory_id = get_str "memory_id" in
         let rule = get_str_opt "rule" in
         let source_task_id = get_str_opt "source_task_id" in
-        (match Rag_lib.Pg.create_memory ~memory_id ~text ?rule ?source_task_id () with
-        | Ok () ->
+        let create_result =
+          if provided_memory_id <> "" then
+            match Rag_lib.Pg.create_memory ~memory_id:provided_memory_id ~text ?rule ?source_task_id () with
+            | Ok () -> Ok provided_memory_id
+            | Error e -> Error e
+          else
+            create_memory_with_generated_id ~text ?rule ?source_task_id ()
+        in
+        (match create_result with
+        | Ok memory_id ->
             (* Link emails if provided *)
             let email_ids = match List.assoc_opt "email_ids" kv with
               | Some (`List ids) ->
@@ -6254,6 +6318,7 @@ let handler ~client ~sw ~clock _socket request body =
               ~conversation_json:"[]" ~drafts_json:"[]"
               ~context_emails_json:"[]" ~history_summary:"" ~status:"open" () with
           | Ok _ ->
+              set_task_trigger_processed_state ~task_id ~value:false ~log_prefix:"task.recompute";
               Printf.printf "[task.recompute] reset task %s for recomputation\n%!" task_id;
               !notify_prefetch ();
               let body = `Assoc [ ("status", `String "ok") ] |> Yojson.Safe.to_string in
@@ -6645,7 +6710,7 @@ let handler ~client ~sw ~clock _socket request body =
             let title = task_str "title" in
             let description = task_str "description" in
             let history_summary = task_str "history_summary" in
-            let prior_resolutions = task_str "prior_resolutions" in
+            let prior_resolutions = current_prior_resolutions_for_task ~task_id in
             let conversation =
               match List.assoc_opt "conversation" task_kv with
               | Some (`List ms) -> ms
@@ -7233,11 +7298,9 @@ let handler ~client ~sw ~clock _socket request body =
                 | None -> ()
                 | Some memory_text ->
                     if memory_text <> "" && !memory_enabled then begin
-                      let memory_id = Printf.sprintf "mem-%08x-%04x-%04x"
-                        (Random.bits ()) (Random.int 0xFFFF) (Random.int 0xFFFF) in
-                      (match Rag_lib.Pg.create_memory ~memory_id ~text:memory_text
+                      (match create_memory_with_generated_id ~text:memory_text
                           ~source_task_id:task_id () with
-                      | Ok () ->
+                      | Ok memory_id ->
                           (* Link trigger emails to this memory *)
                           List.iter (fun doc_id ->
                             ignore (Rag_lib.Pg.link_email_to_memory ~memory_id ~doc_id)
@@ -7876,15 +7939,13 @@ let () =
   (* Phase 3: Generate first assistant message once all evidence bodies are present *)
   let generate_first_message ~client ~sw (task_id : string) (title : string) : unit =
     Printf.printf "[prefetch.gen] generating first message for task %s: %s\n%!" task_id title;
-    (* Load task description + prior_resolutions *)
-    let description, prior_resolutions = match Rag_lib.Pg.get_task task_id with
+    let description = match Rag_lib.Pg.get_task task_id with
       | Ok (Some json) ->
           let kv = match json with `Assoc kv -> kv | _ -> [] in
-          let desc = match List.assoc_opt "description" kv with Some (`String s) -> s | _ -> "" in
-          let pr = match List.assoc_opt "prior_resolutions" kv with Some (`String s) -> s | _ -> "" in
-          (desc, pr)
-      | _ -> ("", "")
+          (match List.assoc_opt "description" kv with Some (`String s) -> s | _ -> "")
+      | _ -> ""
     in
+    let prior_resolutions = current_prior_resolutions_for_task ~task_id in
     (* Load all task_emails with compressed bodies — same layout as /task/chat *)
     let task_emails = match Rag_lib.Pg.get_task_emails_with_bodies task_id with
       | Ok rows -> rows | Error _ -> []
