@@ -859,8 +859,6 @@ let last_high_priority_entered_at = ref 0.0
 let last_high_priority_exited_at = ref 0.0
 let prefetch_notify_count = ref 0
 let last_prefetch_notify_at = ref 0.0
-let last_prefetch_notify_ok = ref true
-let last_prefetch_notify_error = ref ""
 let daemon_loop_count = ref 0
 let daemon_last_loop_started_at = ref 0.0
 let daemon_last_loop_finished_at = ref 0.0
@@ -3999,8 +3997,6 @@ let handler ~client ~sw ~clock _socket request body =
           ; ("prefetch_notify", `Assoc
               [ ("count", `Int !prefetch_notify_count)
               ; ("last_age_s", debug_json_age !last_prefetch_notify_at)
-              ; ("last_ok", `Bool !last_prefetch_notify_ok)
-              ; ("last_error", debug_json_string_opt !last_prefetch_notify_error)
               ])
           ; ("daemon", `Assoc
               [ ("loop_count", `Int !daemon_loop_count)
@@ -4412,7 +4408,7 @@ let handler ~client ~sw ~clock _socket request body =
 
   | `POST, "/ingest/clear_done" ->
       (match Rag_lib.Pg.clear_finished_ingests () with
-      | Ok () ->
+      | Ok _ ->
           Cohttp_eio.Server.respond_string ~status:`OK
             ~body:{|{"ok":true}|} ~headers:json_headers ()
       | Error e ->
@@ -7698,22 +7694,20 @@ let () =
    | Ok 0 -> ()
    | Ok n -> Printf.printf "[startup] purged %d orphaned task_email rows (email no longer in DB)\n%!" n
    | Error e -> Printf.eprintf "[startup] purge_orphaned_task_emails error: %s\n%!" e);
+  (* Purge stale finished ingest queue entries — successful ingests are deleted immediately now. *)
+  (match Rag_lib.Pg.clear_finished_ingests () with
+   | Ok 0 -> ()
+   | Ok n -> Printf.printf "[startup] purged %d finished ingest queue row(s)\n%!" n
+   | Error e -> Printf.eprintf "[startup] clear_finished_ingests error: %s\n%!" e);
   (* --- Background task context prefetch daemon --- *)
-  let prefetch_wake = Eio.Stream.create 10 in
+  let prefetch_wake_pending = Atomic.make false in
   notify_prefetch := (fun () ->
     incr prefetch_notify_count;
     last_prefetch_notify_at := debug_now ();
-    last_prefetch_notify_ok := true;
-    last_prefetch_notify_error := "";
-    try
-      Eio.Stream.add prefetch_wake ();
-      Printf.printf "[prefetch.notify] count=%d high_priority=%d ingest_paused=%b tasks_paused=%b\n%!"
-        !prefetch_notify_count (Atomic.get high_priority_count)
-        (Atomic.get ingest_paused) (Atomic.get tasks_paused)
-    with e ->
-      last_prefetch_notify_ok := false;
-      last_prefetch_notify_error := Printexc.to_string e;
-      Printf.eprintf "[prefetch.notify] add failed: %s\n%!" !last_prefetch_notify_error);
+    Atomic.set prefetch_wake_pending true;
+    Printf.printf "[prefetch.notify] count=%d high_priority=%d ingest_paused=%b tasks_paused=%b\n%!"
+      !prefetch_notify_count (Atomic.get high_priority_count)
+      (Atomic.get ingest_paused) (Atomic.get tasks_paused));
   (* Phase 0: triage — run propose_tasks + process_task_proposals for queued emails *)
   let triage_one_email ~client ~sw (doc_id : string) (body_text : string) (compressed_body : string) : unit =
     Printf.printf "[daemon.triage] processing doc_id=%s\n%!" doc_id;
@@ -8195,18 +8189,12 @@ let () =
   in
   Eio.Fiber.fork_daemon ~sw (fun () ->
     Printf.printf "[prefetch] background daemon started\n%!";
-    let rec drain_prefetch_wake () =
-      try
-        ignore (Eio.Stream.take_nonblocking prefetch_wake);
-        drain_prefetch_wake ()
-      with _ -> ()
-    in
     let rec loop () =
       incr daemon_loop_count;
       daemon_last_loop_started_at := debug_now ();
       daemon_current_phase := "poll";
       daemon_current_phase_started_at := !daemon_last_loop_started_at;
-      drain_prefetch_wake ();
+      if Atomic.get prefetch_wake_pending then Atomic.set prefetch_wake_pending false;
       let did_work = ref false in
       let ingest_claimed = ref false in
       let ingest_pending_after = ref false in
@@ -8248,24 +8236,23 @@ let () =
                 let error_msg = Printf.sprintf "HTTP %d: %s" code resp_body in
                 if is_retryable_ingest_error error_msg then begin
                   daemon_last_ingest_result := Printf.sprintf "retry_http_%d" code;
-                  ignore (Rag_lib.Pg.requeue_ingest doc_id error_msg);
-                  !notify_prefetch ()
+                  ignore (Rag_lib.Pg.requeue_ingest doc_id error_msg)
                 end else begin
                   daemon_last_ingest_result := Printf.sprintf "dropped_http_%d" code;
                   ignore (Rag_lib.Pg.delete_ingest_entry doc_id)
                 end
               end
-            with e ->
-              let msg = Printexc.to_string e in
-              Printf.eprintf "[daemon.ingest] error for %s: %s\n%!" doc_id msg;
-              if is_retryable_ingest_error msg then begin
-                daemon_last_ingest_result := "retry_exception";
-                ignore (Rag_lib.Pg.requeue_ingest doc_id msg);
-                !notify_prefetch ()
-              end else begin
-                daemon_last_ingest_result := "dropped_exception";
-                ignore (Rag_lib.Pg.delete_ingest_entry doc_id)
-              end)
+            with
+            | e ->
+                let msg = Printexc.to_string e in
+                Printf.eprintf "[daemon.ingest] error for %s: %s\n%!" doc_id msg;
+                if is_retryable_ingest_error msg then begin
+                  daemon_last_ingest_result := "retry_exception";
+                  ignore (Rag_lib.Pg.requeue_ingest doc_id msg)
+                end else begin
+                  daemon_last_ingest_result := "dropped_exception";
+                  ignore (Rag_lib.Pg.delete_ingest_entry doc_id)
+                end)
           end;
           daemon_last_ingest_finished_at := debug_now ();
           daemon_current_ingest_doc_id := "";
@@ -8361,11 +8348,10 @@ let () =
         daemon_last_sleep_seconds := 0.0;
         loop ()
       end else begin
-        daemon_last_sleep_seconds := 0.0;
+        daemon_last_sleep_seconds := 0.1;
         daemon_current_phase := "wait";
         daemon_current_phase_started_at := debug_now ();
-        drain_prefetch_wake ();
-        ignore (Eio.Stream.take prefetch_wake);
+        Eio.Time.sleep env#clock 0.1;
         loop ()
       end
     in

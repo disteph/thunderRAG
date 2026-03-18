@@ -1893,12 +1893,16 @@ let ingest_queue_pending_count () : (int, string) result =
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
     C.find req ())
 
-(* Clean up finished entries (done/error) older than a threshold *)
-let clear_finished_ingests () : (unit, string) result =
-  let sql = "DELETE FROM ingest_queue WHERE status IN ('done', 'error')" in
-  let req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true sql in
+(* Clean up finished entries (done/error). Returns the number removed. *)
+let clear_finished_ingests () : (int, string) result =
+  let sql = {|DELETE FROM ingest_queue
+    WHERE status IN ('done', 'error')
+    RETURNING doc_id|} in
+  let req = Caqti_request.Infix.(Caqti_type.unit ->* Caqti_type.string) ~oneshot:true sql in
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
-    C.exec req ())
+    match C.collect_list req () with
+    | Error _ as e -> e
+    | Ok rows -> Ok (List.length rows))
 
 (* --- Triage queue --- *)
 
