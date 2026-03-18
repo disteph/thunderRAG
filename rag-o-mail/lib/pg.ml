@@ -632,6 +632,25 @@ let delete_pending_processed (doc_id : string) : (bool, string) result =
 let consume_pending_processed (doc_id : string) : (bool, string) result =
   delete_pending_processed doc_id
 
+let dequeue_pending_processed_ready () : (string option, string) result =
+  let sql = {|
+    WITH next AS (
+      SELECT pp.doc_id
+      FROM pending_processed pp
+      INNER JOIN emails e ON e.doc_id = pp.doc_id
+      ORDER BY pp.created_at ASC
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+    )
+    DELETE FROM pending_processed pp
+    USING next
+    WHERE pp.doc_id = next.doc_id
+    RETURNING pp.doc_id
+  |} in
+  let req = Caqti_request.Infix.(Caqti_type.unit ->? Caqti_type.string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    C.find_opt req ())
+
 (* ---------- kNN retrieval ---------- *)
 
 let row_to_source_json
@@ -1988,6 +2007,16 @@ let triage_queue_status ()
   let req = Caqti_request.Infix.(unit ->! t3 int int int) ~oneshot:true sql in
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
     C.find req ())
+
+let clear_failed_triage () : (int, string) result =
+  let sql = {|DELETE FROM triage_queue
+    WHERE status = 'error'
+    RETURNING doc_id|} in
+  let req = Caqti_request.Infix.(Caqti_type.unit ->* Caqti_type.string) ~oneshot:true sql in
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    match C.collect_list req () with
+    | Error _ as e -> e
+    | Ok rows -> Ok (List.length rows))
 
 (* Database statistics: row count + total size per table, plus overall total size *)
 

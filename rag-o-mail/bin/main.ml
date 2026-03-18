@@ -5805,6 +5805,7 @@ let handler ~client ~sw ~clock _socket request body =
             (match Rag_lib.Pg.enqueue_pending_processed id with
             | Ok () ->
                 Printf.printf "[admin.mark_processed] queued pending processed mark for %s\n%!" id;
+                !notify_prefetch ();
                 Cohttp_eio.Server.respond_string ~status:`OK
                   ~body:(Yojson.Safe.to_string
                     (`Assoc
@@ -7699,6 +7700,11 @@ let () =
    | Ok 0 -> ()
    | Ok n -> Printf.printf "[startup] purged %d finished ingest queue row(s)\n%!" n
    | Error e -> Printf.eprintf "[startup] clear_finished_ingests error: %s\n%!" e);
+  (* Purge terminal triage error rows so failed triage attempts do not remain forever. *)
+  (match Rag_lib.Pg.clear_failed_triage () with
+   | Ok 0 -> ()
+   | Ok n -> Printf.printf "[startup] purged %d errored triage queue row(s)\n%!" n
+   | Error e -> Printf.eprintf "[startup] clear_failed_triage error: %s\n%!" e);
   (* --- Background task context prefetch daemon --- *)
   let prefetch_wake_pending = Atomic.make false in
   notify_prefetch := (fun () ->
@@ -8284,64 +8290,96 @@ let () =
               Printf.eprintf "[prefetch] deferring — high-priority request active but ingest count failed: %s\n%!" e
         end
       else begin
-        (* Phase 0: triage — propose tasks for queued emails *)
-        (match Rag_lib.Pg.dequeue_triage ~stale_after_seconds:daemon_triage_stale_claim_seconds () with
-        | Ok (Some (doc_id, body_text, compressed_body)) ->
+        (* Phase -0.5: apply pending processed marks for already-ingested emails *)
+        (match Rag_lib.Pg.dequeue_pending_processed_ready () with
+        | Ok (Some doc_id) ->
             did_work := true;
-            daemon_current_phase := "triage";
+            daemon_current_phase := "pending_processed";
             daemon_current_phase_started_at := debug_now ();
-            daemon_current_triage_doc_id := doc_id;
-            daemon_current_triage_started_at := !daemon_current_phase_started_at;
-            daemon_current_triage_stage := "start";
-            daemon_current_triage_stage_started_at := !daemon_current_phase_started_at;
-            daemon_last_triage_doc_id := doc_id;
-            daemon_last_triage_started_at := !daemon_current_phase_started_at;
-            daemon_last_triage_result := "running";
-            (try
-              Eio.Time.with_timeout_exn env#clock daemon_triage_timeout_seconds (fun () ->
-                triage_one_email ~client ~sw doc_id body_text compressed_body);
-              daemon_last_triage_result := "ok"
-            with
-            | Eio.Time.Timeout ->
-                daemon_last_triage_result := "timeout";
-                Printf.eprintf "[daemon.triage] timeout for %s at stage=%s after %.0fs\n%!"
-                  doc_id !daemon_current_triage_stage daemon_triage_timeout_seconds;
-                ignore (Rag_lib.Pg.fail_triage doc_id
-                  (Printf.sprintf "triage timeout at stage=%s after %.0fs"
-                    !daemon_current_triage_stage daemon_triage_timeout_seconds))
-            | e ->
-                daemon_last_triage_result := "exception";
-                Printf.eprintf "[daemon.triage] error for %s: %s\n%!" doc_id (Printexc.to_string e);
-                ignore (Rag_lib.Pg.fail_triage doc_id (Printexc.to_string e)));
-            daemon_last_triage_finished_at := debug_now ();
-            daemon_last_triage_stage := !daemon_current_triage_stage;
-            daemon_current_triage_doc_id := "";
-            daemon_current_triage_started_at := 0.0;
-            daemon_current_triage_stage := "idle";
-            daemon_current_triage_stage_started_at := 0.0
-        | _ -> ());
-        (* Phase 1: kNN + selection for tasks needing prefetch *)
-        (if Atomic.get high_priority_count = 0 then
-          match Rag_lib.Pg.tasks_needing_prefetch ~limit:1 () with
-          | Ok ((task_id, title) :: _) ->
+            Printf.printf "[daemon.pending_processed] applying queued processed mark for %s\n%!" doc_id;
+            (match Rag_lib.Pg.set_processed doc_id true with
+            | Ok true ->
+                ignore (Rag_lib.Pg.delete_fyi doc_id);
+                (match Rag_lib.Pg.auto_complete_tasks_for_email doc_id with
+                | Ok completed ->
+                    List.iter (fun tid ->
+                      Printf.printf "[daemon.pending_processed] auto-completed task %s (all triggers processed)\n%!" tid
+                    ) completed
+                | Error e ->
+                    Printf.eprintf "[daemon.pending_processed] auto-complete check error: %s\n%!" e)
+            | Ok false ->
+                Printf.eprintf "[daemon.pending_processed] email %s disappeared before processed mark could be applied\n%!" doc_id;
+                ignore (Rag_lib.Pg.enqueue_pending_processed doc_id)
+            | Error e ->
+                Printf.eprintf "[daemon.pending_processed] set_processed error for %s: %s\n%!" doc_id e;
+                ignore (Rag_lib.Pg.enqueue_pending_processed doc_id))
+        | Ok None -> ()
+        | Error e ->
+            daemon_current_phase := "pending_processed_error";
+            daemon_current_phase_started_at := debug_now ();
+            Printf.eprintf "[daemon.pending_processed] dequeue error: %s\n%!" e);
+        if !did_work then ()
+        else if Atomic.get tasks_paused then ()
+        else begin
+          (* Phase 0: triage — propose tasks for queued emails *)
+          (match Rag_lib.Pg.dequeue_triage ~stale_after_seconds:daemon_triage_stale_claim_seconds () with
+          | Ok (Some (doc_id, body_text, compressed_body)) ->
               did_work := true;
-              daemon_current_phase := "prefetch";
+              daemon_current_phase := "triage";
               daemon_current_phase_started_at := debug_now ();
-              (try prefetch_one_task ~client ~sw task_id title
-              with e ->
-                Printf.eprintf "[prefetch] error processing %s: %s\n%!" task_id (Printexc.to_string e))
+              daemon_current_triage_doc_id := doc_id;
+              daemon_current_triage_started_at := !daemon_current_phase_started_at;
+              daemon_current_triage_stage := "start";
+              daemon_current_triage_stage_started_at := !daemon_current_phase_started_at;
+              daemon_last_triage_doc_id := doc_id;
+              daemon_last_triage_started_at := !daemon_current_phase_started_at;
+              daemon_last_triage_result := "running";
+              (try
+                Eio.Time.with_timeout_exn env#clock daemon_triage_timeout_seconds (fun () ->
+                  triage_one_email ~client ~sw doc_id body_text compressed_body);
+                daemon_last_triage_result := "ok"
+              with
+              | Eio.Time.Timeout ->
+                  daemon_last_triage_result := "timeout";
+                  Printf.eprintf "[daemon.triage] timeout for %s at stage=%s after %.0fs\n%!"
+                    doc_id !daemon_current_triage_stage daemon_triage_timeout_seconds;
+                  ignore (Rag_lib.Pg.fail_triage doc_id
+                    (Printf.sprintf "triage timeout at stage=%s after %.0fs"
+                      !daemon_current_triage_stage daemon_triage_timeout_seconds))
+              | e ->
+                  daemon_last_triage_result := "exception";
+                  Printf.eprintf "[daemon.triage] error for %s: %s\n%!" doc_id (Printexc.to_string e);
+                  ignore (Rag_lib.Pg.fail_triage doc_id (Printexc.to_string e)));
+              daemon_last_triage_finished_at := debug_now ();
+              daemon_last_triage_stage := !daemon_current_triage_stage;
+              daemon_current_triage_doc_id := "";
+              daemon_current_triage_started_at := 0.0;
+              daemon_current_triage_stage := "idle";
+              daemon_current_triage_stage_started_at := 0.0
           | _ -> ());
-        (* Phase 2: generate first message for tasks with all evidence *)
-        (if Atomic.get high_priority_count = 0 then
-          match Rag_lib.Pg.tasks_ready_for_generation ~limit:1 () with
-          | Ok ((task_id, title) :: _) ->
-              did_work := true;
-              daemon_current_phase := "generate";
-              daemon_current_phase_started_at := debug_now ();
-              (try generate_first_message ~client ~sw task_id title
-              with e ->
-                Printf.eprintf "[prefetch.gen] error for %s: %s\n%!" task_id (Printexc.to_string e))
-          | _ -> ())
+          (* Phase 1: kNN + selection for tasks needing prefetch *)
+          (if Atomic.get high_priority_count = 0 then
+            match Rag_lib.Pg.tasks_needing_prefetch ~limit:1 () with
+            | Ok ((task_id, title) :: _) ->
+                did_work := true;
+                daemon_current_phase := "prefetch";
+                daemon_current_phase_started_at := debug_now ();
+                (try prefetch_one_task ~client ~sw task_id title
+                with e ->
+                  Printf.eprintf "[prefetch] error processing %s: %s\n%!" task_id (Printexc.to_string e))
+            | _ -> ());
+          (* Phase 2: generate first message for tasks with all evidence *)
+          (if Atomic.get high_priority_count = 0 then
+            match Rag_lib.Pg.tasks_ready_for_generation ~limit:1 () with
+            | Ok ((task_id, title) :: _) ->
+                did_work := true;
+                daemon_current_phase := "generate";
+                daemon_current_phase_started_at := debug_now ();
+                (try generate_first_message ~client ~sw task_id title
+                with e ->
+                  Printf.eprintf "[prefetch.gen] error for %s: %s\n%!" task_id (Printexc.to_string e))
+            | _ -> ())
+        end
       end;
       daemon_last_loop_finished_at := debug_now ();
       if !did_work then begin
