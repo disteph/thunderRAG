@@ -76,6 +76,7 @@ const consoleService = Cc["@mozilla.org/consoleservice;1"].getService(Ci.nsICons
 const windowMediator = Cc["@mozilla.org/appshell/window-mediator;1"].getService(
   Ci.nsIWindowMediator
 );
+const dirService = Cc["@mozilla.org/file/directory_service;1"].getService(Ci.nsIProperties);
 
 const BUILD_TAG = "ragFilterAction-parent-2026-02-02-01";
 try {
@@ -88,6 +89,7 @@ const ADDON_ID = "rag-filter-action@example.com";
 
 /* Unique ID for the custom filter action registered with MailServices.filters. */
 const ACTION_ID = "rag-filter-action@example.com#PostMessageToEndpoint";
+const ACTION_SAVE_ATTACHMENTS_ID = "rag-filter-action@example.com#SaveAttachmentsToPath";
 
 /* Observer that patches newly-opened FilterEditor windows (see patchFilterEditorWindow). */
 let filterEditorObserver = null;
@@ -1026,7 +1028,7 @@ function patchFilterEditorWindow(win) {
     if (!Wrapper.prototype.__ragFilterActionPatched) {
       const originalGetChildNode = Wrapper.prototype._getChildNode;
       Wrapper.prototype._getChildNode = function (type) {
-        if (type === ACTION_ID) {
+        if (type === ACTION_ID || type === ACTION_SAVE_ATTACHMENTS_ID) {
           return win.document.createXULElement("ruleactiontarget-forwardto");
         }
         return originalGetChildNode.call(this, type);
@@ -1036,7 +1038,7 @@ function patchFilterEditorWindow(win) {
 
     for (const wrapper of win.document.querySelectorAll("ruleactiontarget-wrapper")) {
       const type = wrapper.getAttribute("type");
-      if (type === ACTION_ID) {
+      if (type === ACTION_ID || type === ACTION_SAVE_ATTACHMENTS_ID) {
         wrapper.removeAttribute("type");
         wrapper.setAttribute("type", type);
       }
@@ -1141,9 +1143,9 @@ function stopFilterEditorObserver() {
 }
 
 /* Check whether our custom action is already registered with MailServices.filters. */
-function hasCustomAction(filterService) {
+function hasCustomAction(filterService, actionId) {
   try {
-    let existing = filterService.getCustomAction(ACTION_ID);
+    let existing = filterService.getCustomAction(actionId);
     return !!existing;
   } catch (e) {
     // Fall through.
@@ -1151,7 +1153,7 @@ function hasCustomAction(filterService) {
 
   try {
     let actions = filterService.getCustomActions();
-    return actions.some(a => a && a.id === ACTION_ID);
+    return actions.some(a => a && a.id === actionId);
   } catch (e) {
     return false;
   }
@@ -1185,6 +1187,155 @@ function parseAndValidateUrl(actionValue) {
   }
 
   return { ok: true, url: url.spec };
+}
+
+function parseAndValidatePathTemplate(actionValue) {
+  if (!actionValue || !actionValue.trim()) {
+    return { ok: false, error: "Path template must not be empty." };
+  }
+
+  const trimmed = actionValue.trim();
+  const allowed = new Set(["account", "yyyy", "mm", "dd", "hours", "minutes", "subject", "from"]);
+  const matches = trimmed.match(/{{\s*([^{}]+?)\s*}}/g) || [];
+  for (const match of matches) {
+    const inner = match.replace(/^{{\s*/, "").replace(/\s*}}$/, "").trim();
+    if (!allowed.has(inner)) {
+      return { ok: false, error: `Unsupported template variable: {{${inner}}}` };
+    }
+  }
+
+  const absoluteLike = /^\//.test(trimmed) || /^~\//.test(trimmed) || /^[A-Za-z]:[\\/]/.test(trimmed);
+  if (!absoluteLike) {
+    return { ok: false, error: "Path template must be absolute or start with ~/." };
+  }
+
+  return { ok: true, template: trimmed };
+}
+
+function zeroPad2(n) {
+  return String(Math.max(0, n)).padStart(2, "0");
+}
+
+function homeDirPath() {
+  return dirService.get("Home", Ci.nsIFile).path;
+}
+
+function expandHomePath(path) {
+  if (path === "~") {
+    return homeDirPath();
+  }
+  if (path.startsWith("~/")) {
+    return homeDirPath() + path.slice(1);
+  }
+  return path;
+}
+
+function sanitizePathComponent(value, fallback = "unknown") {
+  let s = String(value || "").trim();
+  s = s.replace(/[\x00-\x1F\x7F]/g, " ");
+  s = s.replace(/[\\/:*?"<>|]/g, "_");
+  s = s.replace(/\s+/g, " ").trim();
+  s = s.replace(/^\.+$/, "");
+  if (!s) {
+    s = fallback;
+  }
+  if (s.length > 120) {
+    s = s.slice(0, 120).trim();
+  }
+  return s || fallback;
+}
+
+function renderAttachmentPathTemplate(template, msgHdr) {
+  const dateValue = Number(msgHdr?.date || 0);
+  const dt = dateValue > 0 ? new Date(Math.floor(dateValue / 1000)) : new Date();
+  const account = sanitizePathComponent(
+    msgHdr?.folder?.server?.prettyName || msgHdr?.folder?.prettyName || "account",
+    "account"
+  );
+  const subject = sanitizePathComponent(
+    msgHdr?.mime2DecodedSubject || msgHdr?.subject || "no-subject",
+    "no-subject"
+  );
+  const from = sanitizePathComponent(
+    msgHdr?.mime2DecodedAuthor || msgHdr?.author || "unknown-from",
+    "unknown-from"
+  );
+  const vars = {
+    account,
+    yyyy: String(dt.getFullYear()),
+    mm: zeroPad2(dt.getMonth() + 1),
+    dd: zeroPad2(dt.getDate()),
+    hours: zeroPad2(dt.getHours()),
+    minutes: zeroPad2(dt.getMinutes()),
+    subject,
+    from,
+  };
+  const rendered = template.replace(/{{\s*(account|yyyy|mm|dd|hours|minutes|subject|from)\s*}}/g, (_m, key) => vars[key] || "");
+  return expandHomePath(rendered);
+}
+
+function nsFileFromPath(path) {
+  const file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
+  file.initWithPath(path);
+  return file;
+}
+
+function ensureDirectoryExists(dir) {
+  if (dir.exists()) {
+    if (!dir.isDirectory()) {
+      throw new Error(`Path exists but is not a directory: ${dir.path}`);
+    }
+    return;
+  }
+  const parent = dir.parent;
+  if (parent && !parent.exists()) {
+    ensureDirectoryExists(parent);
+  }
+  dir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o755);
+}
+
+function splitFilename(filename) {
+  const idx = filename.lastIndexOf(".");
+  if (idx <= 0) {
+    return { base: filename, ext: "" };
+  }
+  return { base: filename.slice(0, idx), ext: filename.slice(idx) };
+}
+
+function uniqueDestinationFile(dir, filename) {
+  const first = dir.clone();
+  first.append(filename);
+  if (!first.exists()) {
+    return first;
+  }
+  const parts = splitFilename(filename);
+  for (let i = 1; i < 10000; i++) {
+    const candidate = dir.clone();
+    candidate.append(`${parts.base} (${i})${parts.ext}`);
+    if (!candidate.exists()) {
+      return candidate;
+    }
+  }
+  throw new Error(`Could not allocate unique filename for ${filename}`);
+}
+
+function writeBytesToFile(file, bytes) {
+  const fos = Cc["@mozilla.org/network/file-output-stream;1"].createInstance(Ci.nsIFileOutputStream);
+  const bos = Cc["@mozilla.org/binaryoutputstream;1"].createInstance(Ci.nsIBinaryOutputStream);
+  try {
+    fos.init(file, 0x02 | 0x08 | 0x20, 0o644, 0);
+    bos.setOutputStream(fos);
+    bos.writeByteArray(Array.from(bytes), bytes.length);
+  } finally {
+    try {
+      bos.close();
+    } catch (_e) {
+      try {
+        fos.close();
+      } catch (_e2) {
+      }
+    }
+  }
 }
 
 /* Stream a message's raw bytes via XPCOM nsIMsgMessageService.streamMessage.
@@ -1420,6 +1571,76 @@ function safeFinishCopy(copyListener) {
   }
 }
 
+async function resolveMessageIdFromHdr(msgHdr) {
+  const api = getWebextApi();
+  if (!api) {
+    return null;
+  }
+  const headerMessageId = (msgHdr?.messageId || "").trim();
+  if (!headerMessageId) {
+    return null;
+  }
+  try {
+    const result = await api.messages.query({ headerMessageId });
+    const messageId = result?.messages?.[0]?.id || null;
+    if (messageId) {
+      return messageId;
+    }
+  } catch (_e) {
+  }
+  if (headerMessageId.startsWith("<") && headerMessageId.endsWith(">")) {
+    try {
+      const result = await api.messages.query({ headerMessageId: headerMessageId.slice(1, -1) });
+      return result?.messages?.[0]?.id || null;
+    } catch (_e) {
+      return null;
+    }
+  }
+  return null;
+}
+
+async function saveAttachmentsForMessage(msgHdr, template) {
+  const api = getWebextApi();
+  if (!api) {
+    throw new Error("WebExtension API scope unavailable.");
+  }
+  const messageId = await resolveMessageIdFromHdr(msgHdr);
+  if (!messageId) {
+    throw new Error(`Could not resolve messageId for ${msgHdr?.messageId || ""}`);
+  }
+  const attachments = await api.messages.listAttachments(messageId);
+  if (!attachments || !attachments.length) {
+    return { saved: 0, directory: null };
+  }
+  const directoryPath = renderAttachmentPathTemplate(template, msgHdr);
+  const directory = nsFileFromPath(directoryPath);
+  ensureDirectoryExists(directory);
+  let saved = 0;
+  let index = 0;
+  for (const attachment of attachments) {
+    index++;
+    const partName = attachment?.partName;
+    if (!partName) {
+      continue;
+    }
+    const file = await api.messages.getAttachmentFile(messageId, partName);
+    if (!file || typeof file.arrayBuffer !== "function") {
+      continue;
+    }
+    const buf = await file.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    const rawName = attachment?.name || file.name || `attachment-${index}`;
+    const safeName = sanitizePathComponent(rawName, `attachment-${index}`);
+    const destination = uniqueDestinationFile(directory, safeName);
+    writeBytesToFile(destination, bytes);
+    saved++;
+    consoleService.logStringMessage(
+      `[ragFilterAction] saveAttachments: saved ${destination.path} bytes=${bytes.length} messageId=${msgHdr?.messageId || ""}`
+    );
+  }
+  return { saved, directory: directory.path };
+}
+
 /* Attempt to get decrypted message bytes via the WebExtension messages.getRaw API
    with {decrypt:true}.  Validates that the result is actually decrypted (not still
    PGP/S/MIME wrapper) and falls back to getFull() for S/MIME envelope-only cases.
@@ -1430,27 +1651,7 @@ async function fetchDecryptedMessageBytes(msgHdr) {
     return null;
   }
 
-  const headerMessageId = (msgHdr.messageId || "").trim();
-  if (!headerMessageId) {
-    return null;
-  }
-
-  // Resolve nsIMsgDBHdr -> MailExtension numeric messageId.
-  let messageId = null;
-  try {
-    const result = await api.messages.query({ headerMessageId });
-    messageId = result?.messages?.[0]?.id || null;
-  } catch (_e) {
-    messageId = null;
-  }
-  if (!messageId && headerMessageId.startsWith("<") && headerMessageId.endsWith(">")) {
-    try {
-      const result = await api.messages.query({ headerMessageId: headerMessageId.slice(1, -1) });
-      messageId = result?.messages?.[0]?.id || null;
-    } catch (_e) {
-      messageId = null;
-    }
-  }
+  let messageId = await resolveMessageIdFromHdr(msgHdr);
   if (!messageId) {
     return null;
   }
@@ -1780,6 +1981,81 @@ function makeCustomAction() {
   };
 }
 
+function makeSaveAttachmentsAction() {
+  return {
+    id: ACTION_SAVE_ATTACHMENTS_ID,
+
+    get name() {
+      return "ThunderRAG: Save attachments";
+    },
+
+    isValidForType(type, scope) {
+      return true;
+    },
+
+    validateActionValue(actionValue, actionFolder, filterType) {
+      let result = parseAndValidatePathTemplate(actionValue);
+      if (!result.ok) {
+        return result.error;
+      }
+      return null;
+    },
+
+    allowDuplicates: true,
+
+    applyAction(msgHdrs, actionValue, copyListener, filterType, msgWindow) {
+      (async () => {
+        try {
+          let parsed = parseAndValidatePathTemplate(actionValue);
+          if (!parsed.ok) {
+            throw new Error(parsed.error);
+          }
+
+          try {
+            if (!getWebextApi()) {
+              try {
+                if (savedApiContext) {
+                  await maybeAcquireWebextScope(savedApiContext);
+                }
+              } catch (_e) {
+              }
+              maybeAcquireWebextScopeFromGlobalManager();
+            }
+          } catch (_e) {
+          }
+
+          for (let msgHdr of msgHdrs) {
+            try {
+              const result = await saveAttachmentsForMessage(msgHdr, parsed.template);
+              consoleService.logStringMessage(
+                `[ragFilterAction] saveAttachments: saved=${result.saved} directory=${result.directory || ""} messageId=${msgHdr?.messageId || ""}`
+              );
+            } catch (e) {
+              consoleService.logStringMessage(
+                `[ragFilterAction] saveAttachments: failed for messageId=${msgHdr?.messageId || ""}: ${e}`
+              );
+            }
+          }
+        } catch (e) {
+          console.error(e);
+        } finally {
+          safeFinishCopy(copyListener);
+        }
+      })();
+    },
+
+    get isAsync() {
+      return true;
+    },
+
+    get needsBody() {
+      return false;
+    },
+
+    QueryInterface: ChromeUtils.generateQI(["nsIMsgFilterCustomAction"]),
+  };
+}
+
 /*
   ensureRegistered adds the custom filter action to MailServices.filters if it is not
   already present, then starts the FilterEditor observer so the UI shows the endpoint
@@ -1788,7 +2064,7 @@ function makeCustomAction() {
 */
 function ensureRegistered(logPrefix) {
   let filterService = MailServices.filters;
-  if (!hasCustomAction(filterService)) {
+  if (!hasCustomAction(filterService, ACTION_ID)) {
     try {
       filterService.addCustomAction(makeCustomAction());
       consoleService.logStringMessage(`[ragFilterAction] ${logPrefix}: custom action registered`);
@@ -1797,6 +2073,17 @@ function ensureRegistered(logPrefix) {
     }
   } else {
     consoleService.logStringMessage(`[ragFilterAction] ${logPrefix}: custom action already registered`);
+  }
+
+  if (!hasCustomAction(filterService, ACTION_SAVE_ATTACHMENTS_ID)) {
+    try {
+      filterService.addCustomAction(makeSaveAttachmentsAction());
+      consoleService.logStringMessage(`[ragFilterAction] ${logPrefix}: save-attachments action registered`);
+    } catch (e) {
+      consoleService.logStringMessage(`[ragFilterAction] ${logPrefix}: addCustomAction(save-attachments) failed: ${e}`);
+    }
+  } else {
+    consoleService.logStringMessage(`[ragFilterAction] ${logPrefix}: save-attachments action already registered`);
   }
 
   try {
