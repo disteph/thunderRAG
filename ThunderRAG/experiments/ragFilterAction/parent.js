@@ -59,6 +59,15 @@ try {
   MsgHdrToMimeMessage = null;
 }
 
+var AttachmentInfo;
+try {
+  ({ AttachmentInfo } = ChromeUtils.importESModule(
+    "resource:///modules/AttachmentInfo.sys.mjs"
+  ));
+} catch (_e) {
+  AttachmentInfo = null;
+}
+
 /* Ensure web-platform globals (fetch, Blob, etc.) are available in this privileged scope. */
 if (ChromeUtils.importGlobalProperties) {
   ChromeUtils.importGlobalProperties(["fetch", "Blob", "Headers", "TextDecoder", "TextEncoder"]);
@@ -147,6 +156,8 @@ function extractBodyFromMimeMessage(msg) {
 */
 let ingestQueue = [];
 let ingestQueueNextId = 1;
+let attachmentSaveQueue = [];
+let attachmentSaveQueueNextId = 1;
 
 /*
   Ingestion status cache for custom column display.
@@ -428,6 +439,138 @@ function registerIngestColumn() {
   }
 }
 
+async function getMimeMessageForHdr(msgHdr) {
+  if (!MsgHdrToMimeMessage) {
+    throw new Error("MsgHdrToMimeMessage not available");
+  }
+  return await new Promise((resolve) => {
+    try {
+      MsgHdrToMimeMessage(msgHdr, null, (_aMsgHdr, aMimeMsg) => {
+        resolve(aMimeMsg || null);
+      }, true, { examineEncryptedParts: true });
+    } catch (e) {
+      try {
+        consoleService.logStringMessage(`[ragFilterAction] saveAttachments: MsgHdrToMimeMessage threw: ${e}`);
+      } catch (_e) {
+      }
+      resolve(null);
+    }
+  });
+}
+
+function collectMimeAttachments(mimeMsg) {
+  if (!mimeMsg) {
+    return [];
+  }
+  if (Array.isArray(mimeMsg.allUserAttachments) && mimeMsg.allUserAttachments.length) {
+    return mimeMsg.allUserAttachments;
+  }
+  if (Array.isArray(mimeMsg.allAttachments) && mimeMsg.allAttachments.length) {
+    return mimeMsg.allAttachments;
+  }
+
+  const attachments = [];
+  const walk = (part) => {
+    if (!part) {
+      return;
+    }
+    const name = String(part.name || part.displayName || "").trim();
+    const disposition = String(part.contentDisposition || "").toLowerCase();
+    const url = String(part.url || "").trim();
+    if ((part.isRealAttachment || disposition.includes("attachment") || (name && url)) && url) {
+      attachments.push(part);
+    }
+    const parts = part.parts || part.subParts || [];
+    if (Array.isArray(parts)) {
+      for (const child of parts) {
+        walk(child);
+      }
+    }
+  };
+  walk(mimeMsg);
+  return attachments;
+}
+
+function saveNativeAttachmentToFile(attachment, destination, messageUri) {
+  return (async () => {
+    const url = String(attachment?.url || "").trim();
+    const attUri = String(attachment?.uri || messageUri || "").trim();
+    const contentType = String(attachment?.contentType || "application/octet-stream").trim() || "application/octet-stream";
+    const name = String(attachment?.name || attachment?.displayName || destination?.leafName || "attachment").trim() || "attachment";
+    if (!url) {
+      throw new Error("Attachment URL missing");
+    }
+    if (!AttachmentInfo) {
+      throw new Error("AttachmentInfo API unavailable");
+    }
+    const info = new AttachmentInfo({
+      contentType,
+      url,
+      name,
+      uri: attUri,
+      isExternalAttachment: false,
+      message: null,
+    });
+    await info.saveToFile(destination.path);
+  })();
+}
+
+function getMsgHdrForMessageId(messageId) {
+  try {
+    const ctx = savedApiContext;
+    const mgr = ctx?.extension?.messageManager;
+    if (mgr && typeof mgr.get === "function") {
+      return mgr.get(messageId) || null;
+    }
+  } catch (_e) {
+  }
+  return null;
+}
+
+async function saveAttachmentsFromMsgHdr(msgHdr, directoryPath, headerMessageId = "") {
+  if (!msgHdr) {
+    throw new Error(`No msgHdr for messageId=${headerMessageId || ""}`);
+  }
+  const mimeMsg = await getMimeMessageForHdr(msgHdr);
+  const attachments = collectMimeAttachments(mimeMsg);
+  if (!attachments.length) {
+    try {
+      consoleService.logStringMessage(
+        `[ragFilterAction] saveAttachments: no attachments found messageId=${headerMessageId || ""}`
+      );
+    } catch (_e) {
+    }
+    return { saved: 0, directory: null, attachments: 0 };
+  }
+
+  const directory = nsFileFromPath(directoryPath);
+  ensureDirectoryExists(directory);
+  const messageUri = msgHdr.folder?.getUriForMsg ? msgHdr.folder.getUriForMsg(msgHdr) : "";
+  let saved = 0;
+  let index = 0;
+  for (const attachment of attachments) {
+    index++;
+    const rawName = attachment?.name || attachment?.displayName || `attachment-${index}`;
+    const safeName = sanitizePathComponent(rawName, `attachment-${index}`);
+    const destination = uniqueDestinationFile(directory, safeName);
+    try {
+      await saveNativeAttachmentToFile(attachment, destination, messageUri);
+      saved++;
+      consoleService.logStringMessage(
+        `[ragFilterAction] saveAttachments: saved ${destination.path} messageId=${headerMessageId || ""}`
+      );
+    } catch (e) {
+      try {
+        consoleService.logStringMessage(
+          `[ragFilterAction] saveAttachments: native save failed name=${rawName} url=${attachment?.url || ""} messageId=${headerMessageId || ""}: ${e}`
+        );
+      } catch (_e) {
+      }
+    }
+  }
+  return { saved, directory: directory.path, attachments: attachments.length };
+}
+
 function enqueueIngest(headerMessageId, endpoint) {
   const item = {
     id: String(ingestQueueNextId++),
@@ -450,6 +593,29 @@ function dequeueIngest(itemId) {
   const before = ingestQueue.length;
   ingestQueue = ingestQueue.filter((it) => it.id !== itemId);
   return before !== ingestQueue.length;
+}
+
+function enqueueAttachmentSave(headerMessageId, directoryPath) {
+  const item = {
+    id: String(attachmentSaveQueueNextId++),
+    headerMessageId,
+    directoryPath,
+    timestamp: Date.now(),
+  };
+  attachmentSaveQueue.push(item);
+  try {
+    consoleService.logStringMessage(
+      `[ragFilterAction] enqueueAttachmentSave: queued id=${item.id} messageId=${headerMessageId} directory=${directoryPath} queueLength=${attachmentSaveQueue.length}`
+    );
+  } catch (_e) {
+  }
+  return item;
+}
+
+function dequeueAttachmentSave(itemId) {
+  const before = attachmentSaveQueue.length;
+  attachmentSaveQueue = attachmentSaveQueue.filter((it) => it.id !== itemId);
+  return before !== attachmentSaveQueue.length;
 }
 
 /*
@@ -1571,26 +1737,26 @@ function safeFinishCopy(copyListener) {
   }
 }
 
-async function resolveMessageIdFromHdr(msgHdr) {
-  const api = getWebextApi();
+async function resolveMessageIdFromHeaderMessageId(headerMessageId) {
+  const api = getWebextApi() || getBackgroundWebextApi();
   if (!api) {
     return null;
   }
-  const headerMessageId = (msgHdr?.messageId || "").trim();
-  if (!headerMessageId) {
+  const trimmed = String(headerMessageId || "").trim();
+  if (!trimmed) {
     return null;
   }
   try {
-    const result = await api.messages.query({ headerMessageId });
+    const result = await api.messages.query({ headerMessageId: trimmed });
     const messageId = result?.messages?.[0]?.id || null;
     if (messageId) {
       return messageId;
     }
   } catch (_e) {
   }
-  if (headerMessageId.startsWith("<") && headerMessageId.endsWith(">")) {
+  if (trimmed.startsWith("<") && trimmed.endsWith(">")) {
     try {
-      const result = await api.messages.query({ headerMessageId: headerMessageId.slice(1, -1) });
+      const result = await api.messages.query({ headerMessageId: trimmed.slice(1, -1) });
       return result?.messages?.[0]?.id || null;
     } catch (_e) {
       return null;
@@ -1599,46 +1765,13 @@ async function resolveMessageIdFromHdr(msgHdr) {
   return null;
 }
 
-async function saveAttachmentsForMessage(msgHdr, template) {
-  const api = getWebextApi();
-  if (!api) {
-    throw new Error("WebExtension API scope unavailable.");
-  }
-  const messageId = await resolveMessageIdFromHdr(msgHdr);
-  if (!messageId) {
-    throw new Error(`Could not resolve messageId for ${msgHdr?.messageId || ""}`);
-  }
-  const attachments = await api.messages.listAttachments(messageId);
-  if (!attachments || !attachments.length) {
-    return { saved: 0, directory: null };
-  }
-  const directoryPath = renderAttachmentPathTemplate(template, msgHdr);
-  const directory = nsFileFromPath(directoryPath);
-  ensureDirectoryExists(directory);
-  let saved = 0;
-  let index = 0;
-  for (const attachment of attachments) {
-    index++;
-    const partName = attachment?.partName;
-    if (!partName) {
-      continue;
-    }
-    const file = await api.messages.getAttachmentFile(messageId, partName);
-    if (!file || typeof file.arrayBuffer !== "function") {
-      continue;
-    }
-    const buf = await file.arrayBuffer();
-    const bytes = new Uint8Array(buf);
-    const rawName = attachment?.name || file.name || `attachment-${index}`;
-    const safeName = sanitizePathComponent(rawName, `attachment-${index}`);
-    const destination = uniqueDestinationFile(directory, safeName);
-    writeBytesToFile(destination, bytes);
-    saved++;
-    consoleService.logStringMessage(
-      `[ragFilterAction] saveAttachments: saved ${destination.path} bytes=${bytes.length} messageId=${msgHdr?.messageId || ""}`
-    );
-  }
-  return { saved, directory: directory.path };
+async function resolveMessageIdFromHdr(msgHdr) {
+  return await resolveMessageIdFromHeaderMessageId(msgHdr?.messageId || "");
+}
+
+async function saveAttachmentsByMessageId(messageId, directoryPath, headerMessageId = "") {
+  const msgHdr = getMsgHdrForMessageId(messageId);
+  return await saveAttachmentsFromMsgHdr(msgHdr, directoryPath, headerMessageId);
 }
 
 /* Attempt to get decrypted message bytes via the WebExtension messages.getRaw API
@@ -1646,7 +1779,7 @@ async function saveAttachmentsForMessage(msgHdr, template) {
    PGP/S/MIME wrapper) and falls back to getFull() for S/MIME envelope-only cases.
    Returns Uint8Array of usable RFC822 bytes, or null if decryption failed. */
 async function fetchDecryptedMessageBytes(msgHdr) {
-  const api = getWebextApi();
+  const api = getWebextApi() || getBackgroundWebextApi();
   if (!api) {
     return null;
   }
@@ -2011,24 +2144,16 @@ function makeSaveAttachmentsAction() {
             throw new Error(parsed.error);
           }
 
-          try {
-            if (!getWebextApi()) {
-              try {
-                if (savedApiContext) {
-                  await maybeAcquireWebextScope(savedApiContext);
-                }
-              } catch (_e) {
-              }
-              maybeAcquireWebextScopeFromGlobalManager();
-            }
-          } catch (_e) {
-          }
-
           for (let msgHdr of msgHdrs) {
             try {
-              const result = await saveAttachmentsForMessage(msgHdr, parsed.template);
+              const headerMessageId = (msgHdr?.messageId || "").trim();
+              if (!headerMessageId) {
+                throw new Error("Missing msgHdr.messageId");
+              }
+              const directoryPath = renderAttachmentPathTemplate(parsed.template, msgHdr);
+              const item = enqueueAttachmentSave(headerMessageId, directoryPath);
               consoleService.logStringMessage(
-                `[ragFilterAction] saveAttachments: saved=${result.saved} directory=${result.directory || ""} messageId=${msgHdr?.messageId || ""}`
+                `[ragFilterAction] saveAttachments: queued id=${item.id} directory=${directoryPath} messageId=${headerMessageId}`
               );
             } catch (e) {
               consoleService.logStringMessage(
@@ -2199,6 +2324,27 @@ var ragFilterAction = class extends ExtensionCommon.ExtensionAPI {
             // ignore
           }
           return removed;
+        },
+        getAttachmentSaveQueue: async () => {
+          return attachmentSaveQueue.map((it) => ({
+            id: it.id,
+            headerMessageId: it.headerMessageId,
+            directoryPath: it.directoryPath,
+            timestamp: it.timestamp,
+          }));
+        },
+        completeAttachmentSaveItem: async (itemId) => {
+          const removed = dequeueAttachmentSave(itemId);
+          try {
+            consoleService.logStringMessage(
+              `[ragFilterAction] completeAttachmentSaveItem: id=${itemId} removed=${removed} queueLength=${attachmentSaveQueue.length}`
+            );
+          } catch (_e) {
+          }
+          return removed;
+        },
+        saveAttachmentsByMessageId: async (messageId, directoryPath, headerMessageId) => {
+          return await saveAttachmentsByMessageId(messageId, directoryPath, headerMessageId || "");
         },
         getDecryptedBodyText: async (messageId) => {
           /*

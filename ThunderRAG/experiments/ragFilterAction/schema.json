@@ -38,6 +38,49 @@
         ]
       },
       {
+        "name": "getAttachmentSaveQueue",
+        "type": "function",
+        "description": "Return the current queue of messages awaiting background attachment saving. Each item has {id, headerMessageId, directoryPath, timestamp}.",
+        "async": true,
+        "parameters": []
+      },
+      {
+        "name": "completeAttachmentSaveItem",
+        "type": "function",
+        "description": "Remove a completed or failed attachment-save queue item by its id.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "itemId",
+            "type": "string",
+            "description": "The attachment-save queue item id to remove."
+          }
+        ]
+      },
+      {
+        "name": "saveAttachmentsByMessageId",
+        "type": "function",
+        "description": "Save attachments for an already-resolved Thunderbird numeric messageId into the given directory path. Returns {saved, directory, attachments}.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "messageId",
+            "type": "integer",
+            "description": "Internal Thunderbird numeric message ID."
+          },
+          {
+            "name": "directoryPath",
+            "type": "string",
+            "description": "Absolute output directory path where attachments should be saved."
+          },
+          {
+            "name": "headerMessageId",
+            "type": "string",
+            "description": "Optional RFC822 Message-Id header value used for logging."
+          }
+        ]
+      },
+      {
         "name": "updateIngestStatusCache",
         "type": "function",
         "description": "Push a JSON-encoded map of headerMessageId → boolean ingestion status to the experiment API's column handler cache.",

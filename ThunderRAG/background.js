@@ -358,6 +358,8 @@ browser.runtime.onMessage.addListener(async (msg) => {
 */
 let ingestQueueInterval = null;
 let ingestQueueProcessing = false;
+let attachmentSaveQueueInterval = null;
+let attachmentSaveQueueProcessing = false;
 
 /* Walk a messages.getFull() MIME tree and return the best readable body part,
    preferring text/plain over text/html.  Returns {kind, body} or null. */
@@ -596,6 +598,50 @@ async function processIngestQueue() {
   }
 }
 
+async function processAttachmentSaveQueue() {
+  if (attachmentSaveQueueProcessing) return;
+  if (!browser.ragFilterAction?.getAttachmentSaveQueue || !browser.ragFilterAction?.saveAttachmentsByMessageId) {
+    return;
+  }
+
+  attachmentSaveQueueProcessing = true;
+  try {
+    const queue = await browser.ragFilterAction.getAttachmentSaveQueue();
+    if (!queue || !queue.length) return;
+
+    console.log(`[ThunderRAG] attachmentSaveQueue: processing ${queue.length} item(s)`);
+
+    for (const item of queue) {
+      try {
+        const headerMessageId = (item.headerMessageId || "").trim();
+        const directoryPath = (item.directoryPath || "").trim();
+        if (!headerMessageId || !directoryPath) {
+          await browser.ragFilterAction.completeAttachmentSaveItem(item.id);
+          continue;
+        }
+
+        const messageId = await resolveHeaderMessageId(headerMessageId);
+        const result = await browser.ragFilterAction.saveAttachmentsByMessageId(messageId, directoryPath, headerMessageId);
+        console.log(
+          `[ThunderRAG] attachmentSaveQueue: saved=${result?.saved || 0} attachments=${result?.attachments || 0} directory=${result?.directory || ""} messageId=${headerMessageId}`
+        );
+      } catch (e) {
+        console.warn(`[ThunderRAG] attachmentSaveQueue: failed for ${item.headerMessageId}: ${e}`);
+      }
+      try {
+        await browser.ragFilterAction.completeAttachmentSaveItem(item.id);
+      } catch (_e) {
+      }
+    }
+  } catch (e) {
+    if (!String(e).includes("not a function")) {
+      console.warn(`[ThunderRAG] attachmentSaveQueue poll error: ${e}`);
+    }
+  } finally {
+    attachmentSaveQueueProcessing = false;
+  }
+}
+
 function startIngestQueuePoller() {
   if (ingestQueueInterval) return;
   // Poll every 5 seconds.  Lightweight when the queue is empty (single API call).
@@ -608,6 +654,19 @@ function stopIngestQueuePoller() {
   if (ingestQueueInterval) {
     clearInterval(ingestQueueInterval);
     ingestQueueInterval = null;
+  }
+}
+
+function startAttachmentSaveQueuePoller() {
+  if (attachmentSaveQueueInterval) return;
+  attachmentSaveQueueInterval = setInterval(processAttachmentSaveQueue, 5000);
+  setTimeout(processAttachmentSaveQueue, 2000);
+}
+
+function stopAttachmentSaveQueuePoller() {
+  if (attachmentSaveQueueInterval) {
+    clearInterval(attachmentSaveQueueInterval);
+    attachmentSaveQueueInterval = null;
   }
 }
 
@@ -1350,6 +1409,7 @@ browser.messages.onMoved.addListener((_originalMessages, movedMessages) => {
 
 startup().then(() => {
   startIngestQueuePoller();
+  startAttachmentSaveQueuePoller();
   startTaskEvidencePoller();
   startIngestStatusPoller();
 });
