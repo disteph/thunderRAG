@@ -305,14 +305,21 @@ let ollama_chat ~client ~sw ?(label = "") ?(stats : call_stats option) ?(model =
 
 (* Helper: create a JSON log entry for an LLM call.
    Used by the quality harness to inspect every prompt sent to every LLM. *)
-let make_llm_call_entry ~label ~model ~(messages : Yojson.Safe.t list)
+let make_llm_call_entry ~(prompt_key : string option) ~label ~model ~(messages : Yojson.Safe.t list)
     ~(response : string) : Yojson.Safe.t =
-  `Assoc
+  let fields =
     [ ("label", `String label)
     ; ("model", `String model)
     ; ("messages", `List messages)
     ; ("response", `String response)
     ]
+  in
+  let fields =
+    match prompt_key with
+    | Some key when String.trim key <> "" -> fields @ [ ("prompt_key", `String key) ]
+    | _ -> fields
+  in
+  `Assoc fields
 
 (*
   Recursive chunked summarization — single factored-out implementation.
@@ -418,7 +425,7 @@ let summarize_to_fit ~client ~sw ~system_prompt ~max_input_chars ~max_chars
       | Ok s ->
           if !rag_debug_ollama_chat then Printf.printf "\n[%s.summary.response]\n%s\n%!" label s;
           (match llm_log with Some log ->
-            log := !log @ [make_llm_call_entry ~label:("summarize:" ^ label)
+            log := !log @ [make_llm_call_entry ~prompt_key:None ~label:("summarize:" ^ label)
               ~model:effective_summarize_model ~messages ~response:s]
           | None -> ());
           let s = strip_summary_preamble s |> String.trim in
@@ -428,7 +435,7 @@ let summarize_to_fit ~client ~sw ~system_prompt ~max_input_chars ~max_chars
           else Some s
       | Error err ->
           (match llm_log with Some log ->
-            log := !log @ [make_llm_call_entry ~label:("summarize:" ^ label)
+            log := !log @ [make_llm_call_entry ~prompt_key:None ~label:("summarize:" ^ label)
               ~model:effective_summarize_model ~messages ~response:("ERROR: " ^ err)]
           | None -> ());
           let err = String.trim err in
@@ -757,6 +764,7 @@ let propose_tasks ~client ~sw ~(whoami : string)
   let effective_model = !ollama_triage_model in
   let debug_json raw_resp = Some (`Assoc
     [ ("model", `String effective_model)
+    ; ("prompt_key", `String "propose_tasks")
     ; ("messages", `List messages)
     ; ("raw_response", `String raw_resp)
     ]) in
@@ -1011,8 +1019,8 @@ let lookup_fyi_summary (doc_id : string) : string =
   let ndoc = Rag_lib.Pg.normalize_doc_id doc_id in
   match Rag_lib.Pg.list_fyi () with
   | Ok rows ->
-      (match List.find_opt (fun (did, _, _, _, _) -> did = ndoc) rows with
-      | Some (_, summary, _, _, _) -> summary
+      (match List.find_opt (fun (did, _, _, _, _, _) -> did = ndoc) rows with
+      | Some (_, summary, _, _, _, _) -> summary
       | None -> "")
   | Error _ -> ""
 
@@ -3242,7 +3250,7 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
         if !rag_debug_ollama_chat then
           Printf.printf "\n[retrieval.rewrite.response]\n%s\n%!" raw_resp;
         (match llm_log with Some log ->
-          log := !log @ [make_llm_call_entry ~label:"rewrite"
+          log := !log @ [make_llm_call_entry ~prompt_key:(Some "query_rewrite") ~label:"rewrite"
             ~model:effective_rewrite_model ~messages ~response:raw_resp]
         | None -> ());
         let raw_resp = String.trim raw_resp in
@@ -3423,6 +3431,7 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
                  | Ok fix_resp ->
                      (match llm_log with Some log ->
                        log := !log @ [make_llm_call_entry
+                         ~prompt_key:(Some "query_rewrite")
                          ~label:(Printf.sprintf "rewrite-fix-%d" (attempt + 1))
                          ~model:effective_rewrite_model ~messages:fix_messages ~response:fix_resp]
                      | None -> ());
@@ -3588,14 +3597,14 @@ let select_relevant_sources ~client ~sw ~(resolved_question : string)
   match ollama_chat ~client ~sw ~label:"select_evidence" ~stats:stats_chat_select ~model:effective_sel_model ~messages () with
   | Error err ->
       (match llm_log with Some log ->
-        log := !log @ [make_llm_call_entry ~label:"select_evidence"
+        log := !log @ [make_llm_call_entry ~prompt_key:(Some "select_evidence") ~label:"select_evidence"
           ~model:effective_sel_model ~messages ~response:("ERROR: " ^ err)]
       | None -> ());
       Printf.eprintf "[select_evidence.error] %s, selecting all\n%!" (truncate_chars err ~max_chars:200);
       all_doc_ids
   | Ok raw_resp ->
       (match llm_log with Some log ->
-        log := !log @ [make_llm_call_entry ~label:"select_evidence"
+        log := !log @ [make_llm_call_entry ~prompt_key:(Some "select_evidence") ~label:"select_evidence"
           ~model:effective_sel_model ~messages ~response:raw_resp]
       | None -> ());
       let raw_resp = String.trim raw_resp in
@@ -4926,11 +4935,13 @@ let handler ~client ~sw ~clock _socket request body =
                       if !rag_debug_ollama_chat then
                         Printf.printf "\n[chat.raw_answer]\n%s\n%!" s;
                       p_llm_log := !p_llm_log @ [make_llm_call_entry
+                        ~prompt_key:(Some "chat")
                         ~label:"chat" ~model:effective_chat_model
                         ~messages ~response:s];
                       strip_leading_boilerplate s |> String.trim
                   | Error msg ->
                       p_llm_log := !p_llm_log @ [make_llm_call_entry
+                        ~prompt_key:(Some "chat")
                         ~label:"chat" ~model:effective_chat_model
                         ~messages ~response:("ERROR: " ^ msg)];
                       "ollama chat error: " ^ msg
@@ -5888,16 +5899,18 @@ let handler ~client ~sw ~clock _socket request body =
       (match Rag_lib.Pg.list_fyi () with
       | Ok rows ->
           let rows =
-            List.filter (fun (_, _, _, sender, _) ->
+            List.filter (fun (_, _, _, sender, _, _) ->
               not (sender_matches_user ~whoami:!whoami ~from_:sender)
             ) rows
           in
-          let items = List.map (fun (doc_id, summary, date, sender, subject) ->
+          let items = List.map (fun (doc_id, summary, date, sender, subject, attachments_text) ->
+            let attachments = try Yojson.Safe.from_string attachments_text with _ -> `List [] in
             `Assoc [ ("doc_id", `String doc_id)
                    ; ("summary", `String summary)
                    ; ("date", `String date)
                    ; ("sender", `String sender)
                    ; ("subject", `String subject)
+                   ; ("attachments", attachments)
                    ]
           ) rows in
           Cohttp_eio.Server.respond_string ~status:`OK
@@ -5920,8 +5933,8 @@ let handler ~client ~sw ~clock _socket request body =
           (* Look up FYI summary for the title *)
           let summary = match Rag_lib.Pg.list_fyi () with
             | Ok rows ->
-                (match List.find_opt (fun (did, _, _, _, _) -> did = Rag_lib.Pg.normalize_doc_id doc_id) rows with
-                | Some (_, s, _, _, _) -> s
+                (match List.find_opt (fun (did, _, _, _, _, _) -> did = Rag_lib.Pg.normalize_doc_id doc_id) rows with
+                | Some (_, s, _, _, _, _) -> s
                 | None -> "Task from FYI email")
             | Error _ -> "Task from FYI email"
           in
@@ -7389,6 +7402,7 @@ let handler ~client ~sw ~clock _socket request body =
                 (* 8. Update task in DB — store cleaned text + debug info *)
                 let llm_debug = `Assoc
                   [ ("model", `String effective_model)
+                  ; ("prompt_key", `String "task_interview")
                   ; ("messages", `List messages)
                   ; ("raw_response", `String resp_text)
                   ] in
@@ -8171,6 +8185,7 @@ let () =
         in
         let first_msg_debug = `Assoc
           [ ("model", `String !ollama_triage_model)
+          ; ("prompt_key", `String "task_first_message")
           ; ("messages", `List messages)
           ; ("raw_response", `String first_msg)
           ] in

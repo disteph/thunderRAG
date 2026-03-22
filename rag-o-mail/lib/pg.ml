@@ -813,6 +813,7 @@ let get_task (task_id : string)
            COALESCE(TO_CHAR(e.email_date, 'YYYY-MM-DD HH24:MI'),
                     TO_CHAR(e.ingested_at, 'YYYY-MM-DD HH24:MI'), ''),
            COALESCE(e.recipient, ''), COALESCE(e.cc, ''),
+           COALESCE(array_to_json(e.attachments)::text, '[]'),
            COALESCE(te.compressed_body, '')
     FROM task_emails te
     LEFT JOIN emails e ON e.doc_id = te.doc_id
@@ -820,7 +821,7 @@ let get_task (task_id : string)
     ORDER BY te.added_at
   |} in
   let open Caqti_type in
-  let emails_rt = t2 (t2 (t4 string string string string) (t4 string string string string)) string in
+  let emails_rt = t2 (t2 (t4 string string string string) (t4 string string string string)) (t2 string string) in
   let emails_req = Caqti_request.Infix.(string ->* emails_rt) ~oneshot:true emails_sql in
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
     match C.find_opt req task_id with
@@ -837,7 +838,8 @@ let get_task (task_id : string)
           match C.collect_list emails_req tid with
           | Error _ -> []
           | Ok rows ->
-              List.map (fun (((doc_id, role, added_at, sender), (subject, email_date, recipient, cc)), compressed_body) ->
+              List.map (fun (((doc_id, role, added_at, sender), (subject, email_date, recipient, cc)), (attachments_text, compressed_body)) ->
+                let attachments = try Yojson.Safe.from_string attachments_text with _ -> `List [] in
                 `Assoc [ ("doc_id", `String doc_id)
                        ; ("role", `String role)
                        ; ("added_at", `String added_at)
@@ -846,6 +848,7 @@ let get_task (task_id : string)
                        ; ("date", `String email_date)
                        ; ("recipient", `String recipient)
                        ; ("cc", `String cc)
+                       ; ("attachments", attachments)
                        ; ("compressed_body", `String compressed_body) ])
                 rows
         in
@@ -2173,25 +2176,26 @@ let delete_fyi (doc_id : string) : (unit, string) result =
     C.exec req doc_id)
 
 (* Return all FYI entries joined with email metadata.
-   Each row: (doc_id, summary, email_date, sender, subject) *)
-let list_fyi () : ((string * string * string * string * string) list, string) result =
+   Each row: (doc_id, summary, email_date, sender, subject, attachments_json_text) *)
+let list_fyi () : ((string * string * string * string * string * string) list, string) result =
   let sql = {|
     SELECT f.doc_id, f.summary,
            COALESCE(TO_CHAR(f.email_date, 'YYYY-MM-DD HH24:MI'), ''),
-           COALESCE(e.sender, ''), COALESCE(e.subject, '')
+           COALESCE(e.sender, ''), COALESCE(e.subject, ''),
+           COALESCE(array_to_json(e.attachments)::text, '[]')
     FROM fyi_emails f
     LEFT JOIN emails e ON e.doc_id = f.doc_id
     WHERE COALESCE(e.processed, FALSE) IS NOT TRUE
     ORDER BY f.email_date DESC NULLS LAST
   |} in
   let open Caqti_type in
-  let req = Caqti_request.Infix.(unit ->* t2 (t3 string string string) (t2 string string)) ~oneshot:true sql in
+  let req = Caqti_request.Infix.(unit ->* t2 (t3 string string string) (t3 string string string)) ~oneshot:true sql in
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
     match C.collect_list req () with
     | Error _ as e -> e
     | Ok rows ->
-        Ok (List.map (fun ((doc_id, summary, date), (sender, subject)) ->
-          (doc_id, summary, date, sender, subject)) rows))
+        Ok (List.map (fun ((doc_id, summary, date), (sender, subject, attachments)) ->
+          (doc_id, summary, date, sender, subject, attachments)) rows))
 
 let get_fyi_body_preview (doc_id : string) : (string option, string) result =
   let doc_id = normalize_doc_id doc_id in

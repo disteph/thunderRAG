@@ -109,6 +109,11 @@ let webextScope = null;
 
 /* The ExtensionAPI context saved from getAPI(), used to re-acquire scope later. */
 let savedApiContext = null;
+let attachmentSettingsCache = {
+  filterSyntax: "pcre",
+  defaultPath: "",
+  lazyIgnore: "",
+};
 
 /*
   Extract readable body text from a MimeMessage tree returned by MsgHdrToMimeMessage.
@@ -527,48 +532,120 @@ function getMsgHdrForMessageId(messageId) {
   return null;
 }
 
-async function saveAttachmentsFromMsgHdr(msgHdr, directoryPath, headerMessageId = "") {
+function attachmentDescriptorKey(index, rawName) {
+  return `${index}:${String(rawName || "")}`;
+}
+
+function preferredDestinationFile(dir, filename) {
+  const file = dir.clone();
+  file.append(filename);
+  return file;
+}
+
+function stripAttachmentRuntimeFields(item) {
+  const { attachment, ...rest } = item;
+  return rest;
+}
+
+async function describeAttachmentsFromMsgHdr(msgHdr, directoryPath = "", options = {}) {
   if (!msgHdr) {
-    throw new Error(`No msgHdr for messageId=${headerMessageId || ""}`);
+    throw new Error(`No msgHdr for messageId=${options.headerMessageId || ""}`);
   }
   const mimeMsg = await getMimeMessageForHdr(msgHdr);
   const attachments = collectMimeAttachments(mimeMsg);
-  if (!attachments.length) {
+  const matcher = String(options.matcher || "").trim();
+  const syntax = resolveAttachmentMatcherSyntax(options.syntax, attachmentSettingsCache.filterSyntax);
+  const ignorePatterns = parseIgnorePatterns(options.ignoreText || attachmentSettingsCache.lazyIgnore);
+  const useGlobalIgnore = shouldApplyGlobalIgnore(options.useGlobalIgnore, true);
+  const directory = directoryPath ? nsFileFromPath(directoryPath) : null;
+  return attachments.map((attachment, idx) => {
+    const index = idx + 1;
+    const rawName = attachment?.name || attachment?.displayName || `attachment-${index}`;
+    const safeName = sanitizePathComponent(rawName, `attachment-${index}`);
+    const preferredPath = directory ? preferredDestinationFile(directory, safeName).path : "";
+    const ignored = useGlobalIgnore ? filenameMatchesIgnore(rawName, ignorePatterns) : false;
+    const matches = ignored ? false : filenameMatchesMatcher(rawName, matcher, syntax);
+    const exists = preferredPath ? preferredDestinationFile(directory, safeName).exists() : false;
+    return {
+      key: attachmentDescriptorKey(index, rawName),
+      index,
+      name: rawName,
+      safeName,
+      contentType: String(attachment?.contentType || "application/octet-stream"),
+      size: Number(attachment?.size || 0) || 0,
+      ignored,
+      matches,
+      exists,
+      path: preferredPath,
+      attachment,
+    };
+  });
+}
+
+async function saveAttachmentsFromMsgHdr(msgHdr, directoryPath, headerMessageId = "", options = {}) {
+  if (!msgHdr) {
+    throw new Error(`No msgHdr for messageId=${headerMessageId || ""}`);
+  }
+  const described = await describeAttachmentsFromMsgHdr(msgHdr, directoryPath, {
+    headerMessageId,
+    matcher: options.matcher || "",
+    syntax: options.syntax || attachmentSettingsCache.filterSyntax,
+    useGlobalIgnore: shouldApplyGlobalIgnore(options.useGlobalIgnore, true),
+    ignoreText: options.ignoreText || attachmentSettingsCache.lazyIgnore,
+  });
+  if (!described.length) {
     try {
       consoleService.logStringMessage(
         `[ragFilterAction] saveAttachments: no attachments found messageId=${headerMessageId || ""}`
       );
     } catch (_e) {
     }
-    return { saved: 0, directory: null, attachments: 0 };
+    return { saved: 0, directory: null, attachments: 0, files: [], descriptors: [] };
   }
+
+  const keySet = Array.isArray(options.selectedKeys) ? new Set(options.selectedKeys.map(String)) : null;
+  const toSave = described.filter(item => {
+    if (item.ignored || !item.matches) return false;
+    if (keySet && !keySet.has(item.key)) return false;
+    return true;
+  });
 
   const directory = nsFileFromPath(directoryPath);
   ensureDirectoryExists(directory);
   const messageUri = msgHdr.folder?.getUriForMsg ? msgHdr.folder.getUriForMsg(msgHdr) : "";
   let saved = 0;
-  let index = 0;
-  for (const attachment of attachments) {
-    index++;
-    const rawName = attachment?.name || attachment?.displayName || `attachment-${index}`;
-    const safeName = sanitizePathComponent(rawName, `attachment-${index}`);
-    const destination = uniqueDestinationFile(directory, safeName);
+  const files = [];
+  for (const item of toSave) {
+    if (item.exists && options.skipExisting) {
+      files.push({ key: item.key, name: item.name, path: item.path, savedNow: false, existed: true });
+      continue;
+    }
+    const destination = item.exists && !options.skipExisting
+      ? uniqueDestinationFile(directory, item.safeName)
+      : preferredDestinationFile(directory, item.safeName);
     try {
-      await saveNativeAttachmentToFile(attachment, destination, messageUri);
+      await saveNativeAttachmentToFile(item.attachment, destination, messageUri);
       saved++;
+      files.push({ key: item.key, name: item.name, path: destination.path, savedNow: true, existed: item.exists });
       consoleService.logStringMessage(
         `[ragFilterAction] saveAttachments: saved ${destination.path} messageId=${headerMessageId || ""}`
       );
     } catch (e) {
       try {
         consoleService.logStringMessage(
-          `[ragFilterAction] saveAttachments: native save failed name=${rawName} url=${attachment?.url || ""} messageId=${headerMessageId || ""}: ${e}`
+          `[ragFilterAction] saveAttachments: native save failed name=${item.name} url=${item.attachment?.url || ""} messageId=${headerMessageId || ""}: ${e}`
         );
       } catch (_e) {
       }
     }
   }
-  return { saved, directory: directory.path, attachments: attachments.length };
+  return {
+    saved,
+    directory: directory.path,
+    attachments: described.length,
+    files,
+    descriptors: described.map(stripAttachmentRuntimeFields),
+  };
 }
 
 function enqueueIngest(headerMessageId, endpoint) {
@@ -595,17 +672,20 @@ function dequeueIngest(itemId) {
   return before !== ingestQueue.length;
 }
 
-function enqueueAttachmentSave(headerMessageId, directoryPath) {
+function enqueueAttachmentSave(headerMessageId, directoryPath, options = {}) {
   const item = {
     id: String(attachmentSaveQueueNextId++),
     headerMessageId,
     directoryPath,
+    matcher: String(options.matcher || "").trim(),
+    syntax: normalizeAttachmentSyntax(options.syntax, true),
+    useGlobalIgnore: shouldApplyGlobalIgnore(options.useGlobalIgnore, true),
     timestamp: Date.now(),
   };
   attachmentSaveQueue.push(item);
   try {
     consoleService.logStringMessage(
-      `[ragFilterAction] enqueueAttachmentSave: queued id=${item.id} messageId=${headerMessageId} directory=${directoryPath} queueLength=${attachmentSaveQueue.length}`
+      `[ragFilterAction] enqueueAttachmentSave: queued id=${item.id} messageId=${headerMessageId} directory=${directoryPath} matcher=${item.matcher} syntax=${item.syntax} useGlobalIgnore=${item.useGlobalIgnore ? "1" : "0"} queueLength=${attachmentSaveQueue.length}`
     );
   } catch (_e) {
   }
@@ -1150,10 +1230,10 @@ function bodyAfterHeaders(rawText) {
   return "";
 }
 
-/* Synthesize a minimal RFC822 message from an nsIMsgDBHdr's metadata and a body string.
+ /* Synthesize a minimal RFC822 message from an nsIMsgDBHdr's metadata and a body string.
    Used when we can only obtain the decrypted body (not the original RFC822 bytes). */
-function synthesizeRfc822FromBody(msgHdr, best) {
-  const headers = [];
+ function synthesizeRfc822FromBody(msgHdr, best) {
+   const headers = [];
   if (msgHdr?.author) headers.push(`From: ${msgHdr.author}`);
   if (msgHdr?.recipients) headers.push(`To: ${msgHdr.recipients}`);
   if (msgHdr?.ccList) headers.push(`Cc: ${msgHdr.ccList}`);
@@ -1167,6 +1247,106 @@ function synthesizeRfc822FromBody(msgHdr, best) {
   headers.push(`Content-Type: ${best.kind}; charset=UTF-8`);
   headers.push("Content-Transfer-Encoding: 8bit");
   return `${headers.join("\r\n")}\r\n\r\n${best.body}`;
+}
+
+function createSaveAttachmentsTargetNode(win) {
+  const doc = win.document;
+  const root = doc.createElement("div");
+  root.dataset.ragAttachmentTarget = "1";
+  root.style.display = "flex";
+  root.style.flexDirection = "column";
+  root.style.gap = "4px";
+  root.style.flex = "1";
+  root.style.minWidth = "320px";
+
+  const hidden = doc.createElement("input");
+  hidden.type = "hidden";
+
+  const topRow = doc.createElement("div");
+  topRow.style.display = "flex";
+  topRow.style.alignItems = "center";
+  topRow.style.gap = "6px";
+
+  const matcher = doc.createElement("input");
+  matcher.type = "text";
+  matcher.placeholder = "Filename matcher (empty = all)";
+  matcher.style.flex = "1";
+  matcher.style.minWidth = "0";
+
+  const syntax = doc.createElement("select");
+  for (const [value, label] of [["default", "Default"], ["pcre", "PCRE-like"], ["glob", "Glob"], ["posix_ere", "POSIX ERE"]]) {
+    const opt = doc.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    syntax.appendChild(opt);
+  }
+
+  const ignoreLabel = doc.createElement("label");
+  ignoreLabel.style.display = "flex";
+  ignoreLabel.style.alignItems = "center";
+  ignoreLabel.style.gap = "4px";
+  ignoreLabel.style.fontSize = "11px";
+  const ignoreCb = doc.createElement("input");
+  ignoreCb.type = "checkbox";
+  ignoreCb.checked = true;
+  const ignoreText = doc.createElement("span");
+  ignoreText.textContent = "Apply global ignore";
+  ignoreLabel.appendChild(ignoreCb);
+  ignoreLabel.appendChild(ignoreText);
+
+  topRow.appendChild(matcher);
+  topRow.appendChild(syntax);
+  topRow.appendChild(ignoreLabel);
+
+  const path = doc.createElement("input");
+  path.type = "text";
+  path.placeholder = attachmentSettingsCache.defaultPath || "Default attachment path from add-on settings";
+  path.style.width = "100%";
+  path.style.minWidth = "0";
+
+  root.appendChild(hidden);
+  root.appendChild(topRow);
+  root.appendChild(path);
+
+  root.loadActionValue = (value) => {
+    const parsed = parseAttachmentSaveActionValue(value);
+    matcher.value = parsed.matcher || "";
+    syntax.value = normalizeAttachmentSyntax(parsed.syntax, true);
+    ignoreCb.checked = shouldApplyGlobalIgnore(parsed.useGlobalIgnore, true);
+    path.value = parsed.path || "";
+    path.placeholder = attachmentSettingsCache.defaultPath || "Default attachment path from add-on settings";
+  };
+  root.serializeActionValue = () => stringifyAttachmentSaveActionValue({
+    matcher: matcher.value || "",
+    syntax: syntax.value || "default",
+    useGlobalIgnore: ignoreCb.checked,
+    path: path.value || "",
+  });
+  root.getDisplayValue = () => {
+    const matcherText = String(matcher.value || "").trim() || "*";
+    const syntaxText = syntax.options[syntax.selectedIndex]?.textContent || "Default";
+    const pathText = String(path.value || "").trim() || (attachmentSettingsCache.defaultPath ? `[default: ${attachmentSettingsCache.defaultPath}]` : "[default path]");
+    return `${matcherText} · ${syntaxText} · ${ignoreCb.checked ? "ignore on" : "ignore off"} · ${pathText}`;
+  };
+
+  Object.defineProperty(hidden, "value", {
+    get() {
+      return root.serializeActionValue();
+    },
+    set(v) {
+      root.loadActionValue(v);
+    },
+    configurable: true,
+  });
+  Object.defineProperty(hidden, "label", {
+    get() {
+      return root.getDisplayValue();
+    },
+    configurable: true,
+  });
+
+  root.loadActionValue("");
+  return root;
 }
 
 /* Monkey-patch the FilterEditor's ruleactiontarget-wrapper custom element so that
@@ -1194,8 +1374,11 @@ function patchFilterEditorWindow(win) {
     if (!Wrapper.prototype.__ragFilterActionPatched) {
       const originalGetChildNode = Wrapper.prototype._getChildNode;
       Wrapper.prototype._getChildNode = function (type) {
-        if (type === ACTION_ID || type === ACTION_SAVE_ATTACHMENTS_ID) {
+        if (type === ACTION_ID) {
           return win.document.createXULElement("ruleactiontarget-forwardto");
+        }
+        if (type === ACTION_SAVE_ATTACHMENTS_ID) {
+          return createSaveAttachmentsTargetNode(win);
         }
         return originalGetChildNode.call(this, type);
       };
@@ -1355,12 +1538,35 @@ function parseAndValidateUrl(actionValue) {
   return { ok: true, url: url.spec };
 }
 
-function parseAndValidatePathTemplate(actionValue) {
-  if (!actionValue || !actionValue.trim()) {
-    return { ok: false, error: "Path template must not be empty." };
+function normalizeAttachmentSyntax(value, allowDefault = false) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (allowDefault && (!raw || raw === "default")) return "default";
+  if (raw === "glob") return "glob";
+  if (raw === "posix_ere" || raw === "posix-ere") return "posix_ere";
+  if (raw === "pcre" || raw === "pcre-like" || raw === "pcre_like") return "pcre";
+  return allowDefault ? "default" : "pcre";
+}
+
+function normalizeAttachmentSettings(settings) {
+  const src = settings && typeof settings === "object" ? settings : {};
+  return {
+    filterSyntax: normalizeAttachmentSyntax(src.filterSyntax, false),
+    defaultPath: String(src.defaultPath || "").trim(),
+    lazyIgnore: String(src.lazyIgnore || ""),
+  };
+}
+
+function updateAttachmentSettingsCache(settings) {
+  attachmentSettingsCache = normalizeAttachmentSettings(settings);
+}
+
+function parseAndValidatePathTemplate(actionValue, options = {}) {
+  const allowEmpty = !!options.allowEmpty;
+  const trimmed = String(actionValue || "").trim();
+  if (!trimmed) {
+    return allowEmpty ? { ok: true, template: "" } : { ok: false, error: "Path template must not be empty." };
   }
 
-  const trimmed = actionValue.trim();
   const allowed = new Set(["account", "yyyy", "mm", "dd", "hours", "minutes", "subject", "from"]);
   const matches = trimmed.match(/{{\s*([^{}]+?)\s*}}/g) || [];
   for (const match of matches) {
@@ -1380,6 +1586,151 @@ function parseAndValidatePathTemplate(actionValue) {
 
 function zeroPad2(n) {
   return String(Math.max(0, n)).padStart(2, "0");
+}
+
+function parseAttachmentSaveActionValue(actionValue) {
+  const defaults = { matcher: "", syntax: "default", useGlobalIgnore: true, path: "" };
+  const raw = String(actionValue || "").trim();
+  if (!raw) {
+    return { ...defaults };
+  }
+  if (!(raw.startsWith("{") && raw.endsWith("}"))) {
+    return { ...defaults, path: raw };
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      matcher: String(parsed?.matcher || "").trim(),
+      syntax: normalizeAttachmentSyntax(parsed?.syntax, true),
+      useGlobalIgnore: parsed?.useGlobalIgnore !== false,
+      path: String(parsed?.path || "").trim(),
+    };
+  } catch (_e) {
+    return { ...defaults, path: raw };
+  }
+}
+
+function stringifyAttachmentSaveActionValue(value) {
+  const parsed = parseAttachmentSaveActionValue(JSON.stringify(value || {}));
+  return JSON.stringify(parsed);
+}
+
+function resolveAttachmentMatcherSyntax(perFilterSyntax, defaultSyntax = attachmentSettingsCache.filterSyntax) {
+  const choice = normalizeAttachmentSyntax(perFilterSyntax, true);
+  return choice === "default" ? normalizeAttachmentSyntax(defaultSyntax, false) : choice;
+}
+
+function shouldApplyGlobalIgnore(value, defaultValue = true) {
+  return value === undefined || value === null ? !!defaultValue : value !== false;
+}
+
+function globToRegExp(pattern) {
+  let rx = "^";
+  const s = String(pattern || "");
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "*") {
+      if (s[i + 1] === "*") {
+        rx += ".*";
+        i++;
+      } else {
+        rx += "[^/]*";
+      }
+    } else if (ch === "?") {
+      rx += ".";
+    } else if ("\\^$+?.()|{}[]".includes(ch)) {
+      rx += "\\" + ch;
+    } else {
+      rx += ch;
+    }
+  }
+  rx += "$";
+  return new RegExp(rx, "i");
+}
+
+function validateAttachmentMatcher(matcher, syntax) {
+  const text = String(matcher || "").trim();
+  if (!text) {
+    return { ok: true, matcher: "" };
+  }
+  try {
+    if (syntax === "glob") {
+      globToRegExp(text);
+    } else {
+      new RegExp(text);
+    }
+    return { ok: true, matcher: text };
+  } catch (e) {
+    return { ok: false, error: `Filename matcher is invalid for ${syntax}: ${e}` };
+  }
+}
+
+function parseIgnorePatterns(text) {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => !!line && !line.startsWith("#"));
+}
+
+function filenameMatchesIgnore(filename, patterns) {
+  const name = String(filename || "").trim();
+  if (!name || !Array.isArray(patterns) || patterns.length === 0) {
+    return false;
+  }
+  for (const pattern of patterns) {
+    try {
+      if (globToRegExp(pattern).test(name)) {
+        return true;
+      }
+    } catch (_e) {
+    }
+  }
+  return false;
+}
+
+function filenameMatchesMatcher(filename, matcher, syntax) {
+  const name = String(filename || "").trim();
+  const text = String(matcher || "").trim();
+  if (!text) {
+    return true;
+  }
+  if (syntax === "glob") {
+    return globToRegExp(text).test(name);
+  }
+  return new RegExp(text).test(name);
+}
+
+function resolveAttachmentSaveDirectoryTemplate(pathFromFilter, defaultPathFromSettings) {
+  const filterPath = String(pathFromFilter || "").trim();
+  const defaultPath = String(defaultPathFromSettings || "").trim();
+  return filterPath || defaultPath || "";
+}
+
+function parseAndValidateAttachmentSaveActionValue(actionValue) {
+  const parsed = parseAttachmentSaveActionValue(actionValue);
+  const syntax = resolveAttachmentMatcherSyntax(parsed.syntax, attachmentSettingsCache.filterSyntax);
+  const matcherCheck = validateAttachmentMatcher(parsed.matcher, syntax);
+  if (!matcherCheck.ok) {
+    return matcherCheck;
+  }
+  const effectiveTemplate = resolveAttachmentSaveDirectoryTemplate(parsed.path, attachmentSettingsCache.defaultPath);
+  if (!effectiveTemplate) {
+    return { ok: false, error: "Attachment save path is empty. Set a filter path or configure a default attachment path in add-on settings." };
+  }
+  const templateCheck = parseAndValidatePathTemplate(effectiveTemplate, { allowEmpty: false });
+  if (!templateCheck.ok) {
+    return templateCheck;
+  }
+  return {
+    ok: true,
+    config: {
+      matcher: matcherCheck.matcher,
+      syntax: normalizeAttachmentSyntax(parsed.syntax, true),
+      useGlobalIgnore: shouldApplyGlobalIgnore(parsed.useGlobalIgnore, true),
+      path: String(parsed.path || "").trim(),
+      effectiveTemplate: templateCheck.template,
+    },
+  };
 }
 
 function homeDirPath() {
@@ -1769,9 +2120,52 @@ async function resolveMessageIdFromHdr(msgHdr) {
   return await resolveMessageIdFromHeaderMessageId(msgHdr?.messageId || "");
 }
 
-async function saveAttachmentsByMessageId(messageId, directoryPath, headerMessageId = "") {
+async function saveAttachmentsByMessageId(messageId, directoryPath, headerMessageId = "", options = {}) {
   const msgHdr = getMsgHdrForMessageId(messageId);
-  return await saveAttachmentsFromMsgHdr(msgHdr, directoryPath, headerMessageId);
+  return await saveAttachmentsFromMsgHdr(msgHdr, directoryPath, headerMessageId, options);
+}
+
+async function describeAttachmentsByMessageId(messageId, directoryPath = "", headerMessageId = "", options = {}) {
+  const msgHdr = getMsgHdrForMessageId(messageId);
+  return await describeAttachmentsFromMsgHdr(msgHdr, directoryPath, { headerMessageId, ...options });
+}
+
+function openFileManagerForPath(path) {
+  const targetPath = String(path || "").trim();
+  if (!targetPath) {
+    throw new Error("Path missing");
+  }
+  const file = nsFileFromPath(targetPath);
+  if (!file.exists()) {
+    throw new Error(`Path does not exist: ${targetPath}`);
+  }
+  try {
+    const openBin = nsFileFromPath("/usr/bin/open");
+    if (openBin.exists()) {
+      const proc = Cc["@mozilla.org/process/util;1"].createInstance(Ci.nsIProcess);
+      proc.init(openBin);
+      const args = file.isDirectory() ? [targetPath] : ["-R", targetPath];
+      if (typeof proc.runw === "function") {
+        proc.runw(false, args, args.length);
+      } else {
+        proc.run(false, args, args.length);
+      }
+      return true;
+    }
+  } catch (_e) {
+  }
+  try {
+    file.reveal();
+    return true;
+  } catch (_e) {
+  }
+  try {
+    const toLaunch = file.isDirectory() ? file : file.parent;
+    toLaunch.launch();
+    return true;
+  } catch (e) {
+    throw new Error(`Could not open folder for path ${targetPath}: ${e}`);
+  }
 }
 
 /* Attempt to get decrypted message bytes via the WebExtension messages.getRaw API
@@ -1864,7 +2258,7 @@ function makeCustomAction() {
     id: ACTION_ID,
 
     get name() {
-      return "ThunderRAG";
+      return "ThunderRAG: Ingest";
     },
 
     isValidForType(type, scope) {
@@ -2127,7 +2521,7 @@ function makeSaveAttachmentsAction() {
     },
 
     validateActionValue(actionValue, actionFolder, filterType) {
-      let result = parseAndValidatePathTemplate(actionValue);
+      let result = parseAndValidateAttachmentSaveActionValue(actionValue);
       if (!result.ok) {
         return result.error;
       }
@@ -2139,7 +2533,7 @@ function makeSaveAttachmentsAction() {
     applyAction(msgHdrs, actionValue, copyListener, filterType, msgWindow) {
       (async () => {
         try {
-          let parsed = parseAndValidatePathTemplate(actionValue);
+          let parsed = parseAndValidateAttachmentSaveActionValue(actionValue);
           if (!parsed.ok) {
             throw new Error(parsed.error);
           }
@@ -2150,10 +2544,14 @@ function makeSaveAttachmentsAction() {
               if (!headerMessageId) {
                 throw new Error("Missing msgHdr.messageId");
               }
-              const directoryPath = renderAttachmentPathTemplate(parsed.template, msgHdr);
-              const item = enqueueAttachmentSave(headerMessageId, directoryPath);
+              const directoryPath = renderAttachmentPathTemplate(parsed.config.effectiveTemplate, msgHdr);
+              const item = enqueueAttachmentSave(headerMessageId, directoryPath, {
+                matcher: parsed.config.matcher,
+                syntax: parsed.config.syntax,
+                useGlobalIgnore: parsed.config.useGlobalIgnore,
+              });
               consoleService.logStringMessage(
-                `[ragFilterAction] saveAttachments: queued id=${item.id} directory=${directoryPath} messageId=${headerMessageId}`
+                `[ragFilterAction] saveAttachments: queued id=${item.id} directory=${directoryPath} matcher=${item.matcher} syntax=${item.syntax} useGlobalIgnore=${item.useGlobalIgnore ? "1" : "0"} messageId=${headerMessageId}`
               );
             } catch (e) {
               consoleService.logStringMessage(
@@ -2330,6 +2728,9 @@ var ragFilterAction = class extends ExtensionCommon.ExtensionAPI {
             id: it.id,
             headerMessageId: it.headerMessageId,
             directoryPath: it.directoryPath,
+            matcher: it.matcher,
+            syntax: it.syntax,
+            useGlobalIgnore: it.useGlobalIgnore,
             timestamp: it.timestamp,
           }));
         },
@@ -2340,11 +2741,48 @@ var ragFilterAction = class extends ExtensionCommon.ExtensionAPI {
               `[ragFilterAction] completeAttachmentSaveItem: id=${itemId} removed=${removed} queueLength=${attachmentSaveQueue.length}`
             );
           } catch (_e) {
+            // ignore
           }
           return removed;
         },
-        saveAttachmentsByMessageId: async (messageId, directoryPath, headerMessageId) => {
-          return await saveAttachmentsByMessageId(messageId, directoryPath, headerMessageId || "");
+        setAttachmentSettings: async (settingsJson) => {
+          try {
+            const parsed = settingsJson ? JSON.parse(settingsJson) : {};
+            updateAttachmentSettingsCache(parsed || {});
+            return true;
+          } catch (_e) {
+            updateAttachmentSettingsCache({});
+            return false;
+          }
+        },
+        renderAttachmentPathByMessageId: async (messageId, template) => {
+          const msgHdr = getMsgHdrForMessageId(messageId);
+          const checked = parseAndValidatePathTemplate(template, { allowEmpty: false });
+          if (!checked.ok) {
+            throw new Error(checked.error);
+          }
+          return renderAttachmentPathTemplate(checked.template, msgHdr);
+        },
+        describeAttachmentsByMessageId: async (messageId, directoryPath, headerMessageId, optionsJson) => {
+          let options = {};
+          try {
+            options = optionsJson ? JSON.parse(optionsJson) : {};
+          } catch (_e) {
+            options = {};
+          }
+          return await describeAttachmentsByMessageId(messageId, directoryPath || "", headerMessageId || "", options);
+        },
+        saveAttachmentsByMessageId: async (messageId, directoryPath, headerMessageId, optionsJson) => {
+          let options = {};
+          try {
+            options = optionsJson ? JSON.parse(optionsJson) : {};
+          } catch (_e) {
+            options = {};
+          }
+          return await saveAttachmentsByMessageId(messageId, directoryPath, headerMessageId || "", options);
+        },
+        openFileManagerForPath: async (path) => {
+          return openFileManagerForPath(path);
         },
         getDecryptedBodyText: async (messageId) => {
           /*

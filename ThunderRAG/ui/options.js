@@ -2,6 +2,11 @@ const DEFAULT_SERVER_URL = "http://localhost:8080";
 const STORAGE_KEY = "ragServerBase";
 const TOPK_KEY = "ragDefaultTopK";
 const DEFAULT_TOPK = 20;
+const ATTACHMENT_KEYS = {
+  attachmentFilterSyntax: { key: "attachmentFilterSyntax", default: "glob" },
+  attachmentDefaultPath: { key: "attachmentDefaultPath", default: "~/Downloads/attachments/{{account}}/{{yyyy}}-{{mm}}/{{yyyy}}-{{mm}}-{{dd}}_{{hours}}-{{minutes}}_{{from}}" },
+  attachmentLazyIgnore: { key: "attachmentLazyIgnore", default: "*.p7m\n*.p7s\n*.asc\n*.ics\nimg-*\n*.png" },
+};
 
 /* Voice settings keys & defaults */
 const VOICE_KEYS = {
@@ -298,6 +303,11 @@ let promptsLoaded = false;
 let promptsData = null;
 let promptsDirty = false;
 
+function getRequestedPromptKey() {
+  const params = new URLSearchParams(window.location.search);
+  return (params.get("prompt") || "").trim();
+}
+
 function markPromptsDirty() {
   promptsDirty = true;
   document.getElementById("promptsDirty").textContent = "(unsaved changes)";
@@ -359,6 +369,34 @@ function renderPrompts(json) {
 
   document.getElementById("prompts-btn-bar").style.display = "flex";
   clearPromptsDirty();
+}
+
+function focusPromptEditor(key) {
+  if (!key) return false;
+  const textarea = document.getElementById("prompt-" + key);
+  if (!textarea) return false;
+  textarea.scrollIntoView({ behavior: "smooth", block: "center" });
+  textarea.classList.remove("prompt-flash");
+  void textarea.offsetWidth;
+  textarea.classList.add("prompt-flash");
+  textarea.focus();
+  return true;
+}
+
+async function openPromptEditor(key) {
+  if (!key) return false;
+  const promptsSection = document.getElementById("prompts-section");
+  if (!promptsSection.open) {
+    promptsSection.open = true;
+  }
+  if (!promptsLoaded) {
+    await loadPrompts();
+  }
+  return await new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      resolve(focusPromptEditor(key));
+    });
+  });
 }
 
 async function loadPrompts() {
@@ -481,6 +519,24 @@ async function init() {
     statusMsg("Top-K saved locally.");
   });
 
+  /* ---- Attachment settings (local) ---- */
+  {
+    const stored = await browser.storage.local.get(Object.keys(ATTACHMENT_KEYS));
+    for (const [id, spec] of Object.entries(ATTACHMENT_KEYS)) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      const val = stored[id] != null ? stored[id] : spec.default;
+      if (el.tagName === "SELECT") el.value = val;
+      else el.value = val;
+      const save = async () => {
+        const v = el.value;
+        await browser.storage.local.set({ [id]: v });
+        statusMsg("Attachment setting saved.");
+      };
+      el.addEventListener("change", save);
+    }
+  }
+
   /* ---- Voice settings (local) ---- */
   {
     const stored = await browser.storage.local.get(Object.keys(VOICE_KEYS));
@@ -521,29 +577,21 @@ async function init() {
     if (!tag) return;
     const key = tag.dataset.prompt;
     if (!key) return;
-
-    /* 1. Open the Prompts section */
-    const promptsSection = document.getElementById("prompts-section");
-    if (!promptsSection.open) {
-      promptsSection.open = true;
-      /* If prompts haven't loaded yet, load them now */
-      if (!promptsLoaded) {
-        await loadPrompts();
-      }
-    }
-
-    /* 2. Wait a tick for rendering, then scroll to the textarea */
-    requestAnimationFrame(() => {
-      const textarea = document.getElementById("prompt-" + key);
-      if (textarea) {
-        textarea.scrollIntoView({ behavior: "smooth", block: "center" });
-        textarea.classList.remove("prompt-flash");
-        void textarea.offsetWidth; /* force reflow to restart animation */
-        textarea.classList.add("prompt-flash");
-        textarea.focus();
-      }
-    });
+    await openPromptEditor(key);
   });
+
+  const requestedPromptKey = getRequestedPromptKey();
+  if (requestedPromptKey) {
+    setTimeout(() => {
+      openPromptEditor(requestedPromptKey).then((ok) => {
+        if (!ok) {
+          statusMsg(`Prompt not found: ${requestedPromptKey}`, true);
+        }
+      }).catch((e) => {
+        statusMsg(`Failed to open prompt: ${e.message}`, true);
+      });
+    }, 0);
+  }
 
   updateEndpointUrls(serverUrl);
   fetchAndRender();

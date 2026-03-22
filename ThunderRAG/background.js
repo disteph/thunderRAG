@@ -17,9 +17,11 @@
 /* Register the experiment-API filter action on add-on startup (if available). */
 async function startup() {
   try {
+    await ensureDefaultAttachmentSettings();
     if (browser.ragFilterAction?.register) {
       await browser.ragFilterAction.register();
     }
+    await syncAttachmentSettingsToExperiment();
   } catch (e) {
     console.error(e);
   }
@@ -40,6 +42,48 @@ function notifyTasksChanged() {
   try {
     browser.runtime.sendMessage({ type: "tasksChanged" }).catch(() => {});
   } catch (_) {}
+}
+
+const ATTACHMENT_SETTING_KEYS = {
+  filterSyntax: "attachmentFilterSyntax",
+  defaultPath: "attachmentDefaultPath",
+  lazyIgnore: "attachmentLazyIgnore",
+};
+
+const DEFAULT_ATTACHMENT_SETTINGS = {
+  [ATTACHMENT_SETTING_KEYS.filterSyntax]: "glob",
+  [ATTACHMENT_SETTING_KEYS.defaultPath]: "~/Downloads/attachments/{{account}}/{{yyyy}}-{{mm}}/{{yyyy}}-{{mm}}-{{dd}}_{{hours}}-{{minutes}}_{{from}}",
+  [ATTACHMENT_SETTING_KEYS.lazyIgnore]: "*.p7m\n*.p7s\n*.asc\n*.ics\nimg-*\n*.png",
+};
+
+async function ensureDefaultAttachmentSettings() {
+  const keys = Object.values(ATTACHMENT_SETTING_KEYS);
+  const current = await browser.storage.local.get(keys);
+  const patch = {};
+  for (const key of keys) {
+    if (current[key] == null) {
+      patch[key] = DEFAULT_ATTACHMENT_SETTINGS[key];
+    }
+  }
+  if (Object.keys(patch).length) {
+    await browser.storage.local.set(patch);
+  }
+}
+
+async function syncAttachmentSettingsToExperiment() {
+  try {
+    if (!browser.ragFilterAction?.setAttachmentSettings) {
+      return;
+    }
+    const data = await browser.storage.local.get(Object.values(ATTACHMENT_SETTING_KEYS));
+    await browser.ragFilterAction.setAttachmentSettings(JSON.stringify({
+      filterSyntax: data[ATTACHMENT_SETTING_KEYS.filterSyntax] || "glob",
+      defaultPath: data[ATTACHMENT_SETTING_KEYS.defaultPath] || DEFAULT_ATTACHMENT_SETTINGS[ATTACHMENT_SETTING_KEYS.defaultPath],
+      lazyIgnore: data[ATTACHMENT_SETTING_KEYS.lazyIgnore] || DEFAULT_ATTACHMENT_SETTINGS[ATTACHMENT_SETTING_KEYS.lazyIgnore],
+    }));
+  } catch (e) {
+    console.warn(`[ThunderRAG] failed to sync attachment settings: ${e}`);
+  }
 }
 
 const INGEST_HTTP_TIMEOUT_MS = 15000;
@@ -194,6 +238,54 @@ browser.runtime.onMessage.addListener(async (msg) => {
       const data = await resp.json();
       debugLog(`[fetchIngestedDetail] response:`, data);
       return data;
+    }
+
+    if (msg.type === "describeAttachmentsByHeaderMessageId") {
+      const headerMessageId = (msg.headerMessageId || "").trim();
+      const directoryPath = String(msg.directoryPath || "").trim();
+      const options = msg.options && typeof msg.options === "object" ? msg.options : {};
+      if (!headerMessageId) throw new Error("Missing headerMessageId");
+      const messageId = await resolveHeaderMessageId(headerMessageId);
+      return await browser.ragFilterAction.describeAttachmentsByMessageId(
+        messageId,
+        directoryPath,
+        headerMessageId,
+        JSON.stringify(options)
+      );
+    }
+
+    if (msg.type === "saveAttachmentsByHeaderMessageId") {
+      const headerMessageId = (msg.headerMessageId || "").trim();
+      const directoryPath = String(msg.directoryPath || "").trim();
+      const options = msg.options && typeof msg.options === "object" ? msg.options : {};
+      if (!headerMessageId) throw new Error("Missing headerMessageId");
+      if (!directoryPath) throw new Error("Missing directoryPath");
+      const messageId = await resolveHeaderMessageId(headerMessageId);
+      return await browser.ragFilterAction.saveAttachmentsByMessageId(
+        messageId,
+        directoryPath,
+        headerMessageId,
+        JSON.stringify(options)
+      );
+    }
+
+    if (msg.type === "renderAttachmentPathByHeaderMessageId") {
+      const headerMessageId = (msg.headerMessageId || "").trim();
+      const template = String(msg.template || "").trim();
+      if (!headerMessageId) throw new Error("Missing headerMessageId");
+      if (!template) throw new Error("Missing template");
+      const messageId = await resolveHeaderMessageId(headerMessageId);
+      return {
+        headerMessageId,
+        directoryPath: await browser.ragFilterAction.renderAttachmentPathByMessageId(messageId, template),
+      };
+    }
+
+    if (msg.type === "openAttachmentPath") {
+      const path = String(msg.path || "").trim();
+      if (!path) throw new Error("Missing path");
+      await browser.ragFilterAction.openFileManagerForPath(path);
+      return { ok: true };
     }
 
     if (msg.type === "sendReply") {
@@ -621,7 +713,16 @@ async function processAttachmentSaveQueue() {
         }
 
         const messageId = await resolveHeaderMessageId(headerMessageId);
-        const result = await browser.ragFilterAction.saveAttachmentsByMessageId(messageId, directoryPath, headerMessageId);
+        const result = await browser.ragFilterAction.saveAttachmentsByMessageId(
+          messageId,
+          directoryPath,
+          headerMessageId,
+          JSON.stringify({
+            matcher: item.matcher || "",
+            syntax: item.syntax || "default",
+            useGlobalIgnore: item.useGlobalIgnore !== false,
+          })
+        );
         console.log(
           `[ThunderRAG] attachmentSaveQueue: saved=${result?.saved || 0} attachments=${result?.attachments || 0} directory=${result?.directory || ""} messageId=${headerMessageId}`
         );
@@ -804,6 +905,19 @@ async function _debugPost(path, args) {
 }
 function debugLog(...args)  { console.log(...args);  _debugPost("/debug/stdout", args); }
 function debugWarn(...args) { console.warn(...args); _debugPost("/debug/stderr", args); }
+
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") {
+    return;
+  }
+  if (
+    changes[ATTACHMENT_SETTING_KEYS.filterSyntax] ||
+    changes[ATTACHMENT_SETTING_KEYS.defaultPath] ||
+    changes[ATTACHMENT_SETTING_KEYS.lazyIgnore]
+  ) {
+    syncAttachmentSettingsToExperiment();
+  }
+});
 
 /*
   Email deletion listener.

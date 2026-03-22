@@ -159,15 +159,18 @@
       }
       /* ── FYI pane ── */
       .fyi-list {
-        list-style: disc;
+        list-style: none;
         margin: 0;
-        padding: 0 14px 0 28px;
+        padding: 0 14px;
         overflow-y: auto;
         flex: 1;
       }
       .fyi-list li {
         position: relative;
-        padding: 10px 170px 10px 6px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px 10px 6px;
         font-size: 13px;
         line-height: 1.45;
         border-bottom: 1px solid rgba(127,127,127,0.1);
@@ -180,16 +183,34 @@
         background: color-mix(in srgb, AccentColor 16%, Canvas);
         box-shadow: inset 0 0 0 1px color-mix(in srgb, AccentColor 42%, transparent);
       }
+      .fyi-preview-icon {
+        flex: 0 0 auto;
+        width: 18px;
+        height: 18px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        line-height: 1;
+        opacity: 0.7;
+        border-radius: 4px;
+        user-select: none;
+        cursor: help;
+      }
+      .fyi-preview-icon:hover {
+        opacity: 1;
+        background: rgba(127,127,127,0.12);
+      }
       .fyi-summary {
+        flex: 1 1 auto;
+        min-width: 0;
         margin-right: 8px;
       }
       .fyi-actions {
-        position: absolute;
-        top: 8px;
-        right: 8px;
         display: flex;
         gap: 6px;
         align-items: center;
+        flex: 0 0 auto;
       }
       .fyi-date {
         font-size: 10px;
@@ -199,13 +220,19 @@
       }
       .fyi-create-btn,
       .fyi-process-btn {
-        font-size: 11px;
+        width: 22px;
+        height: 22px;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
         cursor: pointer;
         border: 1px solid rgba(255,255,255,0.2);
-        border-radius: 6px;
-        padding: 4px 8px;
+        border-radius: 999px;
         color: #f5f5f5;
         font-weight: 600;
+        line-height: 1;
       }
       .fyi-create-btn {
         background: color-mix(in srgb, AccentColor 82%, black);
@@ -705,10 +732,16 @@
       /* Email trigger rows */
       .mh-email-row {
         display: flex;
-        align-items: center;
-        gap: 4px;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 2px;
         margin-bottom: 2px;
         line-height: 1.4;
+      }
+      .mh-email-row-main {
+        display: flex;
+        align-items: center;
+        gap: 4px;
       }
       .mh-email-row .email-link {
         flex: 1;
@@ -818,6 +851,64 @@
         white-space: pre-wrap;
         box-shadow: 0 6px 24px rgba(0,0,0,0.22);
         pointer-events: auto;
+      }
+      .email-hover-text {
+        white-space: pre-wrap;
+      }
+      .attachment-links {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+        margin-left: 14px;
+        font-size: 11px;
+        opacity: 1;
+      }
+      .attachment-links.compact {
+        margin-left: 0;
+        margin-top: 8px;
+      }
+      .attachment-row {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+      }
+      .attachment-label,
+      .attachment-indent,
+      .attachment-empty {
+        opacity: 0.7;
+      }
+      .attachment-label,
+      .attachment-indent {
+        width: 14px;
+        min-width: 14px;
+        text-align: center;
+        display: inline-block;
+        flex: 0 0 14px;
+      }
+      .attachment-label-btn {
+        border: none;
+        background: transparent;
+        color: inherit;
+        padding: 0;
+        cursor: pointer;
+        line-height: 1;
+      }
+      .attachment-label-btn:hover {
+        opacity: 1;
+      }
+      .attachment-link-btn {
+        border: none;
+        background: transparent;
+        color: #7cc7ff;
+        cursor: pointer;
+        padding: 0;
+        font: inherit;
+        text-align: left;
+        display: block;
+      }
+      .attachment-link-btn:hover {
+        text-decoration: underline;
       }
 
       /* ── Memory management ── */

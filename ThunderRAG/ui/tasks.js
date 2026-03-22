@@ -35,6 +35,236 @@ async function getWhoAmI() {
   }
 }
 
+const ATTACHMENT_SETTING_KEYS = {
+  syntax: "attachmentFilterSyntax",
+  defaultPath: "attachmentDefaultPath",
+  lazyIgnore: "attachmentLazyIgnore",
+};
+
+async function getAttachmentSettings() {
+  try {
+    const data = await browser.storage.local.get(Object.values(ATTACHMENT_SETTING_KEYS));
+    return {
+      syntax: String(data[ATTACHMENT_SETTING_KEYS.syntax] || "glob").trim() || "glob",
+      defaultPath: String(data[ATTACHMENT_SETTING_KEYS.defaultPath] || "").trim(),
+      lazyIgnore: String(data[ATTACHMENT_SETTING_KEYS.lazyIgnore] || ""),
+    };
+  } catch (_e) {
+    return { syntax: "glob", defaultPath: "", lazyIgnore: "" };
+  }
+}
+
+async function openAttachmentPath(path) {
+  try {
+    await browser.runtime.sendMessage({ type: "openAttachmentPath", path });
+  } catch (e) {
+    console.error("[attachments.open]", e);
+    throw e;
+  }
+}
+
+function escapeRegexForGlob(value) {
+  return String(value || "").replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+}
+
+function globPatternToRegex(pattern) {
+  const raw = String(pattern || "").trim();
+  if (!raw) {
+    return null;
+  }
+  let out = "";
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === "*") {
+      if (raw[i + 1] === "*") {
+        out += ".*";
+        i++;
+      } else {
+        out += "[^/]*";
+      }
+    } else if (ch === "?") {
+      out += "[^/]";
+    } else {
+      out += escapeRegexForGlob(ch);
+    }
+  }
+  try {
+    return new RegExp(`^${out}$`, "i");
+  } catch (_) {
+    return null;
+  }
+}
+
+function parseIgnorePatterns(ignoreText) {
+  return String(ignoreText || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
+}
+
+function attachmentNameMatchesIgnore(name, patterns) {
+  const filename = String(name || "").trim();
+  if (!filename) {
+    return false;
+  }
+  return patterns.some((pattern) => {
+    const regex = globPatternToRegex(pattern);
+    if (!regex) {
+      return false;
+    }
+    return regex.test(filename) || (!pattern.includes("/") && regex.test(filename.split(/[\\/]/).pop() || filename));
+  });
+}
+
+function getAttachmentNamesFromEmail(email) {
+  const values = Array.isArray(email?.attachments) ? email.attachments : [];
+  return values
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+}
+
+async function describeAttachmentsForUi(headerMessageId) {
+  const key = String(headerMessageId || "").trim();
+  if (!key) {
+    throw new Error("Missing message id.");
+  }
+  return await browser.runtime.sendMessage({
+    type: "describeAttachmentsByHeaderMessageId",
+    headerMessageId: key,
+    directoryPath: "",
+    options: { matcher: "", syntax: "default", useGlobalIgnore: true },
+  });
+}
+
+async function saveAttachmentsForUi(headerMessageId, selectedKeys = null) {
+  const key = String(headerMessageId || "").trim();
+  if (!key) {
+    throw new Error("Missing message id.");
+  }
+  const settings = await getAttachmentSettings();
+  if (!settings.defaultPath) {
+    throw new Error("Attachment path not configured.");
+  }
+  const rendered = await browser.runtime.sendMessage({
+    type: "renderAttachmentPathByHeaderMessageId",
+    headerMessageId: key,
+    template: settings.defaultPath,
+  });
+  const directoryPath = String(rendered?.directoryPath || "").trim();
+  if (!directoryPath) {
+    throw new Error("Attachment path could not be rendered.");
+  }
+  const options = {
+    matcher: "",
+    syntax: "default",
+    useGlobalIgnore: true,
+    skipExisting: true,
+  };
+  if (Array.isArray(selectedKeys) && selectedKeys.length) {
+    options.selectedKeys = selectedKeys;
+  }
+  const result = await browser.runtime.sendMessage({
+    type: "saveAttachmentsByHeaderMessageId",
+    headerMessageId: key,
+    directoryPath,
+    options,
+  });
+  return { directoryPath, result };
+}
+
+function createAttachmentLinksContainer(email, options = {}) {
+  const container = document.createElement("div");
+  container.className = `attachment-links${options.compact ? " compact" : ""}`;
+  container.style.display = "none";
+  const headerMessageId = String(email?.doc_id || email?.headerMessageId || "").trim();
+  (async () => {
+    const settings = await getAttachmentSettings();
+    const configured = !!settings.defaultPath;
+    const showReason = !configured && options.showNotConfigured;
+    const ignorePatterns = parseIgnorePatterns(settings.lazyIgnore);
+    const attachmentNames = getAttachmentNamesFromEmail(email)
+      .filter((name) => !attachmentNameMatchesIgnore(name, ignorePatterns));
+    if (!attachmentNames.length) {
+      if (showReason) {
+        container.style.display = "block";
+        const msg = document.createElement("div");
+        msg.className = "attachment-empty";
+        msg.textContent = "Attachment path not configured.";
+        container.appendChild(msg);
+      }
+      return;
+    }
+    container.style.display = "block";
+    attachmentNames.forEach((attachmentName, index) => {
+      const row = document.createElement("div");
+      row.className = "attachment-row";
+      const prefix = document.createElement(index === 0 ? "button" : "span");
+      prefix.className = index === 0 ? "attachment-label attachment-label-btn" : "attachment-indent";
+      prefix.textContent = index === 0 ? "📎" : "";
+      if (index === 0) {
+        prefix.title = "Save all attachments and open folder";
+        prefix.addEventListener("click", async (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          try {
+            prefix.disabled = true;
+            if (!headerMessageId) {
+              throw new Error("Missing message id.");
+            }
+            const saved = await saveAttachmentsForUi(headerMessageId);
+            const directoryPath = String(saved.directoryPath || "").trim();
+            if (directoryPath) {
+              await openAttachmentPath(directoryPath);
+            }
+          } catch (e) {
+            console.error("[attachments.bulk]", e);
+          } finally {
+            prefix.disabled = false;
+          }
+        });
+      }
+      row.appendChild(prefix);
+      const fileBtn = document.createElement("button");
+      fileBtn.className = "attachment-link-btn";
+      fileBtn.textContent = attachmentName;
+      fileBtn.title = attachmentName;
+      fileBtn.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        try {
+          fileBtn.disabled = true;
+          if (!headerMessageId) {
+            throw new Error("Missing message id.");
+          }
+          const described = await describeAttachmentsForUi(headerMessageId);
+          const match = Array.isArray(described)
+            ? described.find((item) => !item.ignored && item.matches && String(item.name || "").trim() === attachmentName)
+            : null;
+          const selectedKeys = match?.key ? [match.key] : null;
+          const saved = await saveAttachmentsForUi(headerMessageId, selectedKeys);
+          const directoryPath = String(saved.directoryPath || "").trim();
+          if (directoryPath) {
+            await openAttachmentPath(directoryPath);
+          }
+        } catch (e) {
+          console.error("[attachments.click]", e);
+        } finally {
+          fileBtn.disabled = false;
+        }
+      });
+      row.appendChild(fileBtn);
+      container.appendChild(row);
+    });
+    if (showReason) {
+      const msg = document.createElement("span");
+      msg.className = "attachment-empty";
+      msg.textContent = "Attachment path not configured.";
+      container.appendChild(msg);
+    }
+  })();
+  return container;
+}
+
 /* ── State ── */
 
 let tasks = [];           // Array of task summary objects from /task/list
@@ -632,6 +862,20 @@ function attachEmailHoverPopup(targets, email) {
   const els = Array.isArray(targets) ? targets.filter(Boolean) : [targets];
   if (els.length === 0) return;
   const state = { popup: null, hideTimer: null };
+  const positionPopup = (triggerEl) => {
+    if (!state.popup) return;
+    const rect = (triggerEl || els[0]).getBoundingClientRect();
+    const margin = 12;
+    const popupRect = state.popup.getBoundingClientRect();
+    let left = rect.left + 28;
+    let top = rect.bottom + 8;
+    const maxLeft = window.innerWidth - popupRect.width - margin;
+    const maxTop = window.innerHeight - popupRect.height - margin;
+    left = Math.max(margin, Math.min(left, Math.max(margin, maxLeft)));
+    top = Math.max(margin, Math.min(top, Math.max(margin, maxTop)));
+    state.popup.style.left = left + "px";
+    state.popup.style.top = top + "px";
+  };
   const removePopup = () => {
     if (state.hideTimer) {
       clearTimeout(state.hideTimer);
@@ -657,9 +901,7 @@ function attachEmailHoverPopup(targets, email) {
     state.popup.addEventListener("mouseleave", dismissPopup);
     document.body.appendChild(state.popup);
     activeEmailHoverPopup = state;
-    const rect = (ev.currentTarget || ev.target || els[0]).getBoundingClientRect();
-    state.popup.style.left = Math.max(0, rect.left + 120) + "px";
-    state.popup.style.top = Math.max(0, rect.top - 2) + "px";
+    positionPopup(ev.currentTarget || ev.target || els[0]);
     try {
       const base = await getServerBase();
       const resp = await fetch(`${base}/admin/email_detail`, {
@@ -690,19 +932,26 @@ function attachEmailHoverPopup(targets, email) {
       if (detail.cc) lines.push("Cc: " + detail.cc);
       if (detail.subject) lines.push("Subject: " + detail.subject);
       if (detail.email_date) lines.push("Date: " + formatLocalDateTime(detail.email_date));
-      if (detail.attachments && detail.attachments.length) lines.push("Attachments: " + detail.attachments.join(", "));
       if (detail.action_score != null) lines.push("Action: " + detail.action_score + "/100");
       if (detail.importance_score != null) lines.push("Importance: " + detail.importance_score + "/100");
       if (detail.reply_by) lines.push("Reply by: " + formatLocalDate(detail.reply_by));
+      const folder = String(detail.folder || detail.folder_name || detail.mailbox || "").trim();
+      if (folder) lines.push("Folder: " + folder);
       lines.push(detail.processed ? "✔ Processed" : "✗ Not processed");
       if (detail.body_text) {
         lines.push("───────────");
         lines.push(detail.body_text);
       }
-      state.popup.textContent = lines.join("\n");
+      const textBlock = document.createElement("div");
+      textBlock.className = "email-hover-text";
+      textBlock.textContent = lines.join("\n");
+      state.popup.appendChild(textBlock);
+      state.popup.appendChild(createAttachmentLinksContainer(email, { showNotConfigured: true, saveIfMissing: true, compact: true }));
+      positionPopup(ev.currentTarget || ev.target || els[0]);
     } catch (_) {
       if (activeEmailHoverPopup === state && state.popup && state.popup.parentNode) {
         state.popup.textContent = "(no ingested data)";
+        positionPopup(ev.currentTarget || ev.target || els[0]);
       }
     }
   };
@@ -726,6 +975,9 @@ function buildEmailRow(e) {
   const row = document.createElement("div");
   row.className = "mh-email-row";
   row.style.position = "relative";
+
+  const main = document.createElement("div");
+  main.className = "mh-email-row-main";
 
   const sender = (e.sender || "").replace(/<[^>]+>/g, "").trim() || e.doc_id;
   const subject = e.subject || "(no subject)";
@@ -770,14 +1022,16 @@ function buildEmailRow(e) {
   });
   attachEmailHoverPopup([link, tankBtn], e);
 
-  row.appendChild(link);
+  main.appendChild(link);
   if (date) {
     const dateSpan = document.createElement("span");
     dateSpan.className = "email-date";
     dateSpan.textContent = formatLocalDateTime(date);
-    row.appendChild(dateSpan);
+    main.appendChild(dateSpan);
   }
-  row.appendChild(tankBtn);
+  main.appendChild(tankBtn);
+  row.appendChild(main);
+  row.appendChild(createAttachmentLinksContainer(e));
   return row;
 }
 
@@ -1435,7 +1689,6 @@ async function bulkRecompute(taskIds) {
 
 async function updateTaskStatus(newStatus) {
   if (!activeTask) return;
-  if (newStatus === "dismissed" && !confirm("Dismiss this task?")) return;
   if (newStatus === "delete") {
     return deleteTask(activeTaskId, activeTask.title);
   }
@@ -1620,6 +1873,7 @@ async function loadFyiList() {
     date: item.date || "",
     sender: item.sender || "",
     subject: item.subject || "",
+    attachments: Array.isArray(item.attachments) ? item.attachments : [],
   })));
   try {
     const base = await getServerBase();
@@ -1640,6 +1894,7 @@ async function loadFyiList() {
     date: item.date || "",
     sender: item.sender || "",
     subject: item.subject || "",
+    attachments: Array.isArray(item.attachments) ? item.attachments : [],
   })));
   return prevSignature !== nextSignature;
 }
@@ -1885,8 +2140,18 @@ function showFyiContextMenu(ev, docId) {
   }, 0);
 }
 
-function renderFyiPane() {
+function syncFyiSelectionClasses(list) {
+  if (!list) return;
+  for (const li of list.querySelectorAll("li[data-doc-id]")) {
+    const docId = String(li.dataset.docId || "");
+    li.classList.toggle("selected", selectedFyiIds.has(docId));
+  }
+}
+
+function renderFyiPane(options = {}) {
   const pane = document.getElementById("midPane");
+  const previousList = pane.querySelector(".fyi-list");
+  const preservedScrollTop = options.preserveScroll && previousList ? previousList.scrollTop : 0;
   pane.innerHTML = "";
   pane.style.display = "flex";
   pane.style.flexDirection = "column";
@@ -1902,7 +2167,7 @@ function renderFyiPane() {
   sortBtn.textContent = fyiSortAsc ? "Oldest first" : "Newest first";
   sortBtn.addEventListener("click", () => {
     fyiSortAsc = !fyiSortAsc;
-    renderFyiPane();
+    renderFyiPane({ preserveScroll: true });
   });
   toolbar.appendChild(title);
   toolbar.appendChild(count);
@@ -1923,18 +2188,50 @@ function renderFyiPane() {
   const items = sortFyiEntries(fyiEntries);
   items.forEach((item, idx) => {
     const li = document.createElement("li");
+    li.dataset.docId = item.doc_id || "";
     if (selectedFyiIds.has(item.doc_id)) li.classList.add("selected");
+
+    const actions = document.createElement("div");
+    actions.className = "fyi-actions";
+    const createBtn = document.createElement("button");
+    createBtn.className = "fyi-create-btn";
+    createBtn.title = "Create task";
+    createBtn.textContent = "⚙";
+    createBtn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      await createTaskFromFyi(item.doc_id, true);
+    });
+    const processedBtn = document.createElement("button");
+    processedBtn.className = "fyi-process-btn";
+    processedBtn.title = "Mark as processed";
+    processedBtn.textContent = "✓";
+    processedBtn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      await markFyiProcessed(item.doc_id);
+    });
+    actions.appendChild(createBtn);
+    actions.appendChild(processedBtn);
+    li.appendChild(actions);
+
+    const previewIcon = document.createElement("span");
+    previewIcon.className = "fyi-preview-icon";
+    previewIcon.textContent = "🗒️";
+    previewIcon.title = "Preview email";
+    li.appendChild(previewIcon);
     const text = document.createElement("div");
     text.className = "fyi-summary";
-    text.textContent = item.summary || "(no summary)";
+    const summaryText = document.createElement("div");
+    summaryText.textContent = item.summary || "(no summary)";
+    text.appendChild(summaryText);
     li.appendChild(text);
 
     if (item.date) {
       const dateEl = document.createElement("span");
       dateEl.className = "fyi-date";
       dateEl.textContent = formatLocalDateTime(item.date);
-      text.appendChild(dateEl);
+      summaryText.appendChild(dateEl);
     }
+    text.appendChild(createAttachmentLinksContainer(item));
 
     li.addEventListener("click", (ev) => {
       if (ev.shiftKey && lastClickedFyiIdx >= 0) {
@@ -1952,7 +2249,7 @@ function renderFyiPane() {
         selectedFyiIds.add(item.doc_id);
         lastClickedFyiIdx = idx;
       }
-      renderFyiPane();
+      syncFyiSelectionClasses(list);
     });
 
     li.addEventListener("contextmenu", (ev) => {
@@ -1960,37 +2257,20 @@ function renderFyiPane() {
         selectedFyiIds.clear();
         selectedFyiIds.add(item.doc_id);
         lastClickedFyiIdx = idx;
-        renderFyiPane();
+        syncFyiSelectionClasses(list);
       }
       showFyiContextMenu(ev, item.doc_id);
     });
 
-    attachEmailHoverPopup(li, item);
-
-    const actions = document.createElement("div");
-    actions.className = "fyi-actions";
-    const createBtn = document.createElement("button");
-    createBtn.className = "fyi-create-btn";
-    createBtn.title = "Force task";
-    createBtn.textContent = "Force task";
-    createBtn.addEventListener("click", async (ev) => {
-      ev.stopPropagation();
-      await createTaskFromFyi(item.doc_id, true);
-    });
-    const processedBtn = document.createElement("button");
-    processedBtn.className = "fyi-process-btn";
-    processedBtn.title = "Mark processed";
-    processedBtn.textContent = "Processed";
-    processedBtn.addEventListener("click", async (ev) => {
-      ev.stopPropagation();
-      await markFyiProcessed(item.doc_id);
-    });
-    actions.appendChild(createBtn);
-    actions.appendChild(processedBtn);
-    li.appendChild(actions);
+    attachEmailHoverPopup(previewIcon, item);
     list.appendChild(li);
   });
   pane.appendChild(list);
+  if (options.preserveScroll) {
+    requestAnimationFrame(() => {
+      list.scrollTop = preservedScrollTop;
+    });
+  }
 }
 
 /* ── Send / Compose ── */
