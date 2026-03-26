@@ -37,9 +37,28 @@
   // --- Request messages ---
   const messages = data.messages || [];
   if (messages.length > 0) {
+    const promptKey = String(data.prompt_key || "").trim();
+    const header = document.createElement("div");
+    header.className = "section-header";
+
     const h2 = document.createElement("h2");
     h2.textContent = `Request Messages (${messages.length})`;
-    container.appendChild(h2);
+    header.appendChild(h2);
+
+    if (promptKey) {
+      const sourceLink = document.createElement("a");
+      sourceLink.href = "#";
+      sourceLink.className = "source-link";
+      sourceLink.textContent = "Source code";
+      sourceLink.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        const url = browser.runtime.getURL(`ui/options.html?prompt=${encodeURIComponent(promptKey)}`);
+        await browser.tabs.create({ url });
+      });
+      header.appendChild(sourceLink);
+    }
+
+    container.appendChild(header);
 
     const copyReqBtn = document.createElement("button");
     copyReqBtn.className = "copy-btn";

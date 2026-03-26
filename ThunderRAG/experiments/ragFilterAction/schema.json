@@ -58,6 +58,65 @@
         ]
       },
       {
+        "name": "setAttachmentSettings",
+        "type": "function",
+        "description": "Update Thunderbird-side attachment settings cache from add-on local storage. Accepts a JSON string with filterSyntax, defaultPath, and lazyIgnore.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "settingsJson",
+            "type": "string",
+            "description": "JSON string for attachment settings."
+          }
+        ]
+      },
+      {
+        "name": "renderAttachmentPathByMessageId",
+        "type": "function",
+        "description": "Render an attachment path template for a messageId using Thunderbird-side message metadata.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "messageId",
+            "type": "integer",
+            "description": "Internal Thunderbird numeric message ID."
+          },
+          {
+            "name": "template",
+            "type": "string",
+            "description": "Attachment path template."
+          }
+        ]
+      },
+      {
+        "name": "describeAttachmentsByMessageId",
+        "type": "function",
+        "description": "Describe attachments for a message and optionally annotate them against a target directory. Returns descriptor objects with match/ignore/existence flags.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "messageId",
+            "type": "integer",
+            "description": "Internal Thunderbird numeric message ID."
+          },
+          {
+            "name": "directoryPath",
+            "type": "string",
+            "description": "Optional directory path used to compute preferred attachment file paths."
+          },
+          {
+            "name": "headerMessageId",
+            "type": "string",
+            "description": "Optional RFC822 Message-Id header value used for logging."
+          },
+          {
+            "name": "optionsJson",
+            "type": "string",
+            "description": "JSON string controlling matcher, syntax, ignore behavior, and related options."
+          }
+        ]
+      },
+      {
         "name": "saveAttachmentsByMessageId",
         "type": "function",
         "description": "Save attachments for an already-resolved Thunderbird numeric messageId into the given directory path. Returns {saved, directory, attachments}.",
@@ -77,6 +136,24 @@
             "name": "headerMessageId",
             "type": "string",
             "description": "Optional RFC822 Message-Id header value used for logging."
+          },
+          {
+            "name": "optionsJson",
+            "type": "string",
+            "description": "JSON string controlling matcher, syntax, ignore behavior, selected attachment keys, and save options."
+          }
+        ]
+      },
+      {
+        "name": "openFileManagerForPath",
+        "type": "function",
+        "description": "Reveal a file or directory in Thunderbird's native file manager integration.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "path",
+            "type": "string",
+            "description": "Absolute file or directory path to reveal/open."
           }
         ]
       },

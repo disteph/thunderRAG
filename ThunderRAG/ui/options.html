@@ -203,6 +203,30 @@
     <strong>Mark processed:</strong> <code id="endpointMarkProcessed">http://localhost:8080/admin/mark_processed</code>
   </div>
 
+  <h2>Attachments</h2>
+
+  <div class="field">
+    <label for="attachmentFilterSyntax">Default filter matcher syntax</label>
+    <select id="attachmentFilterSyntax">
+      <option value="pcre">PCRE-like regex</option>
+      <option value="glob">Glob wildcards</option>
+      <option value="posix_ere">POSIX ERE</option>
+    </select>
+    <div class="hint">Used when a filter row leaves its syntax dropdown at Default.</div>
+  </div>
+
+  <div class="field">
+    <label for="attachmentDefaultPath">Default attachment path template</label>
+    <input id="attachmentDefaultPath" type="text" placeholder="~/Downloads/{{account}}/{{yyyy}}-{{mm}}-{{dd}} {{subject}}" />
+    <div class="hint">Used by lazy ThunderRAG pane access and by the save-attachments filter when its path field is empty.</div>
+  </div>
+
+  <div class="field">
+    <label for="attachmentLazyIgnore">Global attachment ignore patterns</label>
+    <textarea id="attachmentLazyIgnore" rows="4" placeholder="smime.p7m&#10;signature.asc&#10;*.ics"></textarea>
+    <div class="hint">One gitignore-style glob per line. Always applies to lazy pane access, and each filter row can opt in/out via its checkbox.</div>
+  </div>
+
   <!-- ===== Section 1b: Voice settings (stored locally) ===== -->
   <h2>Voice (STT / TTS)</h2>
   <div class="hint" style="margin-bottom:12px;">Voice uses the RAG-o-Mail server above. STT requires a Whisper.cpp server (configured in server settings below). TTS requires Piper (configured in server settings below). When disabled, voice buttons are hidden from the chat UI.</div>

@@ -68,6 +68,15 @@ try {
   AttachmentInfo = null;
 }
 
+var MessageArchiver;
+try {
+  ({ MessageArchiver } = ChromeUtils.importESModule(
+    "resource:///modules/MessageArchiver.sys.mjs"
+  ));
+} catch (_e) {
+  MessageArchiver = null;
+}
+
 /* Ensure web-platform globals (fetch, Blob, etc.) are available in this privileged scope. */
 if (ChromeUtils.importGlobalProperties) {
   ChromeUtils.importGlobalProperties(["fetch", "Blob", "Headers", "TextDecoder", "TextEncoder"]);
@@ -99,6 +108,7 @@ const ADDON_ID = "rag-filter-action@example.com";
 /* Unique ID for the custom filter action registered with MailServices.filters. */
 const ACTION_ID = "rag-filter-action@example.com#PostMessageToEndpoint";
 const ACTION_SAVE_ATTACHMENTS_ID = "rag-filter-action@example.com#SaveAttachmentsToPath";
+const ACTION_ARCHIVE_ID = "rag-filter-action@example.com#ArchiveMessage";
 
 /* Observer that patches newly-opened FilterEditor windows (see patchFilterEditorWindow). */
 let filterEditorObserver = null;
@@ -615,21 +625,74 @@ async function saveAttachmentsFromMsgHdr(msgHdr, directoryPath, headerMessageId 
   const messageUri = msgHdr.folder?.getUriForMsg ? msgHdr.folder.getUriForMsg(msgHdr) : "";
   let saved = 0;
   const files = [];
+  const renameOld = !!options.renameOld;
   for (const item of toSave) {
     if (item.exists && options.skipExisting) {
-      files.push({ key: item.key, name: item.name, path: item.path, savedNow: false, existed: true });
+      files.push({ key: item.key, name: item.name, path: item.path, savedNow: false, existed: true, skipped: "skipExisting" });
       continue;
     }
-    const destination = item.exists && !options.skipExisting
-      ? uniqueDestinationFile(directory, item.safeName)
-      : preferredDestinationFile(directory, item.safeName);
+    const preferred = preferredDestinationFile(directory, item.safeName);
+    if (!item.exists) {
+      try {
+        await saveNativeAttachmentToFile(item.attachment, preferred, messageUri);
+        saved++;
+        files.push({ key: item.key, name: item.name, path: preferred.path, savedNow: true, existed: false });
+        consoleService.logStringMessage(
+          `[ragFilterAction] saveAttachments: saved ${preferred.path} messageId=${headerMessageId || ""}`
+        );
+      } catch (e) {
+        try {
+          consoleService.logStringMessage(
+            `[ragFilterAction] saveAttachments: native save failed name=${item.name} url=${item.attachment?.url || ""} messageId=${headerMessageId || ""}: ${e}`
+          );
+        } catch (_e) {
+        }
+      }
+      continue;
+    }
+    const tempDest = uniqueDestinationFile(directory, item.safeName);
     try {
-      await saveNativeAttachmentToFile(item.attachment, destination, messageUri);
-      saved++;
-      files.push({ key: item.key, name: item.name, path: destination.path, savedNow: true, existed: item.exists });
-      consoleService.logStringMessage(
-        `[ragFilterAction] saveAttachments: saved ${destination.path} messageId=${headerMessageId || ""}`
-      );
+      await saveNativeAttachmentToFile(item.attachment, tempDest, messageUri);
+      if (filesAreIdentical(preferred, tempDest)) {
+        try { tempDest.remove(false); } catch (_e) {}
+        files.push({ key: item.key, name: item.name, path: preferred.path, savedNow: false, existed: true, skipped: "identical" });
+        consoleService.logStringMessage(
+          `[ragFilterAction] saveAttachments: skipped identical ${preferred.path} messageId=${headerMessageId || ""}`
+        );
+      } else if (renameOld) {
+        const archivedOld = uniqueDestinationFile(directory, item.safeName);
+        try {
+          preferred.renameTo(directory, archivedOld.leafName);
+        } catch (renameErr) {
+          consoleService.logStringMessage(
+            `[ragFilterAction] saveAttachments: rename-old failed ${preferred.path} → ${archivedOld.leafName}: ${renameErr}`
+          );
+          saved++;
+          files.push({ key: item.key, name: item.name, path: tempDest.path, savedNow: true, existed: true });
+          continue;
+        }
+        try {
+          tempDest.renameTo(directory, preferred.leafName);
+        } catch (moveErr) {
+          consoleService.logStringMessage(
+            `[ragFilterAction] saveAttachments: move-new failed ${tempDest.path} → ${preferred.leafName}: ${moveErr}`
+          );
+          saved++;
+          files.push({ key: item.key, name: item.name, path: tempDest.path, savedNow: true, existed: true });
+          continue;
+        }
+        saved++;
+        files.push({ key: item.key, name: item.name, path: preferred.path, savedNow: true, existed: true, renamedOld: archivedOld.path });
+        consoleService.logStringMessage(
+          `[ragFilterAction] saveAttachments: saved ${preferred.path} (old → ${archivedOld.leafName}) messageId=${headerMessageId || ""}`
+        );
+      } else {
+        saved++;
+        files.push({ key: item.key, name: item.name, path: tempDest.path, savedNow: true, existed: true });
+        consoleService.logStringMessage(
+          `[ragFilterAction] saveAttachments: saved ${tempDest.path} messageId=${headerMessageId || ""}`
+        );
+      }
     } catch (e) {
       try {
         consoleService.logStringMessage(
@@ -678,6 +741,7 @@ function enqueueAttachmentSave(headerMessageId, directoryPath, options = {}) {
     headerMessageId,
     directoryPath,
     matcher: String(options.matcher || "").trim(),
+    renameOld: !!options.renameOld,
     syntax: normalizeAttachmentSyntax(options.syntax, true),
     useGlobalIgnore: shouldApplyGlobalIgnore(options.useGlobalIgnore, true),
     timestamp: Date.now(),
@@ -1294,9 +1358,23 @@ function createSaveAttachmentsTargetNode(win) {
   ignoreLabel.appendChild(ignoreCb);
   ignoreLabel.appendChild(ignoreText);
 
+  const renameOldLabel = doc.createElement("label");
+  renameOldLabel.style.display = "flex";
+  renameOldLabel.style.alignItems = "center";
+  renameOldLabel.style.gap = "4px";
+  renameOldLabel.style.fontSize = "11px";
+  const renameOldCb = doc.createElement("input");
+  renameOldCb.type = "checkbox";
+  renameOldCb.checked = false;
+  const renameOldText = doc.createElement("span");
+  renameOldText.textContent = "Rename old on conflict";
+  renameOldLabel.appendChild(renameOldCb);
+  renameOldLabel.appendChild(renameOldText);
+
   topRow.appendChild(matcher);
   topRow.appendChild(syntax);
   topRow.appendChild(ignoreLabel);
+  topRow.appendChild(renameOldLabel);
 
   const path = doc.createElement("input");
   path.type = "text";
@@ -1313,6 +1391,7 @@ function createSaveAttachmentsTargetNode(win) {
     matcher.value = parsed.matcher || "";
     syntax.value = normalizeAttachmentSyntax(parsed.syntax, true);
     ignoreCb.checked = shouldApplyGlobalIgnore(parsed.useGlobalIgnore, true);
+    renameOldCb.checked = !!parsed.renameOld;
     path.value = parsed.path || "";
     path.placeholder = attachmentSettingsCache.defaultPath || "Default attachment path from add-on settings";
   };
@@ -1320,13 +1399,15 @@ function createSaveAttachmentsTargetNode(win) {
     matcher: matcher.value || "",
     syntax: syntax.value || "default",
     useGlobalIgnore: ignoreCb.checked,
+    renameOld: renameOldCb.checked,
     path: path.value || "",
   });
   root.getDisplayValue = () => {
     const matcherText = String(matcher.value || "").trim() || "*";
     const syntaxText = syntax.options[syntax.selectedIndex]?.textContent || "Default";
     const pathText = String(path.value || "").trim() || (attachmentSettingsCache.defaultPath ? `[default: ${attachmentSettingsCache.defaultPath}]` : "[default path]");
-    return `${matcherText} · ${syntaxText} · ${ignoreCb.checked ? "ignore on" : "ignore off"} · ${pathText}`;
+    const renameText = renameOldCb.checked ? "rename old" : "rename new";
+    return `${matcherText} · ${syntaxText} · ${ignoreCb.checked ? "ignore on" : "ignore off"} · ${renameText} · ${pathText}`;
   };
 
   Object.defineProperty(hidden, "value", {
@@ -1346,6 +1427,32 @@ function createSaveAttachmentsTargetNode(win) {
   });
 
   root.loadActionValue("");
+
+  // Built-in target elements (e.g. ruleactiontarget-forwardto used by Ingest)
+  // call updateParentNode() from their connectedCallback, which triggers
+  // initWithAction() → actionItem.children[0].value = strValue.
+  // Our plain div has no connectedCallback, so we replicate that call here
+  // on the next tick (after the wrapper has attached us to the DOM).
+  win.setTimeout(() => {
+    try {
+      const wrapper = root.closest("ruleactiontarget-wrapper") || root.parentElement;
+      if (!wrapper) {
+        return;
+      }
+      const parentNode = wrapper.closest("richlistitem");
+      if (!parentNode || !parentNode.hasAttribute("initialActionIndex")) {
+        return;
+      }
+      const actionIndex = parentNode.getAttribute("initialActionIndex");
+      const filterAction = win.gFilter.getActionAt(actionIndex);
+      parentNode.initWithAction(filterAction);
+      if (typeof parentNode.updateRemoveButton === "function") {
+        parentNode.updateRemoveButton();
+      }
+    } catch (_e) {
+    }
+  }, 0);
+
   return root;
 }
 
@@ -1380,6 +1487,22 @@ function patchFilterEditorWindow(win) {
         if (type === ACTION_SAVE_ATTACHMENTS_ID) {
           return createSaveAttachmentsTargetNode(win);
         }
+        if (type === ACTION_ARCHIVE_ID) {
+          const node = win.document.createElement("div");
+          node.style.display = "flex";
+          node.style.alignItems = "center";
+          node.style.padding = "2px 4px";
+          node.style.fontSize = "11px";
+          node.style.color = "#666";
+          const hidden = win.document.createElement("input");
+          hidden.type = "hidden";
+          hidden.value = "";
+          const label = win.document.createElement("span");
+          label.textContent = "Uses account archive settings (folder, granularity)";
+          node.appendChild(hidden);
+          node.appendChild(label);
+          return node;
+        }
         return originalGetChildNode.call(this, type);
       };
       Wrapper.prototype.__ragFilterActionPatched = true;
@@ -1387,7 +1510,7 @@ function patchFilterEditorWindow(win) {
 
     for (const wrapper of win.document.querySelectorAll("ruleactiontarget-wrapper")) {
       const type = wrapper.getAttribute("type");
-      if (type === ACTION_ID || type === ACTION_SAVE_ATTACHMENTS_ID) {
+      if (type === ACTION_ID || type === ACTION_SAVE_ATTACHMENTS_ID || type === ACTION_ARCHIVE_ID) {
         wrapper.removeAttribute("type");
         wrapper.setAttribute("type", type);
       }
@@ -1589,7 +1712,7 @@ function zeroPad2(n) {
 }
 
 function parseAttachmentSaveActionValue(actionValue) {
-  const defaults = { matcher: "", syntax: "default", useGlobalIgnore: true, path: "" };
+  const defaults = { matcher: "", syntax: "default", useGlobalIgnore: true, path: "", renameOld: false };
   const raw = String(actionValue || "").trim();
   if (!raw) {
     return { ...defaults };
@@ -1604,6 +1727,7 @@ function parseAttachmentSaveActionValue(actionValue) {
       syntax: normalizeAttachmentSyntax(parsed?.syntax, true),
       useGlobalIgnore: parsed?.useGlobalIgnore !== false,
       path: String(parsed?.path || "").trim(),
+      renameOld: !!parsed?.renameOld,
     };
   } catch (_e) {
     return { ...defaults, path: raw };
@@ -1727,6 +1851,7 @@ function parseAndValidateAttachmentSaveActionValue(actionValue) {
       matcher: matcherCheck.matcher,
       syntax: normalizeAttachmentSyntax(parsed.syntax, true),
       useGlobalIgnore: shouldApplyGlobalIgnore(parsed.useGlobalIgnore, true),
+      renameOld: !!parsed.renameOld,
       path: String(parsed.path || "").trim(),
       effectiveTemplate: templateCheck.template,
     },
@@ -1834,6 +1959,67 @@ function uniqueDestinationFile(dir, filename) {
     }
   }
   throw new Error(`Could not allocate unique filename for ${filename}`);
+}
+
+function readFileBytes(file) {
+  const fis = Cc["@mozilla.org/network/file-input-stream;1"].createInstance(Ci.nsIFileInputStream);
+  const bis = Cc["@mozilla.org/binaryinputstream;1"].createInstance(Ci.nsIBinaryInputStream);
+  try {
+    fis.init(file, 0x01, 0, 0);
+    bis.setInputStream(fis);
+    const len = file.fileSize;
+    if (len <= 0) return [];
+    const bytes = bis.readByteArray(len);
+    return bytes;
+  } finally {
+    try { bis.close(); } catch (_e) {
+      try { fis.close(); } catch (_e2) {}
+    }
+  }
+}
+
+function filesAreIdentical(fileA, fileB) {
+  try {
+    if (!fileA.exists() || !fileB.exists()) {
+      consoleService.logStringMessage(
+        `[ragFilterAction] filesAreIdentical: exists check failed A=${fileA.exists()} B=${fileB.exists()}`
+      );
+      return false;
+    }
+    const sizeA = fileA.fileSize;
+    const sizeB = fileB.fileSize;
+    if (sizeA !== sizeB) {
+      consoleService.logStringMessage(
+        `[ragFilterAction] filesAreIdentical: size mismatch A=${sizeA} B=${sizeB}`
+      );
+      return false;
+    }
+    const a = readFileBytes(fileA);
+    const b = readFileBytes(fileB);
+    if (a.length !== b.length) {
+      consoleService.logStringMessage(
+        `[ragFilterAction] filesAreIdentical: read length mismatch A=${a.length} B=${b.length} (fileSize=${sizeA})`
+      );
+      return false;
+    }
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) {
+        consoleService.logStringMessage(
+          `[ragFilterAction] filesAreIdentical: byte mismatch at offset ${i} A=${a[i]} B=${b[i]} (len=${a.length})`
+        );
+        return false;
+      }
+    }
+    consoleService.logStringMessage(
+      `[ragFilterAction] filesAreIdentical: IDENTICAL ${fileA.path} vs ${fileB.path} (${sizeA} bytes)`
+    );
+    return true;
+  } catch (e) {
+    consoleService.logStringMessage(
+      `[ragFilterAction] filesAreIdentical: exception: ${e}`
+    );
+    return false;
+  }
 }
 
 function writeBytesToFile(file, bytes) {
@@ -2549,6 +2735,7 @@ function makeSaveAttachmentsAction() {
                 matcher: parsed.config.matcher,
                 syntax: parsed.config.syntax,
                 useGlobalIgnore: parsed.config.useGlobalIgnore,
+                renameOld: parsed.config.renameOld,
               });
               consoleService.logStringMessage(
                 `[ragFilterAction] saveAttachments: queued id=${item.id} directory=${directoryPath} matcher=${item.matcher} syntax=${item.syntax} useGlobalIgnore=${item.useGlobalIgnore ? "1" : "0"} messageId=${headerMessageId}`
@@ -2565,6 +2752,85 @@ function makeSaveAttachmentsAction() {
           safeFinishCopy(copyListener);
         }
       })();
+    },
+
+    get isAsync() {
+      return true;
+    },
+
+    get needsBody() {
+      return false;
+    },
+
+    QueryInterface: ChromeUtils.generateQI(["nsIMsgFilterCustomAction"]),
+  };
+}
+
+let archivePromiseChain = Promise.resolve();
+
+function archiveMessagesAsync(msgHdrs) {
+  return new Promise((resolve, reject) => {
+    if (!MessageArchiver) {
+      reject(new Error("MessageArchiver module not available"));
+      return;
+    }
+    if (!msgHdrs.length) {
+      resolve();
+      return;
+    }
+    try {
+      const archiver = new MessageArchiver();
+      archiver.oncomplete = () => resolve();
+      archiver.archiveMessages(msgHdrs);
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+function makeArchiveAction() {
+  return {
+    id: ACTION_ARCHIVE_ID,
+
+    get name() {
+      return "ThunderRAG: Archive";
+    },
+
+    isValidForType(type, scope) {
+      return true;
+    },
+
+    validateActionValue(actionValue, actionFolder, filterType) {
+      return null;
+    },
+
+    allowDuplicates: false,
+
+    applyAction(msgHdrs, actionValue, copyListener, filterType, msgWindow) {
+      const hdrs = Array.from(msgHdrs);
+      archivePromiseChain = archivePromiseChain.then(async () => {
+        try {
+          if (!MessageArchiver) {
+            throw new Error("MessageArchiver module not available");
+          }
+          if (!MessageArchiver.canArchive(hdrs, true)) {
+            consoleService.logStringMessage(
+              `[ragFilterAction] archive: cannot archive ${hdrs.length} message(s) — archiving disabled for account`
+            );
+            return;
+          }
+          await archiveMessagesAsync(hdrs);
+          consoleService.logStringMessage(
+            `[ragFilterAction] archive: archived ${hdrs.length} message(s)`
+          );
+        } catch (e) {
+          consoleService.logStringMessage(
+            `[ragFilterAction] archive: failed: ${e}`
+          );
+        } finally {
+          safeFinishCopy(copyListener);
+        }
+      });
     },
 
     get isAsync() {
@@ -2607,6 +2873,17 @@ function ensureRegistered(logPrefix) {
     }
   } else {
     consoleService.logStringMessage(`[ragFilterAction] ${logPrefix}: save-attachments action already registered`);
+  }
+
+  if (!hasCustomAction(filterService, ACTION_ARCHIVE_ID)) {
+    try {
+      filterService.addCustomAction(makeArchiveAction());
+      consoleService.logStringMessage(`[ragFilterAction] ${logPrefix}: archive action registered`);
+    } catch (e) {
+      consoleService.logStringMessage(`[ragFilterAction] ${logPrefix}: addCustomAction(archive) failed: ${e}`);
+    }
+  } else {
+    consoleService.logStringMessage(`[ragFilterAction] ${logPrefix}: archive action already registered`);
   }
 
   try {
@@ -2731,6 +3008,7 @@ var ragFilterAction = class extends ExtensionCommon.ExtensionAPI {
             matcher: it.matcher,
             syntax: it.syntax,
             useGlobalIgnore: it.useGlobalIgnore,
+            renameOld: !!it.renameOld,
             timestamp: it.timestamp,
           }));
         },

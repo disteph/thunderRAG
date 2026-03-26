@@ -445,6 +445,7 @@ function setAssistantMessage(bubble, answer, sources, retrievalInfo, llmCalls) {
         localStorage.setItem("llm_debug_data", JSON.stringify({
           label: chatCall.label,
           model: chatCall.model,
+          prompt_key: chatCall.prompt_key,
           messages: chatCall.messages,
           raw_response: chatCall.response,
         }));
