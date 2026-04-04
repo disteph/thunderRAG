@@ -386,7 +386,7 @@ let ollama_chat ~client ~sw ?(label = "") ?(stats : call_stats option) ?(model =
    would restart the visible output. *)
 let ollama_chat_stream ~client ~sw:_ ?(label = "") ?(stats : call_stats option)
     ?(model = "") ~(messages : Yojson.Safe.t list)
-    ~(on_token : string -> unit) () : (string, string) result =
+    ~(on_token : string -> unit) ?on_thinking () : (string, string) result =
   let t0 = Unix.gettimeofday () in
   let raw_model = if String.trim model <> "" then String.trim model else !ollama_llm_model in
   let effective_model, think_param = parse_think_suffix raw_model in
@@ -429,11 +429,12 @@ let ollama_chat_stream ~client ~sw:_ ?(label = "") ?(stats : call_stats option)
                       | Some (`Bool b) -> b | _ -> false in
                     (match List.assoc_opt "message" kv with
                     | Some (`Assoc mv) ->
-                        (if !rag_debug_ollama_chat then
-                          (match List.assoc_opt "thinking" mv with
-                           | Some (`String t) when String.trim t <> "" ->
-                               Printf.printf "[stream.thinking] %s" t
-                           | _ -> ()));
+                        (match List.assoc_opt "thinking" mv with
+                         | Some (`String t) when String.trim t <> "" ->
+                             if !rag_debug_ollama_chat then
+                               Printf.printf "[stream.thinking] %s" t;
+                             (match on_thinking with Some f -> f t | None -> ())
+                         | _ -> ());
                         (match List.assoc_opt "content" mv with
                         | Some (`String s) when s <> "" ->
                             Buffer.add_string accumulated s;
@@ -5132,8 +5133,12 @@ let handler ~client ~sw ~clock _socket request body =
                           Eio.Stream.add stream (Some (sse_event (Yojson.Safe.to_string
                             (`Assoc [("type", `String "token"); ("content", `String chunk)]))))
                         in
+                        let on_thinking chunk =
+                          Eio.Stream.add stream (Some (sse_event (Yojson.Safe.to_string
+                            (`Assoc [("type", `String "thinking"); ("content", `String chunk)]))))
+                        in
                         ollama_chat_stream ~client ~sw ~label:"chat" ~stats:stats_chat_answer
-                          ~model:chat_model_override ~messages ~on_token ()
+                          ~model:chat_model_override ~messages ~on_token ~on_thinking ()
                     | None ->
                         ollama_chat ~client ~sw ~label:"chat" ~stats:stats_chat_answer
                           ~model:chat_model_override ~messages ()
@@ -7182,7 +7187,11 @@ let handler ~client ~sw ~clock _socket request body =
                       Eio.Stream.add stream (Some (sse_event (Yojson.Safe.to_string
                         (`Assoc [("type", `String "token"); ("content", `String chunk)]))))
                     in
-                    ollama_chat_stream ~client ~sw ~label:"task_chat" ~model:effective_model ~messages ~on_token ()
+                    let on_thinking chunk =
+                      Eio.Stream.add stream (Some (sse_event (Yojson.Safe.to_string
+                        (`Assoc [("type", `String "thinking"); ("content", `String chunk)]))))
+                    in
+                    ollama_chat_stream ~client ~sw ~label:"task_chat" ~model:effective_model ~messages ~on_token ~on_thinking ()
                 | None ->
                     ollama_chat ~client ~sw ~label:"task_chat" ~model:effective_model ~messages ()
               in

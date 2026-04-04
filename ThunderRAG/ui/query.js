@@ -774,10 +774,15 @@ async function onAsk() {
       // Get the answer element from the already-set-up bubble
       const answerEl = assistant.bubble.__rag?.answerEl || assistant.bubble;
 
+      // Thinking tokens are shown in a collapsible <details> above the answer.
+      let thinkingEl = null;
+      let thinkingText = "";
+
       while (true) {
         const { done: streamDone, value } = await reader.read();
         if (streamDone) break;
-        sseBuffer += decoder.decode(value, { stream: true });
+        const chunk = decoder.decode(value, { stream: true });
+        sseBuffer += chunk;
 
         // Parse complete SSE events (delimited by \n\n)
         let idx;
@@ -799,7 +804,28 @@ async function onAsk() {
           let evt;
           try { evt = JSON.parse(dataStr); } catch { continue; }
 
-          if (!eventType && evt.type === "token") {
+          if (!eventType && evt.type === "thinking") {
+            thinkingText += evt.content;
+            if (!thinkingEl) {
+              thinkingEl = document.createElement("details");
+              thinkingEl.className = "thinking-block";
+              const summary = document.createElement("summary");
+              summary.textContent = "Thinking\u2026";
+              thinkingEl.appendChild(summary);
+              const content = document.createElement("div");
+              content.className = "thinking-content";
+              thinkingEl.appendChild(content);
+              answerEl.parentElement.insertBefore(thinkingEl, answerEl);
+            }
+            const content = thinkingEl.querySelector(".thinking-content");
+            if (content) content.textContent = thinkingText;
+            scrollChatToBottom();
+          } else if (!eventType && evt.type === "token") {
+            // Close the thinking summary when answer tokens start
+            if (thinkingEl) {
+              thinkingEl.querySelector("summary").textContent = "Thinking";
+              thinkingEl.open = false;
+            }
             streamedText += evt.content;
             // Update answer area with streamed text
             if (typeof marked !== "undefined") {

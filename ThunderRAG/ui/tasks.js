@@ -1438,9 +1438,22 @@ async function sendMessage(inputEl) {
     let finalData = null;
     let buffer = "";
     let streamBubble = null;
+    let thinkingEl = null;
+    let thinkingText = "";
 
     // Find the typing indicator added by renderMidPane and prepare to replace it
     const chat = document.querySelector(".mid-chat");
+
+    // Helper: ensure the typing indicator is replaced with a real bubble
+    function ensureBubble() {
+      if (!streamBubble && chat) {
+        const typingRow = chat.querySelector(".msg-assistant:last-child");
+        if (typingRow) {
+          typingRow.innerHTML = '<div class="bubble"></div>';
+          streamBubble = typingRow.querySelector(".bubble");
+        }
+      }
+    }
 
     while (true) {
       const { done, value } = await reader.read();
@@ -1467,19 +1480,38 @@ async function sendMessage(inputEl) {
         let evt;
         try { evt = JSON.parse(dataStr); } catch { continue; }
 
-        if (!eventType && evt.type === "token") {
-          streamedText += evt.content;
-          // Lazily replace the typing indicator with a real bubble
-          if (!streamBubble && chat) {
-            const typingRow = chat.querySelector(".msg-assistant:last-child");
-            if (typingRow) {
-              typingRow.innerHTML = '<div class="bubble"></div>';
-              streamBubble = typingRow.querySelector(".bubble");
-            }
+        if (!eventType && evt.type === "thinking") {
+          thinkingText += evt.content;
+          ensureBubble();
+          if (!thinkingEl && streamBubble) {
+            thinkingEl = document.createElement("details");
+            thinkingEl.className = "thinking-block";
+            const summary = document.createElement("summary");
+            summary.textContent = "Thinking\u2026";
+            thinkingEl.appendChild(summary);
+            const content = document.createElement("div");
+            content.className = "thinking-content";
+            thinkingEl.appendChild(content);
+            streamBubble.appendChild(thinkingEl);
           }
+          if (thinkingEl) {
+            const content = thinkingEl.querySelector(".thinking-content");
+            if (content) content.textContent = thinkingText;
+          }
+          if (chat) chat.scrollTop = chat.scrollHeight;
+        } else if (!eventType && evt.type === "token") {
+          // Close thinking when answer tokens start
+          if (thinkingEl) {
+            thinkingEl.querySelector("summary").textContent = "Thinking";
+            thinkingEl.open = false;
+          }
+          streamedText += evt.content;
+          ensureBubble();
           if (streamBubble) {
             if (typeof marked !== "undefined") {
-              streamBubble.innerHTML = marked.parse(stripMarkers(streamedText));
+              streamBubble.innerHTML = (thinkingEl ? thinkingEl.outerHTML : "") + marked.parse(stripMarkers(streamedText));
+              // Re-acquire thinkingEl reference after innerHTML replacement
+              thinkingEl = streamBubble.querySelector(".thinking-block");
             } else {
               streamBubble.textContent = stripMarkers(streamedText);
             }

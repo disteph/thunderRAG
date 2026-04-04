@@ -385,6 +385,29 @@
         0%, 100% { opacity: 0.7; }
         50% { opacity: 1; }
       }
+      /* Thinking block (collapsible) */
+      .thinking-block {
+        margin-bottom: 8px;
+        border: 1px solid rgba(128, 128, 128, 0.25);
+        border-radius: 8px;
+        padding: 6px 10px;
+        font-size: 0.85em;
+        color: GrayText;
+      }
+      .thinking-block summary {
+        cursor: pointer;
+        font-style: italic;
+        user-select: none;
+      }
+      .thinking-content {
+        margin-top: 6px;
+        white-space: pre-wrap;
+        max-height: 300px;
+        overflow-y: auto;
+        font-family: monospace;
+        font-size: 0.9em;
+        line-height: 1.4;
+      }
     </style>
   </head>
   <body>
