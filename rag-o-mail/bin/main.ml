@@ -79,6 +79,54 @@ let json_headers =
   Http.Header.init_with "content-type" "application/json"
   |> fun h -> Http.Header.add h "connection" "close"
 
+let sse_headers =
+  Http.Header.of_list
+    [ ("content-type", "text/event-stream")
+    ; ("cache-control", "no-cache")
+    ; ("connection", "keep-alive")
+    ]
+
+(* Streaming body source: reads chunks from an Eio.Stream until None (EOF).
+   No String read_method → cohttp-eio uses Chunked transfer encoding. *)
+module Chunk_source = struct
+  type t = {
+    stream : string option Eio.Stream.t;
+    mutable pending : string;
+    mutable offset : int;
+  }
+
+  let single_read t dst =
+    if t.offset < String.length t.pending then begin
+      let avail = String.length t.pending - t.offset in
+      let len = min (Cstruct.length dst) avail in
+      Cstruct.blit_from_string t.pending t.offset dst 0 len;
+      t.offset <- t.offset + len;
+      len
+    end else
+      match Eio.Stream.take t.stream with
+      | None -> raise End_of_file
+      | Some chunk ->
+          t.pending <- chunk;
+          t.offset <- 0;
+          let len = min (Cstruct.length dst) (String.length chunk) in
+          Cstruct.blit_from_string chunk 0 dst 0 len;
+          t.offset <- len;
+          len
+
+  let read_methods = []
+  let create stream = { stream; pending = ""; offset = 0 }
+end
+
+let chunk_source_ops = Eio.Flow.Pi.source (module Chunk_source)
+let make_chunk_body (stream : string option Eio.Stream.t) : Cohttp_eio.Body.t =
+  Eio.Resource.T (Chunk_source.create stream, chunk_source_ops)
+
+let sse_event ?(event = "") (data : string) : string =
+  let buf = Buffer.create (String.length data + 30) in
+  if event <> "" then Buffer.add_string buf (Printf.sprintf "event: %s\n" event);
+  Buffer.add_string buf (Printf.sprintf "data: %s\n\n" data);
+  Buffer.contents buf
+
 let post_json_uri ~client ~sw:_ ~(uri : Uri.t) ~(body_json : string) : (Http.Response.t * string) =
   Eio.Switch.run @@ fun sw ->
   let body = Cohttp_eio.Body.of_string body_json in
@@ -243,9 +291,29 @@ let ollama_embed ~client ~sw ?(task : embed_task option) ?(label = "") ?(stats :
    | _ -> ());
   result
 
-let ollama_chat ~client ~sw ?(label = "") ?(stats : call_stats option) ?(model = "") ?(stop : string list = []) ~(messages : Yojson.Safe.t list) () : (string, string) result =
+(* Parse "+think" suffix from model name.
+   Returns (bare_model, think_param option).
+   Examples:
+     "qwen3+think"        -> ("qwen3",        Some (`Bool true))
+     "gpt-oss+think-low"  -> ("gpt-oss",      Some (`String "low"))
+     "gpt-oss+think-high" -> ("gpt-oss",      Some (`String "high"))
+     "qwen3"              -> ("qwen3",         None)                   *)
+let parse_think_suffix (model : string) : string * Yojson.Safe.t option =
+  match String.split_on_char '+' model with
+  | [base] -> (base, None)
+  | base :: rest ->
+      let suffix = String.concat "+" rest in
+      if suffix = "think" then (base, Some (`Bool true))
+      else if starts_with "think-" suffix then
+        let level = String.sub suffix 6 (String.length suffix - 6) in
+        (base, Some (`String level))
+      else (model, None)
+  | [] -> (model, None)
+
+let ollama_chat ~client ~sw ?(label = "") ?(stats : call_stats option) ?(model = "") ?(stop : string list = []) ?(format : Yojson.Safe.t option = None) ~(messages : Yojson.Safe.t list) () : (string, string) result =
   let t0 = Unix.gettimeofday () in
-  let effective_model = if String.trim model <> "" then String.trim model else !ollama_llm_model in
+  let raw_model = if String.trim model <> "" then String.trim model else !ollama_llm_model in
+  let effective_model, think_param = parse_think_suffix raw_model in
   let uri = Uri.of_string (!ollama_base_url ^ "/api/chat") in
   let max_retries = 2 in
   let rec attempt n =
@@ -261,11 +329,13 @@ let ollama_chat ~client ~sw ?(label = "") ?(stats : call_stats option) ?(model =
     in
     let body_obj : Yojson.Safe.t =
       `Assoc
-        [ ("model", `String effective_model)
+        ([ ("model", `String effective_model)
         ; ("messages", `List messages)
         ; ("stream", `Bool false)
         ; ("options", `Assoc options)
         ]
+        @ (match format with Some f -> [("format", f)] | None -> [])
+        @ (match think_param with Some t -> [("think", t)] | None -> []))
     in
     if !rag_debug_ollama_chat then
       Printf.printf "\n[ollama.chat.request]\n%s\n%!" (Yojson.Safe.pretty_to_string body_obj);
@@ -285,6 +355,12 @@ let ollama_chat ~client ~sw ?(label = "") ?(stats : call_stats option) ?(model =
         | `Assoc kv -> (
             match List.assoc_opt "message" kv with
             | Some (`Assoc mv) -> (
+                (if !rag_debug_ollama_chat then
+                   (match List.assoc_opt "thinking" mv with
+                    | Some (`String t) when String.trim t <> "" ->
+                        Printf.printf "\n[ollama.chat.thinking] %s\n%s\n%!" label
+                          (truncate_chars t ~max_chars:500)
+                    | _ -> ()));
                 match List.assoc_opt "content" mv with
                 | Some (`String s) ->
                     if String.trim s = "" && n < max_retries then (
@@ -299,7 +375,84 @@ let ollama_chat ~client ~sw ?(label = "") ?(stats : call_stats option) ?(model =
   let result = attempt 0 in
   let dt = Unix.gettimeofday () -. t0 in
   let tag = if label = "" then "chat" else "chat." ^ label in
-  Printf.eprintf "[timer] %s (%s): %.3fs\n%!" tag effective_model dt;
+  Printf.eprintf "[timer] %s (%s): %.3fs\n%!" tag raw_model dt;
+  (match stats with Some s -> record s dt | None -> ());
+  result
+
+(* Streaming variant of ollama_chat.
+   Calls Ollama with stream=true, reads newline-delimited JSON chunks,
+   invokes on_token for each content delta, returns the accumulated full text.
+   No retry logic — streaming is used for interactive calls where retries
+   would restart the visible output. *)
+let ollama_chat_stream ~client ~sw:_ ?(label = "") ?(stats : call_stats option)
+    ?(model = "") ~(messages : Yojson.Safe.t list)
+    ~(on_token : string -> unit) () : (string, string) result =
+  let t0 = Unix.gettimeofday () in
+  let raw_model = if String.trim model <> "" then String.trim model else !ollama_llm_model in
+  let effective_model, think_param = parse_think_suffix raw_model in
+  let uri = Uri.of_string (!ollama_base_url ^ "/api/chat") in
+  let base_opts = [ ("num_ctx", `Int !ollama_num_ctx) ] in
+  let body_obj : Yojson.Safe.t =
+    `Assoc
+      ([ ("model", `String effective_model)
+       ; ("messages", `List messages)
+       ; ("stream", `Bool true)
+       ; ("options", `Assoc base_opts)
+       ]
+       @ (match think_param with Some t -> [("think", t)] | None -> []))
+  in
+  if !rag_debug_ollama_chat then
+    Printf.printf "\n[ollama.chat_stream.request]\n%s\n%!" (Yojson.Safe.pretty_to_string body_obj);
+  let body_json = Yojson.Safe.to_string body_obj in
+  let result =
+    Eio.Switch.run @@ fun inner_sw ->
+    let body = Cohttp_eio.Body.of_string body_json in
+    let resp, resp_body =
+      Cohttp_eio.Client.call client ~sw:inner_sw ~headers:json_headers ~body `POST uri
+    in
+    if not (is_ok_status (Http.Response.status resp)) then
+      Error (read_all resp_body)
+    else begin
+      let buf_read = Eio.Buf_read.of_flow ~max_size:(10 * 1024 * 1024) resp_body in
+      let accumulated = Buffer.create 4096 in
+      let rec loop () =
+        match Eio.Buf_read.line buf_read with
+        | line ->
+            let trimmed = String.trim line in
+            if trimmed = "" then loop ()
+            else begin
+              (try
+                let json = Yojson.Safe.from_string trimmed in
+                match json with
+                | `Assoc kv ->
+                    let is_done = match List.assoc_opt "done" kv with
+                      | Some (`Bool b) -> b | _ -> false in
+                    (match List.assoc_opt "message" kv with
+                    | Some (`Assoc mv) ->
+                        (if !rag_debug_ollama_chat then
+                          (match List.assoc_opt "thinking" mv with
+                           | Some (`String t) when String.trim t <> "" ->
+                               Printf.printf "[stream.thinking] %s" t
+                           | _ -> ()));
+                        (match List.assoc_opt "content" mv with
+                        | Some (`String s) when s <> "" ->
+                            Buffer.add_string accumulated s;
+                            on_token s
+                        | _ -> ())
+                    | _ -> ());
+                    if not is_done then loop ()
+                | _ -> loop ()
+              with _ -> loop ())
+            end
+        | exception End_of_file -> ()
+      in
+      loop ();
+      Ok (Buffer.contents accumulated)
+    end
+  in
+  let dt = Unix.gettimeofday () -. t0 in
+  let tag = if label = "" then "chat_stream" else "chat_stream." ^ label in
+  Printf.eprintf "[timer] %s (%s): %.3fs\n%!" tag raw_model dt;
   (match stats with Some s -> record s dt | None -> ());
   result
 
@@ -768,22 +921,33 @@ let propose_tasks ~client ~sw ~(whoami : string)
     ; ("messages", `List messages)
     ; ("raw_response", `String raw_resp)
     ]) in
-  match ollama_chat ~client ~sw ~label:"propose_tasks" ~stats:stats_chat_triage ~model:effective_model ~messages () with
+  let propose_tasks_schema : Yojson.Safe.t =
+    `Assoc [
+      ("type", `String "object");
+      ("properties", `Assoc [
+        ("tasks", `Assoc [
+          ("type", `String "array");
+          ("items", `Assoc [
+            ("type", `String "object");
+            ("properties", `Assoc [
+              ("title", `Assoc [("type", `String "string")]);
+              ("description", `Assoc [("type", `String "string")]);
+              ("importance", `Assoc [("type", `String "integer")]);
+              ("deadline", `Assoc [("type", `String "string")])
+            ]);
+            ("required", `List [`String "title"; `String "description"])
+          ])
+        ]);
+        ("summary", `Assoc [("type", `String "string")])
+      ]);
+      ("required", `List [`String "tasks"])
+    ]
+  in
+  match ollama_chat ~client ~sw ~label:"propose_tasks" ~stats:stats_chat_triage ~model:effective_model ~format:(Some propose_tasks_schema) ~messages () with
   | Ok raw_resp ->
       if !rag_debug_ollama_chat then Printf.printf "\n[propose_tasks.response]\n%s\n%!" raw_resp;
-      let trimmed =
-        let s = String.trim raw_resp in
-        let s = if starts_with "```json" s then
-          let after = String.sub s 7 (String.length s - 7) in
-          if ends_with "```" after then String.sub after 0 (String.length after - 3) else after
-        else if starts_with "```" s then
-          let after = String.sub s 3 (String.length s - 3) in
-          if ends_with "```" after then String.sub after 0 (String.length after - 3) else after
-        else s
-        in String.trim s
-      in
       (try
-        let json = Yojson.Safe.from_string trimmed in
+        let json = Yojson.Safe.from_string (String.trim raw_resp) in
         let task_proposals, summary =
           match json with
           | `Assoc kv ->
@@ -1249,7 +1413,20 @@ let process_task_proposals ~client ~sw ~(doc_id : string)
           ; `Assoc [ ("role", `String "user"); ("content", `String dedup_user) ]
           ]
         in
-        match ollama_chat ~client ~sw ~label:"task_dedup" ~model:!ollama_triage_model ~messages:dedup_messages () with
+        let task_dedup_schema : Yojson.Safe.t =
+          `Assoc [
+            ("type", `String "object");
+            ("properties", `Assoc [
+              ("decision", `Assoc [("type", `String "string")]);
+              ("existing_task_id", `Assoc [("type", `String "string")]);
+              ("update_description", `Assoc [("type", `String "string")]);
+              ("importance", `Assoc [("type", `String "integer")]);
+              ("deadline", `Assoc [("type", `String "string")])
+            ]);
+            ("required", `List [`String "decision"])
+          ]
+        in
+        match ollama_chat ~client ~sw ~label:"task_dedup" ~model:!ollama_triage_model ~format:(Some task_dedup_schema) ~messages:dedup_messages () with
         | Error msg ->
             Printf.eprintf "[task_dedup] LLM error: %s — creating new task\n%!" msg;
             (* Fall back to creating new *)
@@ -1271,20 +1448,9 @@ let process_task_proposals ~client ~sw ~(doc_id : string)
                 !notify_prefetch ()
             | Error e -> Printf.eprintf "[task_dedup] create error: %s\n%!" e)
         | Ok raw_resp ->
-            let trimmed =
-              let s = String.trim raw_resp in
-              let s = if starts_with "```json" s then
-                let after = String.sub s 7 (String.length s - 7) in
-                if ends_with "```" after then String.sub after 0 (String.length after - 3) else after
-              else if starts_with "```" s then
-                let after = String.sub s 3 (String.length s - 3) in
-                if ends_with "```" after then String.sub after 0 (String.length after - 3) else after
-              else s
-              in String.trim s
-            in
             let decision, existing_id, update_desc, merged_importance, merged_deadline =
               try
-                let dj = Yojson.Safe.from_string trimmed in
+                let dj = Yojson.Safe.from_string (String.trim raw_resp) in
                 let dkv = match dj with `Assoc kv -> kv | _ -> [] in
                 let ds k = match List.assoc_opt k dkv with Some (`String s) -> String.trim s | _ -> "" in
                 let di k = match List.assoc_opt k dkv with
@@ -1917,39 +2083,32 @@ Otherwise respond with ONLY the JSON rule object, no explanation.|}
         [ `Assoc [ ("role", `String "system"); ("content", `String rule_system) ]
         ; `Assoc [ ("role", `String "user"); ("content", `String user_msg) ]
         ] in
-      match ollama_chat ~client ~sw ~label:"memory_rule" ~messages () with
+      let memory_rule_schema : Yojson.Safe.t =
+        `Assoc [
+          ("type", `String "object");
+          ("properties", `Assoc [
+            ("extractable", `Assoc [("type", `String "boolean")]);
+            ("rule", `Assoc [("type", `String "object")])
+          ]);
+          ("required", `List [`String "extractable"])
+        ]
+      in
+      match ollama_chat ~client ~sw ~label:"memory_rule" ~format:(Some memory_rule_schema) ~messages () with
       | Error msg ->
           Printf.eprintf "[memory_bg] rule LLM error (attempt %d): %s\n%!" attempt msg
       | Ok raw ->
-          let trimmed =
-            let s = String.trim raw in
-            let s = if starts_with "```json" s then
-              let after = String.sub s 7 (String.length s - 7) in
-              if ends_with "```" after then String.sub after 0 (String.length after - 3) else after
-            else if starts_with "```" s then
-              let after = String.sub s 3 (String.length s - 3) in
-              if ends_with "```" after then String.sub after 0 (String.length after - 3) else after
-            else s in
-            String.trim s
-          in
-          if trimmed = "null" || trimmed = "NULL" || trimmed = "" then
-            Printf.printf "[memory_bg] no rule extracted for %s (memory too general)\n%!" memory_id
-          else begin
-            (* Validate JSON *)
-            match (try Some (Yojson.Safe.from_string trimmed) with _ -> None) with
-            | None ->
-                Printf.eprintf "[memory_bg] invalid JSON (attempt %d), retrying\n%!" attempt;
-                try_rule (attempt + 1) (Some "Invalid JSON syntax")
-            | Some rule_json ->
-                (* Basic structural validation *)
-                let valid = match rule_json with
-                  | `Assoc _ -> true
-                  | _ -> false
-                in
-                if not valid then begin
-                  Printf.eprintf "[memory_bg] rule not an object (attempt %d), retrying\n%!" attempt;
-                  try_rule (attempt + 1) (Some "Rule must be a JSON object")
-                end else begin
+          let trimmed = String.trim raw in
+          (try
+            let json = Yojson.Safe.from_string trimmed in
+            let kv = match json with `Assoc kv -> kv | _ -> [] in
+            let extractable = match List.assoc_opt "extractable" kv with
+              | Some (`Bool b) -> b | _ -> false
+            in
+            if not extractable then
+              Printf.printf "[memory_bg] no rule extracted for %s (memory too general)\n%!" memory_id
+            else
+              match List.assoc_opt "rule" kv with
+              | Some (`Assoc _ as rule_json) ->
                   let rule_str = Yojson.Safe.to_string rule_json in
                   (match Rag_lib.Pg.update_memory ~memory_id ~rule:(Some rule_str) () with
                   | Ok _ ->
@@ -1957,8 +2116,12 @@ Otherwise respond with ONLY the JSON rule object, no explanation.|}
                         (truncate_chars rule_str ~max_chars:120)
                   | Error e ->
                       Printf.eprintf "[memory_bg] rule store error: %s\n%!" e)
-                end
-          end
+              | _ ->
+                  Printf.eprintf "[memory_bg] extractable=true but no valid rule object (attempt %d), retrying\n%!" attempt;
+                  try_rule (attempt + 1) (Some "extractable was true but rule field was missing or not an object")
+          with ex ->
+            Printf.eprintf "[memory_bg] parse error (attempt %d): %s\n%!" attempt (Printexc.to_string ex);
+            try_rule (attempt + 1) (Some "Invalid JSON"))
     end
   in
   try_rule 1 None;
@@ -1981,23 +2144,29 @@ Output ONLY a JSON array of strings, where each string is a short email (headers
       [ `Assoc [ ("role", `String "system"); ("content", `String template_system) ]
       ; `Assoc [ ("role", `String "user"); ("content", `String user_msg) ]
       ] in
-    match ollama_chat ~client ~sw ~label:"memory_template" ~messages () with
+    let memory_template_schema : Yojson.Safe.t =
+      `Assoc [
+        ("type", `String "object");
+        ("properties", `Assoc [
+          ("templates", `Assoc [
+            ("type", `String "array");
+            ("items", `Assoc [("type", `String "string")])
+          ])
+        ]);
+        ("required", `List [`String "templates"])
+      ]
+    in
+    match ollama_chat ~client ~sw ~label:"memory_template" ~format:(Some memory_template_schema) ~messages () with
     | Error msg ->
         Printf.eprintf "[memory_bg] template LLM error: %s\n%!" msg
     | Ok raw ->
-        let trimmed =
-          let s = String.trim raw in
-          let s = if starts_with "```json" s then
-            let after = String.sub s 7 (String.length s - 7) in
-            if ends_with "```" after then String.sub after 0 (String.length after - 3) else after
-          else if starts_with "```" s then
-            let after = String.sub s 3 (String.length s - 3) in
-            if ends_with "```" after then String.sub after 0 (String.length after - 3) else after
-          else s in
-          String.trim s
-        in
         (try
-          let templates = match Yojson.Safe.from_string trimmed with
+          let json = Yojson.Safe.from_string (String.trim raw) in
+          let templates = match json with
+            | `Assoc kv -> (match List.assoc_opt "templates" kv with
+                | Some (`List items) ->
+                    List.filter_map (fun j -> match j with `String s -> Some (String.trim s) | _ -> None) items
+                | _ -> [])
             | `List items ->
                 List.filter_map (fun j -> match j with `String s -> Some (String.trim s) | _ -> None) items
             | _ -> []
@@ -3245,7 +3414,24 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
       | Some m when String.trim m <> "" -> m
       | _ -> !ollama_rewrite_model
     in
-    match ollama_chat ~client ~sw ~label:"rewrite" ~stats:stats_chat_rewrite ~model:effective_rewrite_model ~messages () with
+    let query_rewrite_schema : Yojson.Safe.t =
+      `Assoc [
+        ("type", `String "object");
+        ("properties", `Assoc [
+          ("no_retrieval", `Assoc [("type", `String "boolean")]);
+          ("resolved_question", `Assoc [("type", `String "string")]);
+          ("rewrite", `Assoc [("type", `String "string")]);
+          ("hyp_from", `Assoc [("type", `String "string")]);
+          ("hyp_to", `Assoc [("type", `String "string")]);
+          ("hyp_subject", `Assoc [("type", `String "string")]);
+          ("hyp_body", `Assoc [("type", `String "string")]);
+          ("filter", `Assoc [("type", `String "string")]);
+          ("score_expr", `Assoc [("type", `String "string")])
+        ]);
+        ("required", `List [`String "no_retrieval"; `String "resolved_question"])
+      ]
+    in
+    match ollama_chat ~client ~sw ~label:"rewrite" ~stats:stats_chat_rewrite ~model:effective_rewrite_model ~format:(Some query_rewrite_schema) ~messages () with
     | Ok raw_resp ->
         if !rag_debug_ollama_chat then
           Printf.printf "\n[retrieval.rewrite.response]\n%s\n%!" raw_resp;
@@ -3254,19 +3440,6 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
             ~model:effective_rewrite_model ~messages ~response:raw_resp]
         | None -> ());
         let raw_resp = String.trim raw_resp in
-        let raw_resp =
-          if starts_with "```" raw_resp then
-            let lines = String.split_on_char '\n' raw_resp in
-            let lines = match lines with _ :: rest -> rest | [] -> [] in
-            let lines = List.rev lines in
-            let lines =
-              match lines with
-              | l :: rest when starts_with "```" (String.trim l) -> List.rev rest
-              | _ -> List.rev lines
-            in
-            String.concat "\n" lines
-          else raw_resp
-        in
         (try
            let json = Yojson.Safe.from_string raw_resp in
            let get_str key =
@@ -3594,7 +3767,19 @@ let select_relevant_sources ~client ~sw ~(resolved_question : string)
     | Some m when String.trim m <> "" -> m
     | _ -> !ollama_rewrite_model
   in
-  match ollama_chat ~client ~sw ~label:"select_evidence" ~stats:stats_chat_select ~model:effective_sel_model ~messages () with
+  let select_evidence_schema : Yojson.Safe.t =
+    `Assoc [
+      ("type", `String "object");
+      ("properties", `Assoc [
+        ("selected", `Assoc [
+          ("type", `String "array");
+          ("items", `Assoc [("type", `String "integer")])
+        ])
+      ]);
+      ("required", `List [`String "selected"])
+    ]
+  in
+  match ollama_chat ~client ~sw ~label:"select_evidence" ~stats:stats_chat_select ~model:effective_sel_model ~format:(Some select_evidence_schema) ~messages () with
   | Error err ->
       (match llm_log with Some log ->
         log := !log @ [make_llm_call_entry ~prompt_key:(Some "select_evidence") ~label:"select_evidence"
@@ -3608,29 +3793,21 @@ let select_relevant_sources ~client ~sw ~(resolved_question : string)
           ~model:effective_sel_model ~messages ~response:raw_resp]
       | None -> ());
       let raw_resp = String.trim raw_resp in
-      let raw_resp =
-        if starts_with "```" raw_resp then
-          let lines = String.split_on_char '\n' raw_resp in
-          let lines = match lines with _ :: rest -> rest | [] -> [] in
-          let lines = List.rev lines in
-          let lines = match lines with
-            | l :: rest when starts_with "```" (String.trim l) -> List.rev rest
-            | _ -> List.rev lines
-          in
-          String.concat "\n" lines
-        else raw_resp
-      in
       (try
          let json = Yojson.Safe.from_string raw_resp in
-         let indices = match json with
-           | `List xs ->
-               xs |> List.filter_map (function
-                 | `Int n -> Some n
-                 | `Float f -> Some (int_of_float f)
-                 | `String s -> (try Some (int_of_string (String.trim s)) with _ -> None)
-                 | _ -> None)
+         let indices =
+           let extract_ints xs = xs |> List.filter_map (function
+             | `Int n -> Some n
+             | `Float f -> Some (int_of_float f)
+             | _ -> None)
+           in
+           match json with
+           | `Assoc kv -> (match List.assoc_opt "selected" kv with
+               | Some (`List xs) -> extract_ints xs
+               | _ -> List.init n (fun i -> i + 1))
+           | `List xs -> extract_ints xs
            | _ ->
-               Printf.eprintf "[select_evidence.warning] expected JSON array, got: %s\n%!"
+               Printf.eprintf "[select_evidence.warning] unexpected JSON shape: %s\n%!"
                  (if String.length raw_resp > 200 then String.sub raw_resp 0 200 ^ "..." else raw_resp);
                List.init n (fun i -> i + 1)
          in
@@ -4185,6 +4362,19 @@ let handler ~client ~sw ~clock _socket request body =
          in
          let embed_models = List.rev embed_models in
          let chat_models = List.rev chat_models in
+         (* Append +think variants for each chat model.
+            gpt-oss models get budget levels (low/medium/high);
+            other models get plain +think. *)
+         let think_variants m =
+           if contains_substring ~sub:"gpt-oss" m then
+             [ m ^ "+think-low"; m ^ "+think-medium"; m ^ "+think-high" ]
+           else
+             [ m ^ "+think" ]
+         in
+         let chat_models =
+           chat_models
+           @ List.concat_map think_variants chat_models
+         in
          let body =
            `Assoc
              [ ("models", `List (List.map (fun s -> `String s) chat_models))
@@ -4473,7 +4663,7 @@ let handler ~client ~sw ~clock _socket request body =
   *)
   | `POST, "/query/complete" ->
       let raw = read_all body in
-      let session_id, request_id, chat_model_override, summarize_model_override, stale_ids =
+      let session_id, request_id, chat_model_override, summarize_model_override, stale_ids, stream_requested =
         try
           let json = Yojson.Safe.from_string raw in
           match json with
@@ -4504,9 +4694,14 @@ let handler ~client ~sw ~clock _socket request body =
                     xs |> List.filter_map (function `String s -> Some (String.trim s) | _ -> None)
                 | _ -> []
               in
-              (sid, rid, cm, sm, stale)
-          | _ -> ("", "", "", "", [])
-        with _ -> ("", "", "", "", [])
+              let strm =
+                match List.assoc_opt "stream" kv with
+                | Some (`String "true") | Some (`Bool true) -> true
+                | _ -> false
+              in
+              (sid, rid, cm, sm, stale, strm)
+          | _ -> ("", "", "", "", [], false)
+        with _ -> ("", "", "", "", [], false)
       in
       if String.trim session_id = "" || String.trim request_id = "" then
         Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id/request_id\n" ()
@@ -4925,55 +5120,84 @@ let handler ~client ~sw ~clock _socket request body =
                 in
 
                 set_progress session_id "Generating answer";
-                let answer =
+                let sse_stream = if stream_requested then Some (Eio.Stream.create 100) else None in
+                let do_llm_and_respond () =
                   let effective_chat_model =
                     if String.trim chat_model_override <> "" then chat_model_override
                     else !ollama_llm_model
                   in
-                  match ollama_chat ~client ~sw ~label:"chat" ~stats:stats_chat_answer ~model:chat_model_override ~messages () with
-                  | Ok s ->
-                      if !rag_debug_ollama_chat then
-                        Printf.printf "\n[chat.raw_answer]\n%s\n%!" s;
-                      p_llm_log := !p_llm_log @ [make_llm_call_entry
-                        ~prompt_key:(Some "chat")
-                        ~label:"chat" ~model:effective_chat_model
-                        ~messages ~response:s];
-                      strip_leading_boilerplate s |> String.trim
-                  | Error msg ->
-                      p_llm_log := !p_llm_log @ [make_llm_call_entry
-                        ~prompt_key:(Some "chat")
-                        ~label:"chat" ~model:effective_chat_model
-                        ~messages ~response:("ERROR: " ^ msg)];
-                      "ollama chat error: " ^ msg
-                in
-
-                let renumbered_answer, cited_recap =
-                  renumber_cited_sources ~answer ~sources_json
-                in
-                Eio.Mutex.use_rw ~protect:true s.mu (fun () ->
-                  let add_msg role content =
-                    s.tail <- s.tail @ [ { role; content } ];
-                    let max_tail = 24 in
-                    if List.length s.tail > max_tail then s.tail <- take_last max_tail s.tail
+                  let llm_result = match sse_stream with
+                    | Some stream ->
+                        let on_token chunk =
+                          Eio.Stream.add stream (Some (sse_event (Yojson.Safe.to_string
+                            (`Assoc [("type", `String "token"); ("content", `String chunk)]))))
+                        in
+                        ollama_chat_stream ~client ~sw ~label:"chat" ~stats:stats_chat_answer
+                          ~model:chat_model_override ~messages ~on_token ()
+                    | None ->
+                        ollama_chat ~client ~sw ~label:"chat" ~stats:stats_chat_answer
+                          ~model:chat_model_override ~messages ()
                   in
-                  add_msg "user" p.question;
-                  let answer_with_refs =
-                    if String.trim cited_recap <> "" then
-                      renumbered_answer ^ "\n\nEMAILS REFERENCED ABOVE:\n" ^ cited_recap
-                    else renumbered_answer
+                  let answer = match llm_result with
+                    | Ok s ->
+                        if !rag_debug_ollama_chat then
+                          Printf.printf "\n[chat.raw_answer]\n%s\n%!" s;
+                        p_llm_log := !p_llm_log @ [make_llm_call_entry
+                          ~prompt_key:(Some "chat")
+                          ~label:"chat" ~model:effective_chat_model
+                          ~messages ~response:s];
+                        strip_leading_boilerplate s |> String.trim
+                    | Error msg ->
+                        p_llm_log := !p_llm_log @ [make_llm_call_entry
+                          ~prompt_key:(Some "chat")
+                          ~label:"chat" ~model:effective_chat_model
+                          ~messages ~response:("ERROR: " ^ msg)];
+                        "ollama chat error: " ^ msg
                   in
-                  add_msg "assistant" answer_with_refs;
-                  maybe_summarize_session ~client ~sw s);
 
-                Eio.Mutex.use_rw ~protect:true pending_tbl_mu (fun () -> Hashtbl.remove pending_tbl request_id);
-                clear_progress session_id;
+                  let renumbered_answer, cited_recap =
+                    renumber_cited_sources ~answer ~sources_json
+                  in
+                  Eio.Mutex.use_rw ~protect:true s.mu (fun () ->
+                    let add_msg role content =
+                      s.tail <- s.tail @ [ { role; content } ];
+                      let max_tail = 24 in
+                      if List.length s.tail > max_tail then s.tail <- take_last max_tail s.tail
+                    in
+                    add_msg "user" p.question;
+                    let answer_with_refs =
+                      if String.trim cited_recap <> "" then
+                        renumbered_answer ^ "\n\nEMAILS REFERENCED ABOVE:\n" ^ cited_recap
+                      else renumbered_answer
+                    in
+                    add_msg "assistant" answer_with_refs;
+                    maybe_summarize_session ~client ~sw s);
 
-                let body =
+                  Eio.Mutex.use_rw ~protect:true pending_tbl_mu (fun () -> Hashtbl.remove pending_tbl request_id);
+                  clear_progress session_id;
+
                   `Assoc [ ("answer", `String answer); ("sources", sources_json)
                          ; ("llm_calls", `List !p_llm_log) ]
-                  |> Yojson.Safe.to_string
                 in
-                Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ())))
+                (* ── Dispatch: streaming (SSE) vs non-streaming (JSON) ── *)
+                (match sse_stream with
+                | Some stream ->
+                    Eio.Fiber.fork ~sw (fun () ->
+                      (try
+                        let json = do_llm_and_respond () in
+                        Eio.Stream.add stream (Some (sse_event ~event:"done"
+                          (Yojson.Safe.to_string json)));
+                        Eio.Stream.add stream None
+                      with e ->
+                        Eio.Stream.add stream (Some (sse_event (Yojson.Safe.to_string
+                          (`Assoc [("type", `String "error"); ("error", `String (Printexc.to_string e))]))));
+                        Eio.Stream.add stream None)
+                    );
+                    let body = make_chunk_body stream in
+                    Cohttp_eio.Server.respond ~status:`OK ~headers:sse_headers ~body ()
+                | None ->
+                    let body = do_llm_and_respond () |> Yojson.Safe.to_string in
+                    Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()))))
 
   (*
     Multi-query retrieval with contextual rewriting + HyDE
@@ -6949,11 +7173,22 @@ let handler ~client ~sw ~clock _socket request body =
 
             (* 5. Call LLM *)
             let effective_model = if chat_model <> "" then chat_model else !ollama_llm_model in
-            (match ollama_chat ~client ~sw ~label:"task_chat" ~model:effective_model ~messages () with
-            | Error msg ->
-                let body = `Assoc [ ("error", `String msg) ] |> Yojson.Safe.to_string in
-                Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ()
-            | Ok raw_resp ->
+            let stream_requested = get_str "stream" = "true" in
+            let sse_stream = if stream_requested then Some (Eio.Stream.create 100) else None in
+            let do_llm_and_process () =
+              let llm_result = match sse_stream with
+                | Some stream ->
+                    let on_token chunk =
+                      Eio.Stream.add stream (Some (sse_event (Yojson.Safe.to_string
+                        (`Assoc [("type", `String "token"); ("content", `String chunk)]))))
+                    in
+                    ollama_chat_stream ~client ~sw ~label:"task_chat" ~model:effective_model ~messages ~on_token ()
+                | None ->
+                    ollama_chat ~client ~sw ~label:"task_chat" ~model:effective_model ~messages ()
+              in
+              match llm_result with
+              | Error msg -> `LLM_error msg
+              | Ok raw_resp ->
                 let resp_text = String.trim raw_resp in
 
                 (* Helper: find substring *)
@@ -7045,13 +7280,12 @@ let handler ~client ~sw ~clock _socket request body =
                   Eio.Mutex.use_rw ~protect:true task_retrieval_mu (fun () ->
                     Hashtbl.replace task_retrieval_tbl req_id tr);
                   (* Return retrieval response — TB must upload bodies then re-call *)
-                  let body = `Assoc
+                  `Retrieve (`Assoc
                     [ ("status", `String "retrieval")
                     ; ("request_id", `String req_id)
                     ; ("message_ids", `List (List.map (fun s -> `String s) sel_message_ids))
                     ; ("sources", sources_json)
-                    ] |> Yojson.Safe.to_string in
-                  Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
+                    ])
                 end else begin
 
                 let side_effects = ref [] in
@@ -7501,9 +7735,45 @@ let handler ~client ~sw ~clock _socket request body =
                   Eio.Mutex.use_rw ~protect:true task_retrieval_mu (fun () ->
                     Hashtbl.remove task_retrieval_tbl request_id);
 
-                Cohttp_eio.Server.respond_string ~status:`OK
-                  ~body:(Yojson.Safe.to_string resp_json) ~headers:json_headers ()
-                end)
+                `Ok resp_json
+                end
+            in
+            (* ── Dispatch: streaming (SSE) vs non-streaming (JSON) ── *)
+            (match sse_stream with
+            | Some stream ->
+                Eio.Fiber.fork ~sw (fun () ->
+                  (try
+                    match do_llm_and_process () with
+                    | `LLM_error msg ->
+                        Eio.Stream.add stream (Some (sse_event (Yojson.Safe.to_string
+                          (`Assoc [("type", `String "error"); ("error", `String msg)]))));
+                        Eio.Stream.add stream None
+                    | `Retrieve json ->
+                        Eio.Stream.add stream (Some (sse_event ~event:"retrieve"
+                          (Yojson.Safe.to_string json)));
+                        Eio.Stream.add stream None
+                    | `Ok json ->
+                        Eio.Stream.add stream (Some (sse_event ~event:"done"
+                          (Yojson.Safe.to_string json)));
+                        Eio.Stream.add stream None
+                  with e ->
+                    Eio.Stream.add stream (Some (sse_event (Yojson.Safe.to_string
+                      (`Assoc [("type", `String "error"); ("error", `String (Printexc.to_string e))]))));
+                    Eio.Stream.add stream None)
+                );
+                let body = make_chunk_body stream in
+                Cohttp_eio.Server.respond ~status:`OK ~headers:sse_headers ~body ()
+            | None ->
+                (match do_llm_and_process () with
+                | `LLM_error msg ->
+                    let body = `Assoc [ ("error", `String msg) ] |> Yojson.Safe.to_string in
+                    Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ()
+                | `Retrieve json ->
+                    Cohttp_eio.Server.respond_string ~status:`OK
+                      ~body:(Yojson.Safe.to_string json) ~headers:json_headers ()
+                | `Ok json ->
+                    Cohttp_eio.Server.respond_string ~status:`OK
+                      ~body:(Yojson.Safe.to_string json) ~headers:json_headers ()))
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
           ~body:(Printf.sprintf "task/chat error: %s\n" (Printexc.to_string e)) ())

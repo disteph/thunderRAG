@@ -942,9 +942,13 @@ function getBackgroundWebextApi() {
   }
 }
 
-/* Preferred ingestion path: delegate to the background script via runtime.sendMessage
-   so that the background script (which has full WebExtension permissions) can call
-   messages.getRaw with decrypt:true and POST to the endpoint. */
+/* Preferred ingestion path: delegate to the background script via the in-memory
+   ingestQueue so it can call messages.getRaw with decrypt:true and POST to the
+   endpoint asynchronously.  The background script polls the queue every 5 s via
+   browser.ragFilterAction.getIngestQueue().
+
+   If the webext API scope is unavailable (always the case in current TB), we
+   return { ok: false } so applyAction falls through to the direct POST path. */
 async function delegateIngestToBackground(msgHdr, endpoint) {
   try {
     const headerMessageId = (msgHdr?.messageId || "").trim();
@@ -1515,6 +1519,131 @@ function patchFilterEditorWindow(win) {
         wrapper.setAttribute("type", type);
       }
     }
+
+    // Ensure the action dropdown (menulist) correctly selects our custom actions
+    // when loading a saved filter.  TB sometimes fails to select the right
+    // menuitem for custom actions, showing "Move Message to" instead.
+    const customActions = [
+      { id: ACTION_ID, name: "ThunderRAG: Send to URL" },
+      { id: ACTION_SAVE_ATTACHMENTS_ID, name: "ThunderRAG: Save attachments" },
+      { id: ACTION_ARCHIVE_ID, name: "ThunderRAG: Archive" },
+    ];
+    function fixActionDropdowns() {
+      try {
+        const wrappers = win.document.querySelectorAll("ruleactiontarget-wrapper");
+        consoleService.logStringMessage(
+          `[ragFilterAction] FilterEditor dropdown fix: found ${wrappers.length} wrapper(s)`
+        );
+        for (const wrapper of wrappers) {
+          const type = wrapper.getAttribute("type");
+          const actionDef = customActions.find(a => a.id === type);
+          if (!actionDef) continue;
+
+          // Walk up to find the containing action row and its menulist.
+          let row = wrapper.parentElement;
+          const ancestors = [];
+          for (let i = 0; i < 10 && row; i++) {
+            ancestors.push(row.localName || row.tagName || "?");
+            row = row.parentElement;
+          }
+          consoleService.logStringMessage(
+            `[ragFilterAction] FilterEditor: wrapper type=${type} ancestors=[${ancestors.join(",")}]`
+          );
+
+          // Re-walk to find the closest container that has a menulist.
+          row = wrapper.parentElement;
+          let menulist = null;
+          for (let i = 0; i < 10 && row && !menulist; i++) {
+            menulist = row.querySelector("menulist");
+            if (!menulist) {
+              // Also try XUL namespace queries.
+              for (const child of row.children || []) {
+                if (child.localName === "menulist") {
+                  menulist = child;
+                  break;
+                }
+              }
+            }
+            if (!menulist) row = row.parentElement;
+          }
+
+          if (!menulist) {
+            consoleService.logStringMessage(
+              `[ragFilterAction] FilterEditor: no menulist found for action ${actionDef.name}`
+            );
+            continue;
+          }
+
+          consoleService.logStringMessage(
+            `[ragFilterAction] FilterEditor: menulist found for ${actionDef.name}, value="${menulist.value}", label="${menulist.label}"`
+          );
+
+          // If the menulist already shows the correct value, nothing to do.
+          if (menulist.value === type) {
+            consoleService.logStringMessage(
+              `[ragFilterAction] FilterEditor: dropdown already correct for ${actionDef.name}`
+            );
+            continue;
+          }
+
+          // Ensure a menuitem for this custom action exists in the popup.
+          let popup = menulist.querySelector("menupopup");
+          if (!popup) {
+            for (const child of menulist.children || []) {
+              if (child.localName === "menupopup") {
+                popup = child;
+                break;
+              }
+            }
+          }
+          if (!popup) {
+            consoleService.logStringMessage(
+              `[ragFilterAction] FilterEditor: no menupopup found for ${actionDef.name}`
+            );
+            continue;
+          }
+
+          // Log all existing menuitems to understand what's in the popup.
+          const items = popup.querySelectorAll("menuitem");
+          const itemValues = [];
+          for (const it of items) {
+            itemValues.push(`${it.getAttribute("value")}="${it.getAttribute("label")}"`);
+          }
+          consoleService.logStringMessage(
+            `[ragFilterAction] FilterEditor: menupopup has ${items.length} items: ${itemValues.slice(-5).join(", ")}...`
+          );
+
+          let menuitem = null;
+          for (const it of items) {
+            if (it.getAttribute("value") === type) {
+              menuitem = it;
+              break;
+            }
+          }
+          if (!menuitem) {
+            menuitem = win.document.createXULElement("menuitem");
+            menuitem.setAttribute("value", type);
+            menuitem.setAttribute("label", actionDef.name);
+            popup.appendChild(menuitem);
+            consoleService.logStringMessage(
+              `[ragFilterAction] FilterEditor: created menuitem for ${actionDef.name}`
+            );
+          }
+
+          // Select the correct menuitem.
+          menulist.value = type;
+          menulist.selectedItem = menuitem;
+          consoleService.logStringMessage(
+            `[ragFilterAction] FilterEditor: fixed dropdown for ${actionDef.name}, now value="${menulist.value}"`
+          );
+        }
+      } catch (e) {
+        consoleService.logStringMessage(`[ragFilterAction] FilterEditor dropdown fix failed: ${e}`);
+      }
+    }
+    // Run after a short delay and again after a longer one to handle late filter loading.
+    win.setTimeout(fixActionDropdowns, 200);
+    win.setTimeout(fixActionDropdowns, 800);
 
     consoleService.logStringMessage("[ragFilterAction] FilterEditor patch installed");
   } catch (e) {
@@ -2144,13 +2273,17 @@ function ensureMsgWindowForConversion(msgWindow) {
 const POST_TIMEOUT_MS = 15000;
 
 async function fetchWithTimeout(url, init, timeoutMs) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
+  // AbortController is not available in the XPCOM experiment context.
+  if (typeof AbortController !== "undefined") {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
   }
+  return await fetch(url, init);
 }
 
 /* POST raw RFC822 bytes to the OCaml ingest endpoint as message/rfc822.
@@ -2444,7 +2577,7 @@ function makeCustomAction() {
     id: ACTION_ID,
 
     get name() {
-      return "ThunderRAG: Ingest";
+      return "ThunderRAG: Send to URL";
     },
 
     isValidForType(type, scope) {

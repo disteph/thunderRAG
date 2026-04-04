@@ -160,7 +160,13 @@ async function resolveHeaderMessageId(headerMessageId) {
   const first = result?.messages?.[0];
   if (first) return first.id;
   if (hmid.startsWith("<") && hmid.endsWith(">")) {
+    // Try without angle brackets (XPCOM format).
     const result2 = await browser.messages.query({ headerMessageId: hmid.slice(1, -1) });
+    const first2 = result2?.messages?.[0];
+    if (first2) return first2.id;
+  } else {
+    // Try with angle brackets (WebExtension format).
+    const result2 = await browser.messages.query({ headerMessageId: `<${hmid}>` });
     const first2 = result2?.messages?.[0];
     if (first2) return first2.id;
   }
@@ -395,6 +401,48 @@ browser.runtime.onMessage.addListener(async (msg) => {
         }
       }
       return results;
+    }
+
+    if (msg.type === "filterIngest") {
+      // Sent by the experiment API's applyAction via runtime.sendMessage.
+      // Process the ingestion directly — bypasses the in-memory queue which
+      // can become stale after addon reload.
+      const headerMessageId = (msg.headerMessageId || "").trim();
+      const endpoint = (msg.endpoint || "").trim();
+      if (!headerMessageId || !endpoint) {
+        return { ok: false, error: "missing headerMessageId or endpoint" };
+      }
+      try {
+        const messageId = await resolveHeaderMessageId(headerMessageId);
+        const rfc822 = await getDecryptedRfc822ForIngest(messageId, headerMessageId);
+        const mid = headerMessageId.startsWith("<") ? headerMessageId : "<" + headerMessageId + ">";
+
+        // Derive server base from the endpoint (strip /ingest path) and batch-POST.
+        if (/\/ingest\/?$/.test(endpoint)) {
+          const base = endpoint.replace(/\/ingest\/?$/, "");
+          const resp = await fetchWithTimeout(`${base}/ingest/batch`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items: [{ doc_id: mid, raw: rfc822 }] }),
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            console.log(`[ThunderRAG] filterIngest: batch queued ${data.queued || 0} for ${headerMessageId}`);
+            notifyTasksChanged();
+            refreshIngestStatusForFolder();
+          } else {
+            console.warn(`[ThunderRAG] filterIngest: batch POST ${resp.status} for ${headerMessageId}`);
+          }
+        } else {
+          await postRfc822ToEndpoint(endpoint, rfc822, headerMessageId);
+          notifyTasksChanged();
+          refreshIngestStatusForFolder();
+        }
+        return { ok: true };
+      } catch (e) {
+        console.warn(`[ThunderRAG] filterIngest: failed for ${headerMessageId}: ${e}`);
+        return { ok: false, error: String(e) };
+      }
     }
 
     if (msg.type === "ingestMessageByHeaderMessageId") {
@@ -681,10 +729,7 @@ async function processIngestQueue() {
       }
     }
   } catch (e) {
-    // getIngestQueue may not be available yet; silently ignore.
-    if (!String(e).includes("not a function")) {
-      console.warn(`[ThunderRAG] ingestQueue poll error: ${e}`);
-    }
+    console.warn(`[ThunderRAG] ingestQueue poll error: ${e}`);
   } finally {
     ingestQueueProcessing = false;
   }

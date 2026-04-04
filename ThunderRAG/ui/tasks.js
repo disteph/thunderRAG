@@ -1423,13 +1423,77 @@ async function sendMessage(inputEl) {
         user_message: text,
         user_name: userName,
         chat_model: document.getElementById("chatModel")?.value || "",
+        stream: "true",
       }),
     });
     if (!resp.ok) {
       const errBody = await resp.text().catch(() => "");
       throw new Error(`Server ${resp.status}: ${errBody}`);
     }
-    const data = await resp.json();
+
+    // ── Stream SSE response ──
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let streamedText = "";
+    let finalData = null;
+    let buffer = "";
+    let streamBubble = null;
+
+    // Find the typing indicator added by renderMidPane and prepare to replace it
+    const chat = document.querySelector(".mid-chat");
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // Parse complete SSE events (delimited by \n\n)
+      let idx;
+      while ((idx = buffer.indexOf("\n\n")) !== -1) {
+        const eventText = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+
+        let eventType = "";
+        let dataStr = "";
+        for (const line of eventText.split("\n")) {
+          if (line.startsWith("event: ")) {
+            eventType = line.slice(7).trim();
+          } else if (line.startsWith("data: ")) {
+            dataStr += line.slice(6);
+          }
+        }
+        if (!dataStr) continue;
+
+        let evt;
+        try { evt = JSON.parse(dataStr); } catch { continue; }
+
+        if (!eventType && evt.type === "token") {
+          streamedText += evt.content;
+          // Lazily replace the typing indicator with a real bubble
+          if (!streamBubble && chat) {
+            const typingRow = chat.querySelector(".msg-assistant:last-child");
+            if (typingRow) {
+              typingRow.innerHTML = '<div class="bubble"></div>';
+              streamBubble = typingRow.querySelector(".bubble");
+            }
+          }
+          if (streamBubble) {
+            if (typeof marked !== "undefined") {
+              streamBubble.innerHTML = marked.parse(stripMarkers(streamedText));
+            } else {
+              streamBubble.textContent = stripMarkers(streamedText);
+            }
+            if (chat) chat.scrollTop = chat.scrollHeight;
+          }
+        } else if (!eventType && evt.type === "error") {
+          throw new Error(evt.error || "LLM error");
+        } else if (eventType === "done") {
+          finalData = evt;
+        } else if (eventType === "retrieve") {
+          finalData = evt;
+        }
+      }
+    }
 
     // Server has persisted the updated conversation; reload full task
     await selectTask(activeTaskId);
@@ -1442,47 +1506,46 @@ async function sendMessage(inputEl) {
       }
     }
 
-    // Process side effects
-    if (data.side_effects) {
-      for (const se of data.side_effects) {
-        if (se.type === "task_new") {
-          await loadTaskList();
-        }
-        if (se.type === "done" || se.type === "dismiss" || se.type === "delete") {
-          // Capture the neighbor task BEFORE reloading the list
-          const idx = tasks.findIndex(t => t.task_id === activeTaskId);
-          const nextId = idx >= 0 && idx < tasks.length - 1 ? tasks[idx + 1].task_id
-                       : idx > 0 ? tasks[idx - 1].task_id
-                       : null;
-          await loadTaskList();
-          // If the task is gone from the (filtered) list, navigate to the neighbor
-          const stillVisible = tasks.find(t => t.task_id === activeTaskId);
-          if (!stillVisible) {
-            const target = nextId && tasks.find(t => t.task_id === nextId);
-            if (target) {
-              await selectTask(target.task_id);
-            } else if (tasks.length > 0) {
-              await selectTask(tasks[0].task_id);
-            } else {
-              await selectTask("general");
-            }
+    // Process side effects from the final SSE event
+    const sideEffects = finalData?.side_effects || [];
+    for (const se of sideEffects) {
+      if (se.type === "task_new") {
+        await loadTaskList();
+      }
+      if (se.type === "done" || se.type === "dismiss" || se.type === "delete") {
+        // Capture the neighbor task BEFORE reloading the list
+        const idx = tasks.findIndex(t => t.task_id === activeTaskId);
+        const nextId = idx >= 0 && idx < tasks.length - 1 ? tasks[idx + 1].task_id
+                     : idx > 0 ? tasks[idx - 1].task_id
+                     : null;
+        await loadTaskList();
+        // If the task is gone from the (filtered) list, navigate to the neighbor
+        const stillVisible = tasks.find(t => t.task_id === activeTaskId);
+        if (!stillVisible) {
+          const target = nextId && tasks.find(t => t.task_id === nextId);
+          if (target) {
+            await selectTask(target.task_id);
+          } else if (tasks.length > 0) {
+            await selectTask(tasks[0].task_id);
+          } else {
+            await selectTask("general");
           }
         }
-        if (se.type === "recompute") {
-          // Server already reset context flags; reload task to reflect updated state
-          await selectTask(activeTaskId);
+      }
+      if (se.type === "recompute") {
+        // Server already reset context flags; reload task to reflect updated state
+        await selectTask(activeTaskId);
+      }
+      if (se.type === "next") {
+        const idx = tasks.findIndex(t => t.task_id === activeTaskId);
+        if (idx >= 0 && idx < tasks.length - 1) {
+          await selectTask(tasks[idx + 1].task_id);
         }
-        if (se.type === "next") {
-          const idx = tasks.findIndex(t => t.task_id === activeTaskId);
-          if (idx >= 0 && idx < tasks.length - 1) {
-            await selectTask(tasks[idx + 1].task_id);
-          }
-        }
-        if (se.type === "previous") {
-          const idx = tasks.findIndex(t => t.task_id === activeTaskId);
-          if (idx > 0) {
-            await selectTask(tasks[idx - 1].task_id);
-          }
+      }
+      if (se.type === "previous") {
+        const idx = tasks.findIndex(t => t.task_id === activeTaskId);
+        if (idx > 0) {
+          await selectTask(tasks[idx - 1].task_id);
         }
       }
     }

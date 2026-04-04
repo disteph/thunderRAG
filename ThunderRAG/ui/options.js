@@ -47,11 +47,22 @@ const SETTINGS_SCHEMA = [
   { section: "Ollama" },
   { key: "ollama.base_url", path: ["ollama","base_url"], label: "Ollama base URL", type: "text" },
   { key: "ollama.num_ctx", path: ["ollama","num_ctx"], label: "Context window (tokens)", type: "number" },
-  { key: "ollama.embed_model", path: ["ollama","embed_model"], label: "Embedding model", type: "model_embed" },
-  { key: "ollama.llm_model", path: ["ollama","llm_model"], label: "Chat / LLM model", type: "model" },
-  { key: "ollama.summarize_model", path: ["ollama","summarize_model"], label: "Summarize model", type: "model" },
-  { key: "ollama.triage_model", path: ["ollama","triage_model"], label: "Triage model", type: "model" },
-  { key: "ollama.rewrite_model", path: ["ollama","rewrite_model"], label: "Query rewrite model", type: "model" },
+
+  { section: "Models — background tasks" },
+  { key: "ollama.embed_model", path: ["ollama","embed_model"], label: "Embedding model", type: "model_embed",
+    hint: "Used for vector search during ingestion and retrieval." },
+  { key: "ollama.triage_model", path: ["ollama","triage_model"], label: "Triage model", type: "model",
+    hint: "Used for propose_tasks, task_dedup, and first-message generation (all background)." },
+
+  { section: "Models — session (overridable per tab)" },
+  { key: "ollama.llm_model", path: ["ollama","llm_model"], label: "Chat / LLM model", type: "model",
+    hint: "Default for task chat and general chat. Overridable via the Chat dropdown in each tab." },
+  { key: "ollama.rewrite_model", path: ["ollama","rewrite_model"], label: "Query rewrite model", type: "model",
+    hint: "Used for query rewriting and evidence selection. Overridable via the Rewrite dropdown." },
+
+  { section: "Models — dual use" },
+  { key: "ollama.summarize_model", path: ["ollama","summarize_model"], label: "Summarize model", type: "model",
+    hint: "Used for ingestion compression (background) and evidence/session summarization (session, overridable via Summary dropdown)." },
 
   { section: "Database" },
   { key: "pg.database", path: ["pg","database"], label: "PostgreSQL database name", type: "text" },

@@ -746,18 +746,80 @@ async function onAsk() {
       setTypingDots(assistant.bubble, "Compressing emails\u2026");
 
       startProgressPolling();
-      const final = await fetchJson(`${base}/query/complete`, {
-        session_id,
-        request_id: requestId,
-        chat_model: chatModel,
-        summarize_model: summarizeModel,
-        stale_ids: staleIds,
+
+      // ── Stream SSE response from /query/complete ──
+      const completeResp = await fetch(`${base}/query/complete`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          session_id,
+          request_id: requestId,
+          chat_model: chatModel,
+          summarize_model: summarizeModel,
+          stale_ids: staleIds,
+          stream: true,
+        }),
       });
+      if (!completeResp.ok) {
+        const errText = await completeResp.text().catch(() => "");
+        throw new Error(`HTTP ${completeResp.status}: ${errText}`);
+      }
+
+      const reader = completeResp.body.getReader();
+      const decoder = new TextDecoder();
+      let streamedText = "";
+      let finalData = null;
+      let sseBuffer = "";
+
+      // Get the answer element from the already-set-up bubble
+      const answerEl = assistant.bubble.__rag?.answerEl || assistant.bubble;
+
+      while (true) {
+        const { done: streamDone, value } = await reader.read();
+        if (streamDone) break;
+        sseBuffer += decoder.decode(value, { stream: true });
+
+        // Parse complete SSE events (delimited by \n\n)
+        let idx;
+        while ((idx = sseBuffer.indexOf("\n\n")) !== -1) {
+          const eventText = sseBuffer.slice(0, idx);
+          sseBuffer = sseBuffer.slice(idx + 2);
+
+          let eventType = "";
+          let dataStr = "";
+          for (const line of eventText.split("\n")) {
+            if (line.startsWith("event: ")) {
+              eventType = line.slice(7).trim();
+            } else if (line.startsWith("data: ")) {
+              dataStr += line.slice(6);
+            }
+          }
+          if (!dataStr) continue;
+
+          let evt;
+          try { evt = JSON.parse(dataStr); } catch { continue; }
+
+          if (!eventType && evt.type === "token") {
+            streamedText += evt.content;
+            // Update answer area with streamed text
+            if (typeof marked !== "undefined") {
+              answerEl.innerHTML = marked.parse(normalizeUnicodeWhitespace(streamedText));
+            } else {
+              answerEl.textContent = streamedText;
+            }
+            scrollChatToBottom();
+          } else if (!eventType && evt.type === "error") {
+            throw new Error(evt.error || "LLM error");
+          } else if (eventType === "done") {
+            finalData = evt;
+          }
+        }
+      }
       stopProgressPolling();
 
-      const answer = String(final?.answer || "");
-      const sources = Array.isArray(final?.sources) ? final.sources : srcs;
-      const llmCalls = Array.isArray(final?.llm_calls) ? final.llm_calls : [];
+      const answer = String(finalData?.answer || streamedText);
+      const sources = Array.isArray(finalData?.sources) ? finalData.sources : srcs;
+      const llmCalls = Array.isArray(finalData?.llm_calls) ? finalData.llm_calls : [];
       // Merge folder info from TB validation into server-returned sources
       for (const s of sources) {
         const did = String(s?.doc_id || "");
