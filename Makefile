@@ -46,4 +46,4 @@ clean-ocaml:
 	fi
 
 run: ocaml
-	cd "$(SERVER_DIR)" && opam exec -- dune exec rag-o-mail -- -p 8090
+	cd "$(SERVER_DIR)" && opam exec -- dune exec rag-o-mail -- -p 8080

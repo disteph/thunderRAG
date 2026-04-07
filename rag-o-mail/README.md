@@ -241,24 +241,43 @@ The only environment variables are for file paths:
 
 ## Build / Run
 
-Requires OCaml 5.x, opam, and PostgreSQL 17+ with pgvector and libpg_query:
+Requires OCaml 5.x, opam, and PostgreSQL 14+ with pgvector and libpg_query.
+
+**macOS:**
 
 ```bash
-brew install postgresql@17 pgvector libpg_query
+brew install postgresql@17 pgvector libpg_query opam
 brew services start postgresql@17
 createdb rag-o-mail
 psql -d rag-o-mail -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
-### macOS Library Path
-
-On Apple Silicon Macs, Homebrew installs PostgreSQL libraries under `/opt/homebrew/lib/postgresql@17`, which the OCaml linker doesn't find by default. Add this to your `~/.zshrc`:
+On Apple Silicon Macs, add this to `~/.zshrc` so the linker can find PostgreSQL:
 
 ```bash
 export LIBRARY_PATH="/opt/homebrew/lib/postgresql@17:$LIBRARY_PATH"
+export PKG_CONFIG_PATH="/opt/homebrew/lib/postgresql@17/pkgconfig:$PKG_CONFIG_PATH"
 ```
 
-Without this, `dune build` will fail with linker errors about missing `-lpq`.
+**Ubuntu / Debian:**
+
+```bash
+sudo apt install postgresql postgresql-17-pgvector libpq-dev build-essential opam
+# libpg_query (build from source):
+git clone https://github.com/pganalyze/libpg_query.git
+cd libpg_query && make && sudo make install && sudo ldconfig
+cd .. && rm -rf libpg_query
+opam init -y && eval $(opam env)
+createdb rag-o-mail
+psql -d rag-o-mail -c "CREATE EXTENSION IF NOT EXISTS vector;"
+```
+
+**Fedora / RHEL:**
+
+```bash
+sudo dnf install postgresql-server libpq-devel gcc make opam
+# pgvector + libpg_query: build from source (see main README)
+```
 
 ### Build and Run
 

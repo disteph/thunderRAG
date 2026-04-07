@@ -4328,6 +4328,16 @@ let handler ~client ~sw ~clock _socket request body =
           Cohttp_eio.Server.respond_string ~status:`Internal_server_error
             ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped e)) ~headers:json_headers ())
 
+  | `POST, "/admin/clear_pending_processed" ->
+      (match Rag_lib.Pg.clear_pending_processed () with
+      | Ok () ->
+          Printf.printf "[admin] cleared pending_processed queue\n%!";
+          Cohttp_eio.Server.respond_string ~status:`OK
+            ~body:{|{"ok":true}|} ~headers:json_headers ()
+      | Error e ->
+          Cohttp_eio.Server.respond_string ~status:`Internal_server_error
+            ~body:(Printf.sprintf {|{"error":"%s"}|} (String.escaped e)) ~headers:json_headers ())
+
   | `POST, "/admin/clear_memories" ->
       (match Rag_lib.Pg.clear_memories () with
       | Ok () ->

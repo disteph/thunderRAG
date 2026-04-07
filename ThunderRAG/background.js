@@ -881,19 +881,18 @@ async function processTaskEvidenceQueue() {
         }
       }
 
-      // Signal that we've attempted all uploads for this task
-      if (uploadedCount > 0) {
-        try {
-          await fetch(`${base}/task/evidence_done`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ task_id: taskId })
-          });
-          debugLog(`[ThunderRAG] taskEvidence: signaled evidence_done for task ${taskId} (${uploadedCount}/${docIds.length})`);
-          notifyTasksChanged();
-        } catch (e) {
-          debugWarn(`[ThunderRAG] taskEvidence: evidence_done error for ${taskId}: ${e}`);
-        }
+      // Always signal evidence_done so the server can proceed (even if
+      // some emails are no longer in Thunderbird and couldn't be uploaded).
+      try {
+        await fetch(`${base}/task/evidence_done`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ task_id: taskId })
+        });
+        debugLog(`[ThunderRAG] taskEvidence: signaled evidence_done for task ${taskId} (${uploadedCount}/${docIds.length})`);
+        notifyTasksChanged();
+      } catch (e) {
+        debugWarn(`[ThunderRAG] taskEvidence: evidence_done error for ${taskId}: ${e}`);
       }
     }
   } catch (e) {

@@ -2855,6 +2855,8 @@ function renderDbStatsPane() {
       let rowAction = "";
       if (t.name === "ingest_queue") {
         rowAction = `<button data-endpoint="/admin/clear_ingest_queue" data-label="Clear" style="font-size:12px;color:#c00;"${t.rows > 0 ? "" : " disabled"}>Clear</button>`;
+      } else if (t.name === "pending_processed") {
+        rowAction = `<button data-endpoint="/admin/clear_pending_processed" data-label="Clear" style="font-size:12px;color:#c00;"${t.rows > 0 ? "" : " disabled"}>Clear</button>`;
       }
       tr.innerHTML = `
         <td style="padding:5px 12px 5px 12px;font-family:monospace;font-size:12px;">${esc(t.name)}</td>

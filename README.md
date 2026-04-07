@@ -69,12 +69,12 @@ Thunderbird add-ons run in a sandboxed JavaScript environment with limited capab
 <summary><strong>macOS (Homebrew)</strong></summary>
 
 ```bash
-brew install postgresql@17 pgvector libpg_query ollama
+brew install postgresql@17 pgvector libpg_query ollama opam
 brew services start postgresql@17
 
 # Optional: voice features (STT / TTS)
 brew install sox whisper-cpp
-pipx install piper-tts
+brew install pipx && pipx install piper-tts
 pipx inject piper-tts pathvalidate   # fix missing dependency
 ```
 
@@ -92,19 +92,26 @@ export PKG_CONFIG_PATH="/opt/homebrew/lib/postgresql@17/pkgconfig:$PKG_CONFIG_PA
 
 ```bash
 # PostgreSQL + pgvector
-sudo apt install postgresql postgresql-server-dev-17
-# pgvector: build from source or install from apt if available
-# See https://github.com/pgvector/pgvector#linux
+sudo apt install postgresql postgresql-17-pgvector libpq-dev
 
-# libpg_query: build from source
-# See https://github.com/pganalyze/libpg_query#installation
+# libpg_query (build from source)
+sudo apt install build-essential
+git clone https://github.com/pganalyze/libpg_query.git
+cd libpg_query && make && sudo make install && sudo ldconfig
+cd .. && rm -rf libpg_query
+
+# OCaml toolchain
+sudo apt install opam
+opam init -y          # first time only
+eval $(opam env)
 
 # Ollama
 curl -fsSL https://ollama.com/install.sh | sh
 
 # Optional: voice features (STT / TTS)
 sudo apt install sox
-# Whisper.cpp and Piper: see their GitHub repos for Linux install instructions
+# Whisper.cpp: build from source — https://github.com/ggerganov/whisper.cpp#build
+# Piper: download prebuilt binary — https://github.com/rhasspy/piper/releases
 ```
 
 </details>
@@ -113,19 +120,32 @@ sudo apt install sox
 <summary><strong>Fedora / RHEL</strong></summary>
 
 ```bash
-sudo dnf install postgresql-server postgresql-devel
+sudo dnf install postgresql-server libpq-devel gcc make
 sudo postgresql-setup --initdb
 sudo systemctl enable --now postgresql
 
-# pgvector and libpg_query: build from source
-# See respective GitHub repositories for instructions
+# pgvector (build from source)
+git clone --branch v0.8.0 https://github.com/pgvector/pgvector.git
+cd pgvector && make && sudo make install
+cd .. && rm -rf pgvector
+
+# libpg_query (build from source)
+git clone https://github.com/pganalyze/libpg_query.git
+cd libpg_query && make && sudo make install && sudo ldconfig
+cd .. && rm -rf libpg_query
+
+# OCaml toolchain
+sudo dnf install opam
+opam init -y          # first time only
+eval $(opam env)
 
 # Ollama
 curl -fsSL https://ollama.com/install.sh | sh
 
 # Optional: voice features (STT / TTS)
 sudo dnf install sox
-# Whisper.cpp and Piper: see their GitHub repos for Linux install instructions
+# Whisper.cpp: build from source — https://github.com/ggerganov/whisper.cpp#build
+# Piper: download prebuilt binary — https://github.com/rhasspy/piper/releases
 ```
 
 </details>
@@ -133,7 +153,14 @@ sudo dnf install sox
 <details>
 <summary><strong>Windows (WSL2)</strong></summary>
 
-Install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install), then follow the Ubuntu instructions above inside your WSL distribution. Thunderbird runs natively on Windows and connects to the server at `localhost`.
+Install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) with an Ubuntu distribution, then follow the Ubuntu instructions above inside WSL.
+
+**Key points:**
+
+- **Thunderbird** runs natively on Windows. Modern WSL2 automatically forwards `localhost` ports, so the add-on connects to the server at `http://localhost:8080` as usual.
+- **PostgreSQL**: start it inside WSL with `sudo service postgresql start` (WSL doesn't use systemd by default).
+- **Ollama**: install on Windows natively (not inside WSL) for GPU access, or inside WSL if using CPU only. Both expose `localhost:11434`.
+- **Voice features**: `sox`/`rec` require PulseAudio forwarding from WSL to Windows for mic access. This is non-trivial; voice features may not work out of the box on WSL2.
 
 </details>
 
@@ -191,11 +218,14 @@ ollama pull llama3              # chat model (or any model you prefer)
 
 ```bash
 # Install OCaml toolchain (first time only)
+# If you haven't already: install opam (see platform instructions above)
+opam init -y              # first time only (skip if already done)
+eval $(opam env)
+cd rag-o-mail
 opam switch create . ocaml-base-compiler.5.2.0
 opam install . --deps-only -y
 
 # Build
-cd rag-o-mail
 dune build
 ```
 
@@ -232,9 +262,17 @@ cd rag-o-mail
 dune exec -- rag-o-mail -p 8080
 ```
 
-Or from the repository root: `make run`
+Or from the repository root: `make run` (uses port 8080 by default).
 
 The server creates the database schema automatically on first startup.
+
+**Optional — start the voice server** (if you set up voice models above):
+
+```bash
+# In a separate terminal:
+whisper-server --model ~/.local/share/whisper/ggml-base.en.bin --port 8178
+python3 scripts/voice-server.py --port 8179
+```
 
 ### Ingest emails
 
@@ -297,7 +335,7 @@ ThunderRAG/
 | `make xpi` | Build the add-on XPI (`ThunderRAG/dist/thunderRAG.xpi`) |
 | `make ocaml` | Install OCaml dependencies and build the server |
 | `make setup-db` | Create the `rag-o-mail` database and enable pgvector |
-| `make run` | Build and run the server on `http://127.0.0.1:8090` |
+| `make run` | Build and run the server on `http://127.0.0.1:8080` |
 | `make clean` | Clean all build artifacts |
 
 ## License

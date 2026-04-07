@@ -2135,6 +2135,12 @@ let clear_ingest_queue () : (unit, string) result =
       "DELETE FROM ingest_queue" in
     C.exec req ())
 
+let clear_pending_processed () : (unit, string) result =
+  use_ret (fun (module C : Caqti_eio.CONNECTION) ->
+    let req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true
+      "DELETE FROM pending_processed" in
+    C.exec req ())
+
 (* Clear all memory-related tables *)
 let clear_memories () : (unit, string) result =
   use_ret (fun (module C : Caqti_eio.CONNECTION) ->
