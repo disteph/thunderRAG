@@ -39,6 +39,7 @@ const ATTACHMENT_SETTING_KEYS = {
   syntax: "attachmentFilterSyntax",
   defaultPath: "attachmentDefaultPath",
   lazyIgnore: "attachmentLazyIgnore",
+  renameOld: "attachmentRenameOld",
 };
 
 async function getAttachmentSettings() {
@@ -48,9 +49,10 @@ async function getAttachmentSettings() {
       syntax: String(data[ATTACHMENT_SETTING_KEYS.syntax] || "glob").trim() || "glob",
       defaultPath: String(data[ATTACHMENT_SETTING_KEYS.defaultPath] || "").trim(),
       lazyIgnore: String(data[ATTACHMENT_SETTING_KEYS.lazyIgnore] || ""),
+      renameOld: !!data[ATTACHMENT_SETTING_KEYS.renameOld],
     };
   } catch (_e) {
-    return { syntax: "glob", defaultPath: "", lazyIgnore: "" };
+    return { syntax: "glob", defaultPath: "", lazyIgnore: "", renameOld: false };
   }
 }
 
@@ -159,6 +161,7 @@ async function saveAttachmentsForUi(headerMessageId, selectedKeys = null) {
     syntax: "default",
     useGlobalIgnore: true,
     skipExisting: true,
+    renameOld: settings.renameOld || false,
   };
   if (Array.isArray(selectedKeys) && selectedKeys.length) {
     options.selectedKeys = selectedKeys;
@@ -1240,8 +1243,9 @@ function renderMidPane() {
   header.querySelector("#recomputeBtn").addEventListener("click", () => bulkRecompute([activeTaskId]));
   header.querySelector("#deleteTaskBtn").addEventListener("click", () => updateTaskStatus("delete"));
 
-  // Context readiness banner
-  if (!activeTask.context_ready) {
+  // Context readiness banner (only show if no conversation yet)
+  const hasConversation = activeTask.conversation && activeTask.conversation.length > 0;
+  if (!activeTask.context_ready && !hasConversation) {
     const banner = document.createElement("div");
     banner.className = "context-banner";
     if (activeTask.context_prefetched) {

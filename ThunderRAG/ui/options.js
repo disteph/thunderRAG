@@ -351,19 +351,350 @@ function renderPrompts(json) {
     return;
   }
 
+  // Define schemas and models for prompts
+  const promptInfo = {
+    "propose_tasks_system": {
+      schema: {
+        type: "object",
+        properties: {
+          tasks: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                title: { type: "string" },
+                description: { type: "string" },
+                importance: { type: "integer" },
+                deadline: { type: "string" }
+              },
+              required: ["title", "description"]
+            }
+          },
+          summary: { type: "string" }
+        },
+        required: ["tasks"]
+      },
+      model: "Triage model (task generation)"
+    },
+    "propose_tasks_user": {
+      schema: null,
+      model: "Triage model (task generation)"
+    },
+    "task_dedup_system": {
+      schema: {
+        type: "object",
+        properties: {
+          decision: { type: "string" },
+          existing_task_id: { type: "string" },
+          update_description: { type: "string" },
+          importance: { type: "integer" },
+          deadline: { type: "string" }
+        },
+        required: ["decision"]
+      },
+      model: "Triage model (task generation)"
+    },
+    "task_dedup_user": {
+      schema: null,
+      model: "Triage model (task generation)"
+    },
+    "memory_rule_extract_system": {
+      schema: {
+        type: "object",
+        properties: {
+          extractable: { type: "boolean" },
+          rule: { type: "object" }
+        },
+        required: ["extractable"]
+      },
+      model: "Chat / LLM model"
+    },
+    "memory_rule_extract_user": {
+      schema: null,
+      model: "Chat / LLM model"
+    },
+    "memory_template_gen_system": {
+      schema: {
+        type: "object",
+        properties: {
+          templates: {
+            type: "array",
+            items: { type: "string" }
+          }
+        },
+        required: ["templates"]
+      },
+      model: "Chat / LLM model"
+    },
+    "memory_template_gen_user": {
+      schema: null,
+      model: "Chat / LLM model"
+    },
+    "query_rewrite_system": {
+      schema: {
+        type: "object",
+        properties: {
+          no_retrieval: { type: "boolean" },
+          resolved_question: { type: "string" },
+          rewrite: { type: "string" },
+          hyp_from: { type: "string" },
+          hyp_to: { type: "string" },
+          hyp_subject: { type: "string" },
+          hyp_body: { type: "string" },
+          filter: { type: "string" },
+          score_expr: { type: "string" }
+        },
+        required: ["no_retrieval", "resolved_question"]
+      },
+      model: "Query rewrite model"
+    },
+    "query_rewrite_user": {
+      schema: null,
+      model: "Query rewrite model"
+    },
+    "query_rewrite_system_extra": {
+      schema: null,
+      model: "Query rewrite model (template fragment)"
+    },
+    "select_evidence_system": {
+      schema: {
+        type: "object",
+        properties: {
+          selected: {
+            type: "array",
+            items: { type: "integer" }
+          }
+        },
+        required: ["selected"]
+      },
+      model: "Query rewrite model"
+    },
+    "select_evidence_user": {
+      schema: null,
+      model: "Query rewrite model"
+    },
+    "task_first_message_system": {
+      schema: null,
+      model: "Triage model (task generation)"
+    },
+    "task_first_message_user": {
+      schema: null,
+      model: "Triage model (task generation)"
+    },
+    "task_interview_system": {
+      schema: null,
+      model: "Chat / LLM model"
+    },
+    "task_interview_user": {
+      schema: null,
+      model: "Chat / LLM model"
+    },
+    "chat": {
+      schema: null,
+      model: "Chat / LLM model"
+    },
+    "chat_question_user_suffix": {
+      schema: null,
+      model: "Chat / LLM model (template fragment - appended to user question)"
+    },
+    "conversation_summary_system": {
+      schema: null,
+      model: "Summarize model"
+    },
+    "conversation_summary_user": {
+      schema: null,
+      model: "Summarize model"
+    },
+    "task_archive_system": {
+      schema: null,
+      model: "Chat / LLM model"
+    },
+    "task_archive_user": {
+      schema: null,
+      model: "Chat / LLM model"
+    },
+    "compress_new_content_ingest": {
+      schema: null,
+      model: "Summarize model"
+    },
+    "compress_new_content_evidence": {
+      schema: null,
+      model: "Summarize model"
+    },
+    "compress_quoted_context_evidence": {
+      schema: null,
+      model: "Summarize model"
+    },
+    "compress_attachment": {
+      schema: null,
+      model: "Summarize model"
+    }
+  };
+
+  // Group prompts by their base name (e.g., "propose_tasks_system" and "propose_tasks_user" -> "propose_tasks")
+  const promptGroups = {};
   const keys = Object.keys(json);
+  
   for (const key of keys) {
     if (key === "_meta") continue;
-    const val = json[key];
-    const text = promptValueToText(val);
-    const rows = Math.max(3, Math.min(20, text.split("\n").length + 1));
+    
+    // Extract base name and type
+    let baseName, type;
+    if (key.endsWith("_system")) {
+      baseName = key.slice(0, -7);
+      type = "system";
+    } else if (key.endsWith("_user")) {
+      baseName = key.slice(0, -5);
+      type = "user";
+    } else {
+      baseName = key;
+      type = "single";
+    }
+    
+    if (!promptGroups[baseName]) {
+      promptGroups[baseName] = {
+        baseName,
+        system: null,
+        user: null,
+        single: null,
+        model: promptInfo[key]?.model || ""
+      };
+    }
+    
+    promptGroups[baseName][type] = {
+      key,
+      value: json[key],
+      schema: promptInfo[key]?.schema
+    };
+  }
 
-    const div = document.createElement("div");
-    div.className = "prompt-field";
-    div.innerHTML = `<label for="prompt-${key}">${key}</label>
-      <textarea id="prompt-${key}" rows="${rows}">${text.replace(/</g, "&lt;")}</textarea>`;
-    div.querySelector("textarea").addEventListener("input", markPromptsDirty);
-    container.appendChild(div);
+  // Render each prompt group
+  for (const group of Object.values(promptGroups)) {
+    const groupDiv = document.createElement("div");
+    groupDiv.className = "prompt-group";
+    groupDiv.style.cssText = `
+      margin-bottom: 24px;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg-secondary);
+    `;
+    
+    // Group header
+    const headerDiv = document.createElement("div");
+    headerDiv.className = "prompt-group-header";
+    headerDiv.style.cssText = `
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    `;
+    
+    const titleSpan = document.createElement("span");
+    titleSpan.style.cssText = `
+      font-weight: 600;
+      font-size: 1.1rem;
+      color: var(--text);
+    `;
+    titleSpan.textContent = group.baseName;
+    
+    const modelSpan = document.createElement("span");
+    modelSpan.style.cssText = `
+      font-size: 0.85rem;
+      color: var(--muted);
+      background: var(--code-bg);
+      padding: 2px 8px;
+      border-radius: 4px;
+    `;
+    modelSpan.textContent = group.model;
+    
+    headerDiv.appendChild(titleSpan);
+    if (group.model) {
+      headerDiv.appendChild(modelSpan);
+    }
+    groupDiv.appendChild(headerDiv);
+    
+    // Collect schemas to display at the end
+    const schemas = [];
+    
+    // Render prompts in the group
+    if (group.single) {
+      // Single prompt (not split)
+      renderPromptField(groupDiv, group.single.key, group.single.value, null, "Single");
+      if (group.single.schema) {
+        schemas.push(group.single.schema);
+      }
+    } else {
+      // Split system/user prompts
+      if (group.system) {
+        renderPromptField(groupDiv, group.system.key, group.system.value, null, "System");
+        if (group.system.schema) {
+          schemas.push(group.system.schema);
+        }
+      }
+      if (group.user) {
+        renderPromptField(groupDiv, group.user.key, group.user.value, null, "User");
+        if (group.user.schema) {
+          schemas.push(group.user.schema);
+        }
+      }
+    }
+    
+    container.appendChild(groupDiv);
+    
+    // Add schemas at the end of the group
+    if (schemas.length > 0) {
+      const schemaDiv = document.createElement("div");
+      schemaDiv.className = "json-schema";
+      schemaDiv.style.cssText = `
+        margin-top: 8px;
+        padding: 8px;
+        background: var(--code-bg);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        font-size: 0.75rem;
+        color: var(--muted);
+      `;
+      
+      const schemaTitle = document.createElement("div");
+      schemaTitle.style.cssText = `
+        font-weight: 600;
+        margin-bottom: 4px;
+        color: var(--text);
+      `;
+      schemaTitle.textContent = "Output JSON Schema:";
+      
+      // Merge all schemas into one (for split prompts, typically only one will have a schema)
+      const mergedSchema = schemas.length === 1 ? schemas[0] : {
+        type: "object",
+        properties: schemas.reduce((acc, schema, index) => {
+          if (schema.properties) {
+            Object.assign(acc, schema.properties);
+          }
+          return acc;
+        }, {}),
+        required: schemas.reduce((acc, schema) => {
+          if (schema.required) {
+            return acc.concat(schema.required);
+          }
+          return acc;
+        }, [])
+      };
+      
+      const schemaPre = document.createElement("pre");
+      schemaPre.style.cssText = `
+        margin: 0;
+        white-space: pre-wrap;
+        font-family: "SF Mono", Menlo, Consolas, monospace;
+      `;
+      schemaPre.textContent = JSON.stringify(mergedSchema, null, 2);
+      
+      schemaDiv.appendChild(schemaTitle);
+      schemaDiv.appendChild(schemaPre);
+      container.appendChild(schemaDiv);
+    }
   }
 
   /* Show the _meta info at the end */
@@ -372,7 +703,7 @@ function renderPrompts(json) {
     metaDiv.className = "hint";
     metaDiv.style.marginTop = "12px";
     const vars = Object.entries(json._meta.variables)
-      .map(([k, v]) => `<code>${k}</code> — ${v}`)
+      .map(([k, v]) => `<code>${k}</code> - ${v}`)
       .join("<br/>");
     metaDiv.innerHTML = `<strong>Available template variables:</strong><br/>${vars}`;
     container.appendChild(metaDiv);
@@ -380,6 +711,82 @@ function renderPrompts(json) {
 
   document.getElementById("prompts-btn-bar").style.display = "flex";
   clearPromptsDirty();
+}
+
+function renderPromptField(container, key, value, fieldType) {
+  const text = promptValueToText(value);
+  const rows = Math.max(3, Math.min(20, text.split("\n").length + 1));
+  
+  const fieldDiv = document.createElement("div");
+  fieldDiv.className = "prompt-field";
+  fieldDiv.style.cssText = `
+    margin-bottom: 12px;
+  `;
+  
+  // Field header with type label
+  const headerDiv = document.createElement("div");
+  headerDiv.style.cssText = `
+    display: flex;
+    align-items: center;
+    margin-bottom: 4px;
+  `;
+  
+  const typeLabel = document.createElement("span");
+  typeLabel.style.cssText = `
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 2px 6px;
+    border-radius: 3px;
+    margin-right: 8px;
+  `;
+  
+  if (fieldType === "System") {
+    typeLabel.style.background = "#e3f2fd";
+    typeLabel.style.color = "#1976d2";
+  } else if (fieldType === "User") {
+    typeLabel.style.background = "#f3e5f5";
+    typeLabel.style.color = "#7b1fa2";
+  } else {
+    typeLabel.style.background = "#e8f5e8";
+    typeLabel.style.color = "#388e3c";
+  }
+  typeLabel.textContent = fieldType;
+  
+  const nameLabel = document.createElement("label");
+  nameLabel.style.cssText = `
+    font-size: 0.9rem;
+    color: var(--muted);
+    font-weight: 500;
+  `;
+  nameLabel.htmlFor = `prompt-${key}`;
+  nameLabel.textContent = key;
+  
+  headerDiv.appendChild(typeLabel);
+  headerDiv.appendChild(nameLabel);
+  fieldDiv.appendChild(headerDiv);
+  
+  // Textarea
+  const textarea = document.createElement("textarea");
+  textarea.id = `prompt-${key}`;
+  textarea.textContent = text; // Use textContent to avoid HTML escaping
+  textarea.rows = rows;
+  textarea.style.cssText = `
+    width: 100%;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+    resize: vertical;
+    background: var(--code-bg);
+    color: var(--text);
+  `;
+  textarea.addEventListener("input", markPromptsDirty);
+  fieldDiv.appendChild(textarea);
+  
+  container.appendChild(fieldDiv);
 }
 
 function focusPromptEditor(key) {
@@ -537,10 +944,11 @@ async function init() {
       const el = document.getElementById(id);
       if (!el) continue;
       const val = stored[id] != null ? stored[id] : spec.default;
-      if (el.tagName === "SELECT") el.value = val;
+      if (el.type === "checkbox") el.checked = !!val;
+      else if (el.tagName === "SELECT") el.value = val;
       else el.value = val;
       const save = async () => {
-        const v = el.value;
+        const v = el.type === "checkbox" ? el.checked : el.value;
         await browser.storage.local.set({ [id]: v });
         statusMsg("Attachment setting saved.");
       };

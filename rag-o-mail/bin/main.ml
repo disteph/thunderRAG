@@ -886,8 +886,8 @@ let propose_tasks ~client ~sw ~(whoami : string)
     if String.trim memories_text = "" then ""
     else Printf.sprintf "\n\nUSER MEMORIES (persistent preferences and rules — follow these):\n%s" memories_text
   in
-  let system =
-    get_prompt "propose_tasks"
+  let system_prompt =
+    get_prompt "propose_tasks_system"
       ~default:("You are a task extraction assistant. " ^ user_identity ^
         "Given an email, propose tasks the user needs to do in response. " ^
         "Respond with ONLY a JSON object: {\"tasks\": [{\"title\": \"short task title\", " ^
@@ -903,22 +903,28 @@ let propose_tasks ~client ~sw ~(whoami : string)
         "Do NOT use Sender-Subject format." ^ memories_section)
       ~vars:[("{{user_identity}}", user_identity); ("{{user_memories}}", memories_text)]
   in
-  let user_msg =
-    Printf.sprintf
-      "EMAIL HEADERS:\n\
-       From: %s\nTo: %s\nCc: %s\nBcc: %s\nSubject: %s\nDate: %s\n\n\
-       BODY:\n%s"
-      from_ to_ cc_ bcc_ subject date_ body_text
+  let user_prompt =
+    get_prompt "propose_tasks_user"
+      ~default:"EMAIL HEADERS:\nFrom: {{from}}\nTo: {{to}}\nCc: {{cc}}\nBcc: {{bcc}}\nSubject: {{subject}}\nDate: {{date}}\n\nBODY:\n{{body}}"
+      ~vars:[
+        ("{{from}}", from_);
+        ("{{to}}", to_);
+        ("{{cc}}", cc_);
+        ("{{bcc}}", bcc_);
+        ("{{subject}}", subject);
+        ("{{date}}", date_);
+        ("{{body}}", body_text);
+      ]
   in
   let messages : Yojson.Safe.t list =
-    [ `Assoc [ ("role", `String "system"); ("content", `String system) ]
-    ; `Assoc [ ("role", `String "user"); ("content", `String user_msg) ]
+    [ `Assoc [ ("role", `String "system"); ("content", `String system_prompt) ]
+    ; `Assoc [ ("role", `String "user"); ("content", `String user_prompt) ]
     ]
   in
   let effective_model = !ollama_triage_model in
   let debug_json raw_resp = Some (`Assoc
     [ ("model", `String effective_model)
-    ; ("prompt_key", `String "propose_tasks")
+    ; ("prompt_key", `String "propose_tasks_system")
     ; ("messages", `List messages)
     ; ("raw_response", `String raw_resp)
     ]) in
@@ -1388,7 +1394,7 @@ let process_task_proposals ~client ~sw ~(doc_id : string)
             (i + 1) tid dist imp_s dl_s title desc
         ) neighbors in
         let dedup_system =
-          get_prompt "task_dedup"
+          get_prompt "task_dedup_system"
             ~default:"You are a task deduplication assistant. Given a proposed new task and a list of existing tasks, \
               decide whether the proposed task is the same as an existing one or genuinely new. \
               Respond with ONLY a JSON object: \
@@ -1404,14 +1410,20 @@ let process_task_proposals ~client ~sw ~(doc_id : string)
         in
         let prop_imp_s = match tp.tp_importance with Some n -> string_of_int n | None -> "?" in
         let prop_dl_s = if tp.tp_deadline = "" then "none" else tp.tp_deadline in
-        let dedup_user = Printf.sprintf
-          "PROPOSED TASK:\nTitle: %s\nDescription: %s\nImportance: %s\nDeadline: %s\n\nEXISTING TASKS:\n%s"
-          tp.tp_title tp.tp_description prop_imp_s prop_dl_s
-          (String.concat "\n" neighbor_lines)
+        let dedup_user_prompt =
+          get_prompt "task_dedup_user"
+            ~default:"PROPOSED TASK:\nTitle: {{proposed_title}}\nDescription: {{proposed_description}}\nImportance: {{proposed_importance}}\nDeadline: {{proposed_deadline}}\n\nEXISTING TASKS:\n{{existing_tasks}}"
+            ~vars:[
+              ("{{proposed_title}}", tp.tp_title);
+              ("{{proposed_description}}", tp.tp_description);
+              ("{{proposed_importance}}", prop_imp_s);
+              ("{{proposed_deadline}}", prop_dl_s);
+              ("{{existing_tasks}}", String.concat "\n" neighbor_lines);
+            ]
         in
         let dedup_messages : Yojson.Safe.t list =
           [ `Assoc [ ("role", `String "system"); ("content", `String dedup_system) ]
-          ; `Assoc [ ("role", `String "user"); ("content", `String dedup_user) ]
+          ; `Assoc [ ("role", `String "user"); ("content", `String dedup_user_prompt) ]
           ]
         in
         let task_dedup_schema : Yojson.Safe.t =
@@ -1953,12 +1965,15 @@ let renumber_cited_sources ~(answer : string) ~(sources_json : Yojson.Safe.t) : 
 *)
 let call_ollama_summarize ~client ~sw ~(text : string) ~(target_chars : int)
     : string option =
-  let instr =
-    get_prompt "conversation_summary" ~default:"Summarize the following conversation for context. Preserve key facts and identifiers. Do not invent." ~vars:[]
+  let system_prompt =
+    get_prompt "conversation_summary_system" ~default:"Summarize the following conversation for context. Preserve key facts and identifiers. Do not invent." ~vars:[]
+  in
+  let user_prompt =
+    get_prompt "conversation_summary_user" ~default:"{{text}}" ~vars:[("{{text}}", text)]
   in
   let messages =
-    [ `Assoc [ ("role", `String "system"); ("content", `String (instr ^ Printf.sprintf " Target length: at most %d characters. Output plain text." target_chars)) ]
-    ; `Assoc [ ("role", `String "user"); ("content", `String text) ]
+    [ `Assoc [ ("role", `String "system"); ("content", `String (system_prompt ^ Printf.sprintf " Target length: at most %d characters. Output plain text." target_chars)) ]
+    ; `Assoc [ ("role", `String "user"); ("content", `String user_prompt) ]
     ]
   in
   match ollama_chat ~client ~sw ~label:"session_summary" ~stats:stats_chat_session ~messages () with
@@ -2055,7 +2070,7 @@ let generate_memory_rule_and_templates ~client ~sw
   (* --- Phase A: Generate symbolic rule via LLM with iterative validation --- *)
   let max_retries = !memory_rule_max_retries in
   let rule_system =
-    get_prompt "memory_rule_extract"
+    get_prompt "memory_rule_extract_system"
       ~default:{|You are a rule extraction assistant. Given a user memory (a natural language instruction about how to handle certain emails), extract a symbolic rule as a JSON object using MongoDB-style query syntax.
 
 Available fields: sender, recipient, cc, bcc, subject, date, attachments
@@ -2074,15 +2089,18 @@ Otherwise respond with ONLY the JSON rule object, no explanation.|}
     if attempt > max_retries then begin
       Printf.printf "[memory_bg] rule extraction failed after %d retries for %s\n%!" max_retries memory_id
     end else begin
-      let user_msg =
-        let base = Printf.sprintf "MEMORY TEXT:\n%s" memory_text in
+      let user_prompt =
+        let base = get_prompt "memory_rule_extract_user"
+          ~default:"MEMORY TEXT:\n{{memory_text}}"
+          ~vars:[("{{memory_text}}", memory_text)]
+        in
         match prev_error with
         | None -> base
         | Some err -> Printf.sprintf "%s\n\nPREVIOUS ATTEMPT FAILED VALIDATION:\n%s\nPlease fix the rule." base err
       in
       let messages : Yojson.Safe.t list =
         [ `Assoc [ ("role", `String "system"); ("content", `String rule_system) ]
-        ; `Assoc [ ("role", `String "user"); ("content", `String user_msg) ]
+        ; `Assoc [ ("role", `String "user"); ("content", `String user_prompt) ]
         ] in
       let memory_rule_schema : Yojson.Safe.t =
         `Assoc [
@@ -2131,19 +2149,23 @@ Otherwise respond with ONLY the JSON rule object, no explanation.|}
   let template_count = !memory_template_count in
   if template_count > 0 then begin
     let template_system =
-      get_prompt "memory_template_gen"
+      get_prompt "memory_template_gen_system"
         ~default:(Printf.sprintf
           {|You are an email generation assistant. Given a user memory describing a type of email, generate %d short example emails that would trigger this memory. Each example should be realistic and distinct.
 
-Output ONLY a JSON array of strings, where each string is a short email (headers + body). Example:
-["From: alice@example.com\nTo: me@example.com\nSubject: Invoice #123\n\nPlease find attached invoice...", "From: bob@corp.com\nTo: me@example.com\nSubject: Payment reminder\n\nThis is a reminder..."]|}
+Output a JSON object with a "templates" field containing an array of strings, where each string is a short email (headers + body). Example:
+{"templates": ["From: alice@example.com\nTo: me@example.com\nSubject: Invoice #123\n\nPlease find attached invoice...", "From: bob@corp.com\nTo: me@example.com\nSubject: Payment reminder\n\nThis is a reminder..."]}|}
           template_count)
         ~vars:[]
     in
-    let user_msg = Printf.sprintf "MEMORY TEXT:\n%s" memory_text in
+    let user_prompt =
+      get_prompt "memory_template_gen_user"
+        ~default:"MEMORY TEXT:\n{{memory_text}}"
+        ~vars:[("{{memory_text}}", memory_text)]
+    in
     let messages : Yojson.Safe.t list =
       [ `Assoc [ ("role", `String "system"); ("content", `String template_system) ]
-      ; `Assoc [ ("role", `String "user"); ("content", `String user_msg) ]
+      ; `Assoc [ ("role", `String "user"); ("content", `String user_prompt) ]
       ] in
     let memory_template_schema : Yojson.Safe.t =
       `Assoc [
@@ -2203,15 +2225,20 @@ let archive_task_conversation ~client ~sw ~(task_id : string)
   if String.trim full_text = "" then ()
   else
     let target_chars = 2000 in
-    let system =
-      get_prompt "task_archive"
+    let system_prompt =
+      get_prompt "task_archive_system"
         ~default:"Summarize the following task conversation into concise notes. \
           Preserve key decisions, action items, and outcomes. Third person."
         ~vars:[("{{task_title}}", title)]
     in
+    let user_prompt =
+      get_prompt "task_archive_user"
+        ~default:"{{conversation_text}}"
+        ~vars:[("{{conversation_text}}", full_text)]
+    in
     let messages : Yojson.Safe.t list =
-      [ `Assoc [ ("role", `String "system"); ("content", `String (system ^ Printf.sprintf " Target: at most %d characters." target_chars)) ]
-      ; `Assoc [ ("role", `String "user"); ("content", `String full_text) ]
+      [ `Assoc [ ("role", `String "system"); ("content", `String (system_prompt ^ Printf.sprintf " Target: at most %d characters." target_chars)) ]
+      ; `Assoc [ ("role", `String "user"); ("content", `String user_prompt) ]
       ]
     in
     match ollama_chat ~client ~sw ~label:"task_archive" ~messages () with
@@ -3380,11 +3407,11 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
     let user_identity = build_user_identity ~long:true ~name:user_name ~email:!whoami () in
     let rewrite_field =
       if has_context then
-        get_prompt_raw "query_rewrite_field" ~default:"- \"rewrite\": Rewrite the user's last question as a self-contained search query. Resolve pronouns and relative dates.\n"
+        get_prompt_raw "query_rewrite_system_extra" ~default:"- \"rewrite\": Rewrite the user's last question as a self-contained search query. Resolve pronouns and relative dates.\n"
       else ""
     in
-    let system =
-      get_prompt "query_rewrite"
+    let system_prompt =
+      get_prompt "query_rewrite_system"
         ~default:"You help search an email archive. Output a JSON object with resolved_question, hyp_from, hyp_to, hyp_subject, hyp_body fields."
         ~vars:[
           ("{{user_identity}}", user_identity);
@@ -3392,23 +3419,19 @@ let rewrite_queries_for_retrieval ~client ~sw ~(question : string)
           ("{{datetime_local}}", now_local_string ());
         ]
     in
+    let user_prompt =
+      get_prompt "query_rewrite_user"
+        ~default:"{{history_summary}}\n\n{{tail_messages}}\n\n{{question}}"
+        ~vars:[
+          ("{{history_summary}}", history_summary);
+          ("{{tail_messages}}", String.concat "\n\n" (List.map (fun m -> Printf.sprintf "[%s] %s" m.role (String.trim m.content)) tail));
+          ("{{question}}", question);
+        ]
+    in
     let messages : Yojson.Safe.t list =
-      let base =
-        [ `Assoc [ ("role", `String "system"); ("content", `String system) ] ]
-      in
-      let summary =
-        if String.trim history_summary <> "" then
-          [ `Assoc [ ("role", `String "user"); ("content", `String history_summary) ] ]
-        else []
-      in
-      let turns =
-        tail |> List.map (fun m ->
-          `Assoc [ ("role", `String m.role); ("content", `String (String.trim m.content)) ])
-      in
-      let final =
-        [ `Assoc [ ("role", `String "user"); ("content", `String question) ] ]
-      in
-      base @ summary @ turns @ final
+      [ `Assoc [ ("role", `String "system"); ("content", `String system_prompt) ]
+      ; `Assoc [ ("role", `String "user"); ("content", `String user_prompt) ]
+      ]
     in
     let effective_rewrite_model =
       match rewrite_model with
@@ -3745,8 +3768,8 @@ let select_relevant_sources ~client ~sw ~(resolved_question : string)
   in
   let table_str = String.concat "\n" table_lines in
   let user_identity = build_user_identity ~long:true ~name:user_name ~email:!whoami () in
-  let system =
-    get_prompt "select_evidence"
+  let system_prompt =
+    get_prompt "select_evidence_system"
       ~default:"You are helping decide which retrieved emails need their full content loaded. Output a JSON array of 1-based row numbers."
       ~vars:[
         ("{{user_identity}}", user_identity);
@@ -3754,13 +3777,14 @@ let select_relevant_sources ~client ~sw ~(resolved_question : string)
         ("{{resolved_question}}", resolved_question);
       ]
   in
-  let user_msg =
-    Printf.sprintf "Question: %s\n\nOutput ONLY a JSON array of relevant row numbers, e.g. [1, 3, 5]. No explanation."
-      resolved_question
+  let user_prompt =
+    get_prompt "select_evidence_user"
+      ~default:"Question: {{resolved_question}}\n\nOutput ONLY a JSON array of relevant row numbers, e.g. [1, 3, 5]. No explanation."
+      ~vars:[("{{resolved_question}}", resolved_question)]
   in
   let messages : Yojson.Safe.t list =
-    [ `Assoc [ ("role", `String "system"); ("content", `String system) ]
-    ; `Assoc [ ("role", `String "user"); ("content", `String user_msg) ]
+    [ `Assoc [ ("role", `String "system"); ("content", `String system_prompt) ]
+    ; `Assoc [ ("role", `String "user"); ("content", `String user_prompt) ]
     ]
   in
   let effective_sel_model =
@@ -5092,7 +5116,7 @@ let handler ~client ~sw ~clock _socket request body =
                       ^ evidence_msg
                     in
                     let question_suffix =
-                      get_prompt "chat_question_suffix"
+                      get_prompt "chat_question_user_suffix"
                         ~default:"Answer based on the retrieved emails above. Cite as [Email N]."
                         ~vars:[]
                     in
@@ -7139,7 +7163,7 @@ let handler ~client ~sw ~clock _socket request body =
               else "PRIOR RESOLUTIONS (similar tasks resolved in the past — use as reference for tone, approach, and content):\n" ^ prior_resolutions
             in
             let system_prompt =
-              get_prompt "task_interview"
+              get_prompt "task_interview_system"
                 ~default:"You are a task management assistant. Help the user work through their tasks. \
                   Ask short clarifying questions. When ready, draft emails using [DRAFT to=\"...\" subject=\"...\"]...[/DRAFT] markers. \
                   Use [SCORE importance=N] to update importance (0-100). \
@@ -7151,6 +7175,14 @@ let handler ~client ~sw ~clock _socket request body =
                 ~vars:[
                   ("{{user_identity}}", user_identity);
                   ("{{datetime_local}}", now_local_string ());
+                ]
+            in
+
+            (* 4. Build user prompt with task-specific content *)
+            let user_prompt =
+              get_prompt "task_interview_user"
+                ~default:"Generate a response for the task."
+                ~vars:[
                   ("{{task_title}}", title);
                   ("{{task_description}}", description);
                   ("{{email_context}}", email_context);
@@ -7160,10 +7192,9 @@ let handler ~client ~sw ~clock _socket request body =
                   ("{{prior_resolutions}}", prior_resolutions_section);
                 ]
             in
-
-            (* 4. Build messages: system + conversation tail + new user message *)
+            (* 5. Build messages: system + conversation tail + new user message *)
             let user_msg_json =
-              `Assoc [ ("role", `String "user"); ("content", `String user_message) ]
+              `Assoc [ ("role", `String "user"); ("content", `String user_prompt) ]
             in
             let updated_conversation = conversation @ [ user_msg_json ] in
             (* Strip _llm_debug from previous messages before sending to LLM *)
@@ -8362,13 +8393,7 @@ let () =
       if String.trim prior_resolutions = "" then ""
       else "PRIOR RESOLUTIONS (similar tasks resolved in the past — use as reference for tone, approach, and content):\n" ^ prior_resolutions
     in
-    let system_prompt =
-      get_prompt "task_first_message"
-        ~default:"You are a task assistant. Based on the trigger email(s), write a self-contained \
-          first message: extract the task-relevant facts the user needs, then draft a reply if applicable \
-          using [DRAFT to=\"...\" subject=\"...\"] ... [/DRAFT]. Do not greet, do not offer to help, \
-          do not ask open-ended questions."
-        ~vars:[
+    let prompt_vars = [
           ("{{user_identity}}", user_identity);
           ("{{datetime_local}}", now_local_string ());
           ("{{task_title}}", title);
@@ -8379,9 +8404,22 @@ let () =
           ("{{prior_resolutions}}", prior_resolutions_section);
         ]
     in
+    let system_prompt =
+      get_prompt "task_first_message_system"
+        ~default:"You are a task assistant. Based on the trigger email(s), write a self-contained \
+          first message: extract the task-relevant facts the user needs, then draft a reply if applicable \
+          using [DRAFT to=\"...\" subject=\"...\"] ... [/DRAFT]. Do not greet, do not offer to help, \
+          do not ask open-ended questions."
+        ~vars:prompt_vars
+    in
+    let user_prompt =
+      get_prompt "task_first_message_user"
+        ~default:"Generate the first message for this task, following the system instructions above."
+        ~vars:prompt_vars
+    in
     let messages : Yojson.Safe.t list =
       [ `Assoc [ ("role", `String "system"); ("content", `String system_prompt) ]
-      ; `Assoc [ ("role", `String "user"); ("content", `String "Generate the first message for this task.") ]
+      ; `Assoc [ ("role", `String "user"); ("content", `String user_prompt) ]
       ]
     in
     match ollama_chat ~client ~sw ~label:"task_first_msg" ~model:!ollama_triage_model ~messages () with
@@ -8464,7 +8502,7 @@ let () =
         in
         let first_msg_debug = `Assoc
           [ ("model", `String !ollama_triage_model)
-          ; ("prompt_key", `String "task_first_message")
+          ; ("prompt_key", `String "task_first_message_system")
           ; ("messages", `List messages)
           ; ("raw_response", `String first_msg)
           ] in

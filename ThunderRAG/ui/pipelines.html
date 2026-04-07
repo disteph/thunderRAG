@@ -166,9 +166,11 @@
   <div class="step">
     <div class="node wide" style="border-left: 3px solid var(--accent);">
       <div class="node-title">Phase 0 — Triage</div>
-      <div class="node-desc">Dequeue an email from <code>triage_queue</code>, propose tasks via LLM</div>
-      <span class="prompt-tag">propose_tasks</span>
-      <span class="data-tag">triage_queue table</span>
+      <div class="node-desc">Dequeue email, propose tasks via LLM</div>
+      <span class="prompt-tag">propose_tasks_system</span>
+      <span class="prompt-tag">propose_tasks_user</span>
+    </div>  
+    <span class="data-tag">triage_queue table</span>
     </div>
     <div class="side-note">
       Retrieves email metadata from DB + memories (if enabled). Outputs a <code>tasks[]</code> array with title, description, importance, deadline per task.
@@ -179,7 +181,8 @@
     <div class="node wide">
       <div class="node-title">Embed &amp; deduplicate</div>
       <div class="node-desc">Compare each proposed task against existing tasks by vector similarity, then LLM dedup</div>
-      <span class="prompt-tag">task_dedup</span>
+      <span class="prompt-tag">task_dedup_system</span>
+      <span class="prompt-tag">task_dedup_user</span>
     </div>
     <div class="side-note">If a match is found, merges into the existing task with updated description/importance/deadline.</div>
   </div>
@@ -206,7 +209,8 @@
     <div class="node wide" style="border-left: 3px solid var(--accent);">
       <div class="node-title">Phase 1 — Context &amp; style selection</div>
       <div class="node-desc">Find related emails by vector kNN search; find user's sent emails to trigger senders for tone matching</div>
-      <span class="prompt-tag">select_evidence</span>
+      <span class="prompt-tag">select_evidence_system</span>
+      <span class="prompt-tag">select_evidence_user</span>
     </div>
     <div class="side-note">Context: vector similarity to task + triggers, filtered by LLM relevance.<br/>Style: capped at 4 emails, only matches <code>from</code> field of trigger emails.</div>
   </div>
@@ -225,7 +229,8 @@
     <div class="node wide" style="border-left: 3px solid var(--accent);">
       <div class="node-title">Phase 2 — Generate first message</div>
       <div class="node-desc">Produce a tl;dr briefing + initial draft reply for the user</div>
-      <span class="prompt-tag">task_first_message</span>
+      <span class="prompt-tag">task_first_message_system</span>
+      <span class="prompt-tag">task_first_message_user</span>
     </div>
     <div class="side-note">
       Injects email context, style context, user memories, and <strong>prior resolutions</strong> (how similar past tasks were handled).<br/>
@@ -250,10 +255,11 @@
     <div class="node wide">
       <div class="node-title">Query rewrite + HyDE</div>
       <div class="node-desc">Rewrite for retrieval: contextual rewrite, hypothetical email, SQL filter, resolved question</div>
-      <span class="prompt-tag">query_rewrite</span>
-      <span class="prompt-tag">query_rewrite_field</span>
+      <span class="prompt-tag">query_rewrite_system</span>
+      <span class="prompt-tag">query_rewrite_user</span>
+      <span class="prompt-tag">query_rewrite_system_extra</span>
     </div>
-    <div class="side-note"><code>query_rewrite_field</code> is included only on multi-turn conversations (adds the <code>rewrite</code> field).</div>
+    <div class="side-note"><code>query_rewrite_system_extra</code> is included only on multi-turn conversations (adds the <code>rewrite</code> field).</div>
   </div>
   <div class="arrow"></div>
   <div class="step">
@@ -268,7 +274,8 @@
     <div class="node wide">
       <div class="node-title">Select evidence</div>
       <div class="node-desc">LLM decides which retrieved emails need full body loading</div>
-      <span class="prompt-tag">select_evidence</span>
+      <span class="prompt-tag">select_evidence_system</span>
+      <span class="prompt-tag">select_evidence_user</span>
     </div>
   </div>
   <div class="arrow"></div>
@@ -286,7 +293,7 @@
       <div class="node-title">Generate answer</div>
       <div class="node-desc">System prompt + history summary + tail + evidence emails + question</div>
       <span class="prompt-tag">chat</span>
-      <span class="prompt-tag">chat_question_suffix</span>
+      <span class="prompt-tag">chat_question_user_suffix</span>
     </div>
   </div>
   <div class="arrow"></div>
@@ -294,7 +301,8 @@
     <div class="node wide">
       <div class="node-title">Summarize session</div>
       <div class="node-desc">Rolling summary when conversation grows past threshold</div>
-      <span class="prompt-tag">conversation_summary</span>
+      <span class="prompt-tag">conversation_summary_system</span>
+      <span class="prompt-tag">conversation_summary_user</span>
     </div>
   </div>
 </div>
@@ -315,7 +323,8 @@
     <div class="node wide">
       <div class="node-title">Build prompt</div>
       <div class="node-desc">System prompt + trigger/context/style emails + prior resolutions + retrieved emails (if any) + memories + history summary + conversation tail</div>
-      <span class="prompt-tag">task_interview</span>
+      <span class="prompt-tag">task_interview_system</span>
+      <span class="prompt-tag">task_interview_user</span>
     </div>
     <div class="side-note">
       Email bodies from <code>task_emails</code>, labeled [trigger], [context], [style].<br/>
@@ -356,8 +365,10 @@
     <div class="node wide">
       <div class="node-title">[MEMORY] → Rule + templates</div>
       <div class="node-desc">Extract symbolic rule and generate template emails for the memory</div>
-      <span class="prompt-tag">memory_rule_extract</span>
-      <span class="prompt-tag">memory_template_gen</span>
+      <span class="prompt-tag">memory_rule_extract_system</span>
+      <span class="prompt-tag">memory_rule_extract_user</span>
+      <span class="prompt-tag">memory_template_gen_system</span>
+      <span class="prompt-tag">memory_template_gen_user</span>
     </div>
     <div class="side-note">Only if a [MEMORY] marker is present in the response.</div>
   </div>
@@ -366,8 +377,10 @@
     <div class="node wide">
       <div class="node-title">Lifecycle</div>
       <div class="node-desc">Rolling conversation summary, or archive on [DONE]</div>
-      <span class="prompt-tag">conversation_summary</span>
-      <span class="prompt-tag">task_archive</span>
+      <span class="prompt-tag">conversation_summary_system</span>
+      <span class="prompt-tag">conversation_summary_user</span>
+      <span class="prompt-tag">task_archive_system</span>
+      <span class="prompt-tag">task_archive_user</span>
     </div>
   </div>
 </div>
@@ -378,17 +391,13 @@
   <div class="step" style="flex-wrap:wrap;gap:8px;">
     <div class="node" style="min-width:auto;">
       <span class="prompt-tag">indexed_email_format</span>
-      <div class="node-desc" style="margin-top:4px;">Describes the format of indexed emails. Inserted into <code>query_rewrite</code>.</div>
+      <div class="node-desc" style="margin-top:4px;">Describes the format of indexed emails. Inserted into <code>query_rewrite_system</code>.</div>
     </div>
     <div class="node" style="min-width:auto;">
       <span class="prompt-tag">email_body_sections</span>
       <div class="node-desc" style="margin-top:4px;">Explains the labelled body sections. Used in <code>chat</code> and compression prompts.</div>
     </div>
-    <div class="node" style="min-width:auto;">
-      <span class="prompt-tag">task_summary</span>
-      <div class="node-desc" style="margin-top:4px;">Standalone task briefing (not currently in a pipeline).</div>
-    </div>
-  </div>
+      </div>
 </div>
 
 </body>

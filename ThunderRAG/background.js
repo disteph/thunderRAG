@@ -766,6 +766,7 @@ async function processAttachmentSaveQueue() {
             matcher: item.matcher || "",
             syntax: item.syntax || "default",
             useGlobalIgnore: item.useGlobalIgnore !== false,
+            renameOld: !!item.renameOld,
           })
         );
         console.log(

@@ -627,7 +627,7 @@ async function saveAttachmentsFromMsgHdr(msgHdr, directoryPath, headerMessageId 
   const files = [];
   const renameOld = !!options.renameOld;
   for (const item of toSave) {
-    if (item.exists && options.skipExisting) {
+    if (item.exists && options.skipExisting && !renameOld) {
       files.push({ key: item.key, name: item.name, path: item.path, savedNow: false, existed: true, skipped: "skipExisting" });
       continue;
     }
@@ -650,6 +650,52 @@ async function saveAttachmentsFromMsgHdr(msgHdr, directoryPath, headerMessageId 
       }
       continue;
     }
+    if (renameOld) {
+      // Rename old file to archive name, then save new directly to original name.
+      const originalLeafName = preferred.leafName;
+      const originalPath = preferred.path;
+      const archivedOld = uniqueDestinationFile(directory, item.safeName);
+      try {
+        preferred.renameTo(directory, archivedOld.leafName);
+      } catch (renameErr) {
+        consoleService.logStringMessage(
+          `[ragFilterAction] saveAttachments: rename-old failed ${originalPath} → ${archivedOld.leafName}: ${renameErr}`
+        );
+        // Can't rename old; fall through to save with unique name below
+      }
+      if (!preferred.exists() || preferred.leafName !== originalLeafName) {
+        // Old file was successfully moved out; save new to original name
+        const newDest = preferredDestinationFile(directory, item.safeName);
+        try {
+          await saveNativeAttachmentToFile(item.attachment, newDest, messageUri);
+          // Check if new is identical to archived old; if so, undo the rename
+          if (filesAreIdentical(newDest, archivedOld)) {
+            try { newDest.remove(false); } catch (_e) {}
+            try { archivedOld.renameTo(directory, originalLeafName); } catch (_e) {}
+            files.push({ key: item.key, name: item.name, path: originalPath, savedNow: false, existed: true, skipped: "identical" });
+            consoleService.logStringMessage(
+              `[ragFilterAction] saveAttachments: skipped identical ${originalPath} messageId=${headerMessageId || ""}`
+            );
+          } else {
+            saved++;
+            files.push({ key: item.key, name: item.name, path: originalPath, savedNow: true, existed: true, renamedOld: archivedOld.path });
+            consoleService.logStringMessage(
+              `[ragFilterAction] saveAttachments: saved ${originalPath} (old → ${archivedOld.leafName}) messageId=${headerMessageId || ""}`
+            );
+          }
+        } catch (e) {
+          // Save failed; try to restore old file
+          try { archivedOld.renameTo(directory, originalLeafName); } catch (_e) {}
+          try {
+            consoleService.logStringMessage(
+              `[ragFilterAction] saveAttachments: native save failed (renameOld) name=${item.name} messageId=${headerMessageId || ""}: ${e}`
+            );
+          } catch (_e) {}
+        }
+        continue;
+      }
+      // Fall through: rename-old failed, save with unique name instead
+    }
     const tempDest = uniqueDestinationFile(directory, item.safeName);
     try {
       await saveNativeAttachmentToFile(item.attachment, tempDest, messageUri);
@@ -658,33 +704,6 @@ async function saveAttachmentsFromMsgHdr(msgHdr, directoryPath, headerMessageId 
         files.push({ key: item.key, name: item.name, path: preferred.path, savedNow: false, existed: true, skipped: "identical" });
         consoleService.logStringMessage(
           `[ragFilterAction] saveAttachments: skipped identical ${preferred.path} messageId=${headerMessageId || ""}`
-        );
-      } else if (renameOld) {
-        const archivedOld = uniqueDestinationFile(directory, item.safeName);
-        try {
-          preferred.renameTo(directory, archivedOld.leafName);
-        } catch (renameErr) {
-          consoleService.logStringMessage(
-            `[ragFilterAction] saveAttachments: rename-old failed ${preferred.path} → ${archivedOld.leafName}: ${renameErr}`
-          );
-          saved++;
-          files.push({ key: item.key, name: item.name, path: tempDest.path, savedNow: true, existed: true });
-          continue;
-        }
-        try {
-          tempDest.renameTo(directory, preferred.leafName);
-        } catch (moveErr) {
-          consoleService.logStringMessage(
-            `[ragFilterAction] saveAttachments: move-new failed ${tempDest.path} → ${preferred.leafName}: ${moveErr}`
-          );
-          saved++;
-          files.push({ key: item.key, name: item.name, path: tempDest.path, savedNow: true, existed: true });
-          continue;
-        }
-        saved++;
-        files.push({ key: item.key, name: item.name, path: preferred.path, savedNow: true, existed: true, renamedOld: archivedOld.path });
-        consoleService.logStringMessage(
-          `[ragFilterAction] saveAttachments: saved ${preferred.path} (old → ${archivedOld.leafName}) messageId=${headerMessageId || ""}`
         );
       } else {
         saved++;

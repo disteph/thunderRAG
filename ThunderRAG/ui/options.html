@@ -335,53 +335,41 @@
     <p class="pl-subtitle">Runs continuously but <strong>defers</strong> whenever ingestion or user queries are active.</p>
     <div class="pl-pipeline">
       <div class="pl-step">
-        <div class="pl-node wide" style="border-left: 3px solid var(--accent);"><div class="pl-node-title">Phase 0 — Triage</div><div class="pl-node-desc">Dequeue email, propose tasks via LLM</div><span class="pl-prompt-tag" data-prompt="propose_tasks">propose_tasks</span><span class="pl-data-tag">triage_queue</span></div>
+        <div class="pl-node wide" style="border-left: 3px solid var(--accent);"><div class="pl-node-title">Phase 0 — Triage</div><div class="pl-node-desc">Dequeue email, propose tasks via LLM</div><span class="pl-prompt-tag" data-prompt="propose_tasks_system">propose_tasks_system</span><span class="pl-prompt-tag" data-prompt="propose_tasks_user">propose_tasks_user</span><span class="pl-data-tag">triage_queue</span></div>
         <div class="pl-side-note">Retrieves email metadata + memories. Outputs a <code>tasks[]</code> array.</div>
       </div>
       <div class="pl-arrow"></div>
       <div class="pl-step">
-        <div class="pl-node wide"><div class="pl-node-title">Embed &amp; deduplicate</div><div class="pl-node-desc">Compare proposed tasks against existing ones by vector similarity, then LLM dedup</div><span class="pl-prompt-tag" data-prompt="task_dedup">task_dedup</span></div>
+        <div class="pl-node wide"><div class="pl-node-title">Embed &amp; deduplicate</div><div class="pl-node-desc">Compare proposed tasks against existing ones by vector similarity, then LLM dedup</div><span class="pl-prompt-tag" data-prompt="task_dedup_system">task_dedup_system</span><span class="pl-prompt-tag" data-prompt="task_dedup_user">task_dedup_user</span></div>
         <div class="pl-side-note">If a match is found, merges into existing task.</div>
       </div>
       <div class="pl-arrow"></div>
       <div class="pl-step"><div class="pl-node wide"><div class="pl-node-title">Create or merge task</div><div class="pl-node-desc">Insert new task or update existing one in DB. Link triggering email.</div><span class="pl-data-tag">tasks table</span><span class="pl-data-tag">task_emails table</span></div></div>
       <div class="pl-arrow"></div>
       <div class="pl-step">
-        <div class="pl-node wide" style="border-left: 3px solid var(--accent);"><div class="pl-node-title">Phase 1 — Context &amp; style selection</div><div class="pl-node-desc">Find related emails by vector kNN; find user's sent emails for tone matching</div><span class="pl-prompt-tag" data-prompt="select_evidence">select_evidence</span></div>
+        <div class="pl-node wide" style="border-left: 3px solid var(--accent);"><div class="pl-node-title">Phase 1 — Context &amp; style selection</div><div class="pl-node-desc">Find related emails by vector kNN; find user's sent emails for tone matching</div><span class="pl-prompt-tag" data-prompt="select_evidence_system">select_evidence_system</span><span class="pl-prompt-tag" data-prompt="select_evidence_user">select_evidence_user</span></div>
         <div class="pl-side-note">Context: vector similarity, filtered by LLM relevance. Style: capped at 4 emails.</div>
       </div>
       <div class="pl-arrow"></div>
       <div class="pl-step">
-        <div class="pl-node wide"><div class="pl-node-title">Upload &amp; compress bodies</div><div class="pl-node-desc">Thunderbird uploads RFC822; server extracts &amp; compresses per role</div><span class="pl-prompt-tag" data-prompt="compress_new_content_evidence">compress_new_content_evidence</span><span class="pl-prompt-tag" data-prompt="compress_quoted_context_evidence">compress_quoted_context_evidence</span></div>
-        <div class="pl-side-note">Trigger/context: NEW + QUOTED (no attachments). Style: NEW only.</div>
-      </div>
-      <div class="pl-arrow"></div>
-      <div class="pl-step">
-        <div class="pl-node wide" style="border-left: 3px solid var(--accent);"><div class="pl-node-title">Phase 2 — Generate first message</div><div class="pl-node-desc">Produce a tl;dr briefing + initial draft reply</div><span class="pl-prompt-tag" data-prompt="task_first_message">task_first_message</span></div>
-        <div class="pl-side-note">Sets <code>context_ready = true</code>. Task appears fully loaded in UI.</div>
-      </div>
-    </div>
-
-    <!-- 3. Query Chat -->
-    <h3 class="pl-h2">3. Query Chat (Email Q&amp;A)</h3>
     <p class="pl-subtitle">General-purpose email search and Q&amp;A conversation via <code>/query</code>.</p>
     <div class="pl-pipeline">
       <div class="pl-step"><div class="pl-node wide"><div class="pl-node-title">User question</div><div class="pl-node-desc">Free-text question about the email archive</div></div></div>
       <div class="pl-arrow"></div>
       <div class="pl-step">
-        <div class="pl-node wide"><div class="pl-node-title">Query rewrite + HyDE</div><div class="pl-node-desc">Contextual rewrite, hypothetical email, SQL filter, resolved question</div><span class="pl-prompt-tag" data-prompt="query_rewrite">query_rewrite</span><span class="pl-prompt-tag" data-prompt="query_rewrite_field">query_rewrite_field</span></div>
-        <div class="pl-side-note"><code>query_rewrite_field</code> added only on multi-turn conversations.</div>
+        <div class="pl-node wide"><div class="pl-node-title">Query rewrite + HyDE</div><div class="pl-node-desc">Contextual rewrite, hypothetical email, SQL filter, resolved question</div><span class="pl-prompt-tag" data-prompt="query_rewrite_system">query_rewrite_system</span><span class="pl-prompt-tag" data-prompt="query_rewrite_user">query_rewrite_user</span><span class="pl-prompt-tag" data-prompt="query_rewrite_system_extra">query_rewrite_system_extra</span></div>
+        <div class="side-note"><code>query_rewrite_system_extra</code> added only on multi-turn conversations.</div>
       </div>
       <div class="pl-arrow"></div>
       <div class="pl-step"><div class="pl-node wide"><div class="pl-node-title">Vector search + SQL filter</div><div class="pl-node-desc">Cosine similarity search with optional SQL WHERE and reranking</div><span class="pl-data-tag">emails table (pgvector)</span></div></div>
       <div class="pl-arrow"></div>
-      <div class="pl-step"><div class="pl-node wide"><div class="pl-node-title">Select evidence</div><div class="pl-node-desc">LLM decides which retrieved emails need full body loading</div><span class="pl-prompt-tag" data-prompt="select_evidence">select_evidence</span></div></div>
+      <div class="pl-step"><div class="pl-node wide"><div class="pl-node-title">Select evidence</div><div class="pl-node-desc">LLM decides which retrieved emails need full body loading</div><span class="pl-prompt-tag" data-prompt="select_evidence_system">select_evidence_system</span><span class="pl-prompt-tag" data-prompt="select_evidence_user">select_evidence_user</span></div></div>
       <div class="pl-arrow"></div>
       <div class="pl-step"><div class="pl-node wide"><div class="pl-node-title">Load &amp; compress bodies</div><div class="pl-node-desc">Fetch full email text, compress to fit context window</div><span class="pl-prompt-tag" data-prompt="compress_new_content_evidence">compress_new_content_evidence</span><span class="pl-prompt-tag" data-prompt="compress_quoted_context_evidence">compress_quoted_context_evidence</span></div></div>
       <div class="pl-arrow"></div>
-      <div class="pl-step"><div class="pl-node wide"><div class="pl-node-title">Generate answer</div><div class="pl-node-desc">System prompt + history summary + tail + evidence emails + question</div><span class="pl-prompt-tag" data-prompt="chat">chat</span><span class="pl-prompt-tag" data-prompt="chat_question_suffix">chat_question_suffix</span></div></div>
+      <div class="pl-step"><div class="pl-node wide"><div class="pl-node-title">Generate answer</div><div class="pl-node-desc">System prompt + history summary + tail + evidence emails + question</div><span class="pl-prompt-tag" data-prompt="chat">chat</span><span class="pl-prompt-tag" data-prompt="chat_question_user_suffix">chat_question_user_suffix</span></div></div>
       <div class="pl-arrow"></div>
-      <div class="pl-step"><div class="pl-node wide"><div class="pl-node-title">Summarize session</div><div class="pl-node-desc">Rolling summary when conversation grows past threshold</div><span class="pl-prompt-tag" data-prompt="conversation_summary">conversation_summary</span></div></div>
+      <div class="pl-step"><div class="pl-node wide"><div class="pl-node-title">Summarize session</div><div class="pl-node-desc">Rolling summary when conversation grows past threshold</div><span class="pl-prompt-tag" data-prompt="conversation_summary_system">conversation_summary_system</span><span class="pl-prompt-tag" data-prompt="conversation_summary_user">conversation_summary_user</span></div></div>
     </div>
 
     <!-- 4. Task Chat -->
@@ -391,7 +379,7 @@
       <div class="pl-step"><div class="pl-node wide"><div class="pl-node-title">User message</div><div class="pl-node-desc">Free-text input in the task conversation</div></div></div>
       <div class="pl-arrow"></div>
       <div class="pl-step">
-        <div class="pl-node wide"><div class="pl-node-title">Build prompt</div><div class="pl-node-desc">System prompt + trigger/context/style emails + retrieved emails (if any) + memories + history summary + tail</div><span class="pl-prompt-tag" data-prompt="task_interview">task_interview</span></div>
+        <div class="pl-node wide"><div class="pl-node-title">Build prompt</div><div class="pl-node-desc">System prompt + trigger/context/style emails + retrieved emails (if any) + memories + history summary + tail</div><span class="pl-prompt-tag" data-prompt="task_interview_system">task_interview_system</span><span class="pl-prompt-tag" data-prompt="task_interview_user">task_interview_user</span></div>
         <div class="pl-side-note">Email bodies from <code>task_emails</code>, labeled [trigger], [context], [style].<br/>On completion calls: ephemeral [retrieved] emails injected too.</div>
       </div>
       <div class="pl-arrow"></div>
