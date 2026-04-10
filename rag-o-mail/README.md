@@ -252,13 +252,15 @@ createdb rag-o-mail
 psql -d rag-o-mail -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
-On Apple Silicon Macs, add this to `~/.zshrc` so the linker can find PostgreSQL:
+On Apple Silicon Macs, add this to `~/.zshrc` **before** building OCaml dependencies (see [main README](../README.md) for details on each variable):
 
 ```bash
 export LIBRARY_PATH="/opt/homebrew/lib/postgresql@17:$LIBRARY_PATH"
 export C_INCLUDE_PATH="/opt/homebrew/include/postgresql@17:$C_INCLUDE_PATH"
 export PKG_CONFIG_PATH="/opt/homebrew/lib/postgresql@17/pkgconfig:$PKG_CONFIG_PATH"
 ```
+
+If you already installed the `postgresql` opam package without `PKG_CONFIG_PATH`, run `opam reinstall postgresql`.
 
 **Ubuntu / Debian:**
 

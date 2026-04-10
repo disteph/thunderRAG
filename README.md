@@ -78,13 +78,17 @@ brew install pipx && pipx install piper-tts
 pipx inject piper-tts pathvalidate   # fix missing dependency
 ```
 
-**Apple Silicon note:** add this to your `~/.zshrc` so the OCaml linker can find PostgreSQL:
+**Apple Silicon note:** Homebrew on ARM installs PostgreSQL outside the default compiler/linker search paths. Add all three lines to your `~/.zshrc` **before** building the OCaml dependencies:
 
 ```bash
 export LIBRARY_PATH="/opt/homebrew/lib/postgresql@17:$LIBRARY_PATH"
 export C_INCLUDE_PATH="/opt/homebrew/include/postgresql@17:$C_INCLUDE_PATH"
 export PKG_CONFIG_PATH="/opt/homebrew/lib/postgresql@17/pkgconfig:$PKG_CONFIG_PATH"
 ```
+
+- `LIBRARY_PATH` — lets the linker find `libpq.dylib` when linking the final binary.
+- `C_INCLUDE_PATH` — lets the C compiler find `libpq-fe.h` when building the `postgresql` opam package stubs.
+- `PKG_CONFIG_PATH` — lets the `postgresql` opam package's build-time discovery script (`pkg-config libpq`) record the correct `-L` flag. **Without this, stubs compile but the final link fails with "symbol(s) not found for architecture arm64".** If you already installed the `postgresql` opam package without this variable, run `opam reinstall postgresql` after setting it.
 
 </details>
 
