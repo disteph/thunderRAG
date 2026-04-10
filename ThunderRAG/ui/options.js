@@ -642,9 +642,7 @@ function renderPrompts(json) {
       }
     }
     
-    container.appendChild(groupDiv);
-    
-    // Add schemas at the end of the group
+    // Add schemas at the end of the group (inside the group box)
     if (schemas.length > 0) {
       const schemaDiv = document.createElement("div");
       schemaDiv.className = "json-schema";
@@ -693,8 +691,10 @@ function renderPrompts(json) {
       
       schemaDiv.appendChild(schemaTitle);
       schemaDiv.appendChild(schemaPre);
-      container.appendChild(schemaDiv);
+      groupDiv.appendChild(schemaDiv);
     }
+
+    container.appendChild(groupDiv);
   }
 
   /* Show the _meta info at the end */

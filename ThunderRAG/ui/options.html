@@ -352,6 +352,18 @@
       </div>
       <div class="pl-arrow"></div>
       <div class="pl-step">
+        <div class="pl-node wide"><div class="pl-node-title">Upload &amp; compress bodies</div><div class="pl-node-desc">Thunderbird uploads raw RFC822; server extracts &amp; compresses per role</div><span class="pl-prompt-tag" data-prompt="compress_new_content_evidence">compress_new_content_evidence</span><span class="pl-prompt-tag" data-prompt="compress_quoted_context_evidence">compress_quoted_context_evidence</span></div>
+        <div class="pl-side-note">Trigger/context: NEW CONTENT + QUOTED CONTEXT. Style: NEW CONTENT only (for tone matching).</div>
+      </div>
+      <div class="pl-arrow"></div>
+      <div class="pl-step">
+        <div class="pl-node wide" style="border-left: 3px solid var(--accent);"><div class="pl-node-title">Phase 2 — Generate first message</div><div class="pl-node-desc">Produce a tl;dr briefing + initial draft reply for the user</div><span class="pl-prompt-tag" data-prompt="task_first_message_system">task_first_message_system</span><span class="pl-prompt-tag" data-prompt="task_first_message_user">task_first_message_user</span></div>
+        <div class="pl-side-note">Injects email context, style context, user memories, and prior resolutions. Sets <code>context_ready = true</code>.</div>
+      </div>
+    </div>
+
+    <!-- 3. Query Chat -->
+    <h3 class="pl-h2">3. Query Chat (Email Q&amp;A)</h3>
     <p class="pl-subtitle">General-purpose email search and Q&amp;A conversation via <code>/query</code>.</p>
     <div class="pl-pipeline">
       <div class="pl-step"><div class="pl-node wide"><div class="pl-node-title">User question</div><div class="pl-node-desc">Free-text question about the email archive</div></div></div>
