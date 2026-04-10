@@ -256,6 +256,7 @@ On Apple Silicon Macs, add this to `~/.zshrc` so the linker can find PostgreSQL:
 
 ```bash
 export LIBRARY_PATH="/opt/homebrew/lib/postgresql@17:$LIBRARY_PATH"
+export C_INCLUDE_PATH="/opt/homebrew/include/postgresql@17:$C_INCLUDE_PATH"
 export PKG_CONFIG_PATH="/opt/homebrew/lib/postgresql@17/pkgconfig:$PKG_CONFIG_PATH"
 ```
 
