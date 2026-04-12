@@ -1,0 +1,59 @@
+{
+  "whoami": "Test User <test@example.com>",
+  "ollama": {
+    "base_url": "http://127.0.0.1:11434",
+    "num_ctx": 32768,
+    "embed_model": "mxbai-embed-large",
+    "llm_model": "gpt-oss:20b",
+    "summarize_model": "qwen2.5:3b",
+    "triage_model": "gpt-oss:20b",
+    "rewrite_model": "gpt-oss:20b"
+  },
+  "pg": { "database": "rag-o-mail-test" },
+  "rag": {
+    "chunk_size": 1200,
+    "chunk_overlap": 200,
+    "max_evidence_chars_per_email": 4000,
+    "new_content": { "max_chars": 8000 },
+    "summarize": { "max_input_chars": 20000 },
+    "quoted_context": {
+      "summarize": true,
+      "max_lines": 150,
+      "max_chars": 8000,
+      "max_input_chars": 30000
+    },
+    "attachments": {
+      "summarize": true,
+      "max_attachments": 4,
+      "max_chars": 1500,
+      "max_input_chars": 20000,
+      "max_bytes": 5000000,
+      "use_pdftotext": true,
+      "use_pandoc": true
+    },
+    "query": { "include_unrehydrated_metadata": true, "rewrite": true }
+  },
+  "task": {
+    "auto_create": true,
+    "dedup_top_k": 5,
+    "resolved_top_k": 3,
+    "resolved_max_distance": 0.35
+  },
+  "memory": {
+    "enabled": true,
+    "max_chars": 3000,
+    "knn_top_k": 10,
+    "template_count": 3,
+    "rule_max_retries": 3
+  },
+  "voice": {
+    "piper_model": "/Users/sgl/.local/share/piper/en_US-lessac-medium.onnx",
+    "piper_bin": "piper",
+    "whisper_url": "http://localhost:8178"
+  },
+  "debug": {
+    "ollama_embed": false,
+    "ollama_chat": false,
+    "retrieval": false
+  }
+}

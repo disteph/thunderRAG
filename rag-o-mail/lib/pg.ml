@@ -68,7 +68,8 @@ let use_ret (f : connection -> ('a, Caqti_error.t) result)
 (* ---------- schema ---------- *)
 
 let schema_statements () =
-  [ {|CREATE TABLE IF NOT EXISTS emails (
+  [ {|CREATE EXTENSION IF NOT EXISTS vector|}
+  ; {|CREATE TABLE IF NOT EXISTS emails (
        doc_id        TEXT PRIMARY KEY,
        embed_model      TEXT NOT NULL DEFAULT '',
        triage_model     TEXT NOT NULL DEFAULT '',
@@ -369,21 +370,24 @@ let reset_all () : (unit, string) result =
       let req = Caqti_request.Infix.(Caqti_type.unit ->. Caqti_type.unit) ~oneshot:true sql in
       C.exec req ()
     in
-    match exec "DROP TABLE IF EXISTS fyi_emails" with
-    | Error _ as e -> e
-    | Ok () ->
-      match exec "DROP TABLE IF EXISTS task_emails" with
-      | Error _ as e -> e
-      | Ok () ->
-        match exec "DROP TABLE IF EXISTS tasks" with
-        | Error _ as e -> e
-        | Ok () ->
-          match exec "DROP TABLE IF EXISTS email_chunks" with
+    (* Drop in reverse-dependency order so FK constraints don't block *)
+    let tables =
+      [ "pending_processed"; "ingest_queue"; "triage_queue"
+      ; "fyi_emails"; "propose_tasks_log"
+      ; "memory_templates"; "memory_emails"; "memories"
+      ; "task_emails"; "tasks"
+      ; "email_chunks"; "emails"
+      ] in
+    let rec drop = function
+      | [] -> Ok ()
+      | t :: rest ->
+          match exec (Printf.sprintf "DROP TABLE IF EXISTS %s CASCADE" t) with
           | Error _ as e -> e
-          | Ok () ->
-            match exec "DROP TABLE IF EXISTS emails" with
-            | Error _ as e -> e
-            | Ok () -> init_schema_with (module C : Caqti_eio.CONNECTION))
+          | Ok () -> drop rest
+    in
+    match drop tables with
+    | Error _ as e -> e
+    | Ok () -> init_schema_with (module C : Caqti_eio.CONNECTION))
 
 (* ---------- status queries ---------- *)
 

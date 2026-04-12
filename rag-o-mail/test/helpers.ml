@@ -123,6 +123,24 @@ let json_list_field key json =
   | `Assoc kv -> (match List.assoc_opt key kv with Some (`List l) -> l | _ -> [])
   | _ -> []
 
+let json_int_field key json =
+  match json with
+  | `Assoc kv -> (match List.assoc_opt key kv with Some (`Int n) -> Some n | _ -> None)
+  | _ -> None
+
+let json_bool_field key json =
+  match json with
+  | `Assoc kv -> (match List.assoc_opt key kv with Some (`Bool b) -> Some b | _ -> None)
+  | _ -> None
+
+let json_assoc json =
+  match json with `Assoc kv -> kv | _ -> []
+
+let json_has_key key json =
+  match json with
+  | `Assoc kv -> List.mem_assoc key kv
+  | _ -> false
+
 (* ---------- server reachability check ---------- *)
 
 let server_is_reachable () =

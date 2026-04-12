@@ -18,9 +18,16 @@ let () =
   Helpers.the_client := Some client;
   Helpers.the_sw := Some sw;
   Alcotest.run "ThunderRAG"
-    [ ("routing",    Test_routing.tests)
-    ; ("ingest",     Test_ingest.tests)
-    ; ("admin",      Test_admin.tests)
-    ; ("delete",     Test_delete.tests)
-    ; ("query_flow", Test_query_flow.tests)
+    [ ("routing",         Test_routing.tests)
+    ; ("ingest",          Test_ingest.tests)
+    ; ("ingest_extended", Test_ingest_extended.tests)
+    ; ("admin",           Test_admin.tests)
+    ; ("admin_extended",  Test_admin_extended.tests)
+    ; ("delete",          Test_delete.tests)
+    ; ("query_flow",      Test_query_flow.tests)
+    ; ("tasks",           Test_tasks.tests)
+    ; ("fyi",             Test_fyi.tests)
+    ; ("memory",          Test_memory.tests)
+    ; ("debug",           Test_debug.tests)
+    ; ("voice",           Test_voice.tests)
     ]
