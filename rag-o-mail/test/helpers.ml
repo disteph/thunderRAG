@@ -39,6 +39,8 @@ let make_rfc822
     ?(body = "This is a test email body.\nIt has multiple lines.")
     ?(cc = "")
     ?(date = "Mon, 10 Feb 2025 09:00:00 +0000")
+    ?(in_reply_to = "")
+    ?(content_type = "text/plain; charset=UTF-8")
     () =
   let mid = match message_id with Some m -> m | None -> fresh_message_id () in
   let headers = Buffer.create 256 in
@@ -49,8 +51,9 @@ let make_rfc822
   add "Subject" subject;
   add "Message-Id" mid;
   add "Date" date;
+  if in_reply_to <> "" then add "In-Reply-To" in_reply_to;
   add "MIME-Version" "1.0";
-  add "Content-Type" "text/plain; charset=UTF-8";
+  add "Content-Type" content_type;
   add "Content-Transfer-Encoding" "8bit";
   Buffer.add_string headers "\r\n";
   Buffer.add_string headers body;

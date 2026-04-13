@@ -1,10 +1,11 @@
 (executable
  (name run_tests)
- (libraries alcotest cohttp-eio eio_main yojson uri str)
+ (libraries alcotest cohttp-eio eio_main yojson uri str unix)
  (modules run_tests helpers
           test_routing test_ingest test_admin test_delete test_query_flow
           test_admin_extended test_ingest_extended test_tasks test_fyi
-          test_memory test_debug test_voice))
+          test_memory test_debug test_voice
+          corpus_emails test_corpus))
 
 (executable
  (name quality_harness)

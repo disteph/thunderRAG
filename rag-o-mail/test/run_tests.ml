@@ -30,4 +30,5 @@ let () =
     ; ("memory",          Test_memory.tests)
     ; ("debug",           Test_debug.tests)
     ; ("voice",           Test_voice.tests)
+    ; ("corpus",          Test_corpus.tests)
     ]
