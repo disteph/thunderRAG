@@ -76,30 +76,33 @@ let read_all body =
   Eio.Buf_read.(parse_exn take_all) body ~max_size:max_int
 
 let post_json ~path ~body_str =
+  Eio.Switch.run @@ fun sw ->
   let uri = Uri.of_string (base_url () ^ path) in
   let body = Cohttp_eio.Body.of_string body_str in
   let resp, resp_body =
-    Cohttp_eio.Client.call (client ()) ~sw:(sw ()) ~headers:json_headers ~body `POST uri
+    Cohttp_eio.Client.call (client ()) ~sw ~headers:json_headers ~body `POST uri
   in
   let code = Http.Response.status resp |> Cohttp.Code.code_of_status in
   let resp_str = read_all resp_body in
   (code, resp_str)
 
 let post_raw ~path ~data ~headers =
+  Eio.Switch.run @@ fun sw ->
   let uri = Uri.of_string (base_url () ^ path) in
   let body = Cohttp_eio.Body.of_string data in
   let hdrs = Http.Header.of_list headers in
   let resp, resp_body =
-    Cohttp_eio.Client.call (client ()) ~sw:(sw ()) ~headers:hdrs ~body `POST uri
+    Cohttp_eio.Client.call (client ()) ~sw ~headers:hdrs ~body `POST uri
   in
   let code = Http.Response.status resp |> Cohttp.Code.code_of_status in
   let resp_str = read_all resp_body in
   (code, resp_str)
 
 let get ~path =
+  Eio.Switch.run @@ fun sw ->
   let uri = Uri.of_string (base_url () ^ path) in
   let resp, resp_body =
-    Cohttp_eio.Client.call (client ()) ~sw:(sw ()) `GET uri
+    Cohttp_eio.Client.call (client ()) ~sw `GET uri
   in
   let code = Http.Response.status resp |> Cohttp.Code.code_of_status in
   let resp_str = read_all resp_body in

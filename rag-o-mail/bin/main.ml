@@ -75,9 +75,11 @@ let is_ok_status (status : Http.Status.t) : bool =
   let code = Cohttp.Code.code_of_status status in
   code >= 200 && code < 300
 
+let close_headers =
+  Http.Header.init_with "connection" "close"
+
 let json_headers =
-  Http.Header.init_with "content-type" "application/json"
-  |> fun h -> Http.Header.add h "connection" "close"
+  Http.Header.add close_headers "content-type" "application/json"
 
 let sse_headers =
   Http.Header.of_list
@@ -4443,7 +4445,7 @@ let handler ~client ~sw ~clock _socket request body =
         with _ -> ""
       in
       if String.trim session_id = "" then
-        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id\n" ()
+        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id\n" ~headers:close_headers ()
       else
         let s = get_or_create_session session_id in
         let body =
@@ -4480,7 +4482,7 @@ let handler ~client ~sw ~clock _socket request body =
         with _ -> ""
       in
       if String.trim session_id = "" then
-        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id\n" ()
+        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id\n" ~headers:close_headers ()
       else (
         Eio.Mutex.use_rw ~protect:true session_tbl_mu (fun () -> Hashtbl.remove session_tbl session_id);
         let body =
@@ -4663,7 +4665,7 @@ let handler ~client ~sw ~clock _socket request body =
       let message_id = request_header_or_empty request "x-thunderbird-message-id" |> String.trim in
       if request_id = "" || message_id = "" then
         Cohttp_eio.Server.respond_string ~status:`Bad_request
-          ~body:"missing X-RAG-Request-Id or X-Thunderbird-Message-Id\n" ()
+          ~body:"missing X-RAG-Request-Id or X-Thunderbird-Message-Id\n" ~headers:close_headers ()
       else
         let raw = read_all body in
         let ok =
@@ -4676,7 +4678,7 @@ let handler ~client ~sw ~clock _socket request body =
                   true))
         in
         if not ok then
-          Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"unknown request_id\n" ()
+          Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"unknown request_id\n" ~headers:close_headers ()
         else
           Cohttp_eio.Server.respond_string ~status:`OK
             ~body:(`Assoc [ ("status", `String "ok") ] |> Yojson.Safe.to_string)
@@ -4739,16 +4741,16 @@ let handler ~client ~sw ~clock _socket request body =
         with _ -> ("", "", "", "", [], false)
       in
       if String.trim session_id = "" || String.trim request_id = "" then
-        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id/request_id\n" ()
+        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id/request_id\n" ~headers:close_headers ()
       else (
         let pending_opt =
           Eio.Mutex.use_rw ~protect:true pending_tbl_mu (fun () -> Hashtbl.find_opt pending_tbl request_id)
         in
         match pending_opt with
-        | None -> Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"unknown request_id\n" ()
+        | None -> Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"unknown request_id\n" ~headers:close_headers ()
         | Some p ->
             if p.session_id <> session_id then
-              Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"request_id/session_id mismatch\n" ()
+              Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"request_id/session_id mismatch\n" ~headers:close_headers ()
             else (
               (* Remove stale IDs (deleted/junk in Thunderbird) from the
                  pending query so they don't block evidence checks or
@@ -5301,7 +5303,7 @@ let handler ~client ~sw ~clock _socket request body =
         with _ -> ("", "", 8, "assistive", "", "")
       in
       if String.trim session_id = "" || String.trim question = "" then
-        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id/question\n" ()
+        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing session_id/question\n" ~headers:close_headers ()
       else (
         let s = get_or_create_session session_id in
         (* Store user_name on the session if provided and not already set. *)
@@ -5674,7 +5676,7 @@ let handler ~client ~sw ~clock _socket request body =
       let raw_email = get_str "raw" in
       let doc_id = get_str "doc_id" in
       if raw_email = "" then
-        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing raw\n" ()
+        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing raw\n" ~headers:close_headers ()
       else
         let headers = parse_headers raw_email in
         let parts = extract_body_parts raw_email in
@@ -5752,7 +5754,7 @@ let handler ~client ~sw ~clock _socket request body =
         with _ -> ""
       in
       if id = "" then
-        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing id\n" ()
+        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing id\n" ~headers:close_headers ()
       else
         let base_json =
           match Rag_lib.Pg.get_email_detail id with
@@ -6054,7 +6056,7 @@ let handler ~client ~sw ~clock _socket request body =
       in
       if id = "" then (
         Printf.printf "[admin.mark_processed] empty id, rejecting\n%!";
-        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing id\n" ())
+        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing id\n" ~headers:close_headers ())
       else (
         Printf.printf "[admin.mark_processed] id=%s is_json=%b\n%!" id is_json;
         let check_auto_complete doc_id =
@@ -6115,7 +6117,7 @@ let handler ~client ~sw ~clock _socket request body =
             header_or_empty rfc_headers "message-id" |> String.trim
       in
       if id = "" then
-        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing id\n" ()
+        Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing id\n" ~headers:close_headers ()
       else (
         let queued_removed =
           match Rag_lib.Pg.delete_pending_processed id with
@@ -6141,12 +6143,12 @@ let handler ~client ~sw ~clock _socket request body =
   | `POST, "/debug/stdout" ->
       let msg = read_all body |> String.trim in
       if msg <> "" then Printf.printf "[TB] %s\n%!" msg;
-      Cohttp_eio.Server.respond_string ~status:`OK ~body:"ok\n" ()
+      Cohttp_eio.Server.respond_string ~status:`OK ~body:"ok\n" ~headers:close_headers ()
 
   | `POST, "/debug/stderr" ->
       let msg = read_all body |> String.trim in
       if msg <> "" then Printf.eprintf "[TB] %s\n%!" msg;
-      Cohttp_eio.Server.respond_string ~status:`OK ~body:"ok\n" ()
+      Cohttp_eio.Server.respond_string ~status:`OK ~body:"ok\n" ~headers:close_headers ()
 
   | `POST, "/admin/bulk_ingest" ->
       let bulk_body = read_all body in
@@ -6221,7 +6223,7 @@ let handler ~client ~sw ~clock _socket request body =
         end
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-          ~body:(Printf.sprintf "fyi/create_task error: %s\n" (Printexc.to_string e)) ())
+          ~body:(Printf.sprintf "fyi/create_task error: %s\n" (Printexc.to_string e)) ~headers:close_headers ())
 
   (* ===================================================================
      Task manager endpoints
@@ -6268,7 +6270,7 @@ let handler ~client ~sw ~clock _socket request body =
             Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ())
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-          ~body:(Printf.sprintf "task/list error: %s\n" (Printexc.to_string e)) ())
+          ~body:(Printf.sprintf "task/list error: %s\n" (Printexc.to_string e)) ~headers:close_headers ())
 
   | `POST, "/task/get" ->
       let raw = read_all body in
@@ -6279,7 +6281,7 @@ let handler ~client ~sw ~clock _socket request body =
           | _ -> ""
         in
         if task_id = "" then
-          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing task_id\n" ()
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing task_id\n" ~headers:close_headers ()
         else
           (match Rag_lib.Pg.get_task task_id with
           | Ok (Some task_json) ->
@@ -6287,13 +6289,13 @@ let handler ~client ~sw ~clock _socket request body =
               Cohttp_eio.Server.respond_string ~status:`OK
                 ~body:(Yojson.Safe.to_string task_json) ~headers:json_headers ()
           | Ok None ->
-              Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"task not found\n" ()
+              Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"task not found\n" ~headers:close_headers ()
           | Error e ->
               let body = `Assoc [ ("error", `String e) ] |> Yojson.Safe.to_string in
               Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ())
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-          ~body:(Printf.sprintf "task/get error: %s\n" (Printexc.to_string e)) ())
+          ~body:(Printf.sprintf "task/get error: %s\n" (Printexc.to_string e)) ~headers:close_headers ())
 
   | `POST, "/task/update" ->
       let raw = read_all body in
@@ -6303,7 +6305,7 @@ let handler ~client ~sw ~clock _socket request body =
         let get_str k = match List.assoc_opt k kv with Some (`String s) -> Some (String.trim s) | _ -> None in
         let task_id = match get_str "task_id" with Some s -> s | None -> "" in
         if task_id = "" then
-          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing task_id\n" ()
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing task_id\n" ~headers:close_headers ()
         else
           let title = get_str "title" in
           let description = get_str "description" in
@@ -6354,13 +6356,13 @@ let handler ~client ~sw ~clock _socket request body =
               let body = `Assoc [ ("status", `String "ok") ] |> Yojson.Safe.to_string in
               Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
           | Ok false ->
-              Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"task not found\n" ()
+              Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"task not found\n" ~headers:close_headers ()
           | Error e ->
               let body = `Assoc [ ("error", `String e) ] |> Yojson.Safe.to_string in
               Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ())
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-          ~body:(Printf.sprintf "task/update error: %s\n" (Printexc.to_string e)) ())
+          ~body:(Printf.sprintf "task/update error: %s\n" (Printexc.to_string e)) ~headers:close_headers ())
 
   | `POST, "/task/delete" ->
       let raw = read_all body in
@@ -6371,20 +6373,20 @@ let handler ~client ~sw ~clock _socket request body =
           | _ -> ""
         in
         if task_id = "" then
-          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing task_id\n" ()
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing task_id\n" ~headers:close_headers ()
         else
           (match Rag_lib.Pg.delete_task task_id with
           | Ok true ->
               let body = `Assoc [ ("status", `String "ok") ] |> Yojson.Safe.to_string in
               Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
           | Ok false ->
-              Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"task not found\n" ()
+              Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"task not found\n" ~headers:close_headers ()
           | Error e ->
               let body = `Assoc [ ("error", `String e) ] |> Yojson.Safe.to_string in
               Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ())
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-          ~body:(Printf.sprintf "task/delete error: %s\n" (Printexc.to_string e)) ())
+          ~body:(Printf.sprintf "task/delete error: %s\n" (Printexc.to_string e)) ~headers:close_headers ())
 
   | `POST, "/task/reorder" ->
       let raw = read_all body in
@@ -6407,7 +6409,7 @@ let handler ~client ~sw ~clock _socket request body =
           | _ -> []
         in
         if pairs = [] then
-          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing or empty order array\n" ()
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing or empty order array\n" ~headers:close_headers ()
         else
           (match Rag_lib.Pg.reorder_tasks pairs with
           | Ok () ->
@@ -6418,7 +6420,7 @@ let handler ~client ~sw ~clock _socket request body =
               Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ())
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-          ~body:(Printf.sprintf "task/reorder error: %s\n" (Printexc.to_string e)) ())
+          ~body:(Printf.sprintf "task/reorder error: %s\n" (Printexc.to_string e)) ~headers:close_headers ())
 
   (* ===================================================================
      Memory system endpoints
@@ -6444,7 +6446,7 @@ let handler ~client ~sw ~clock _socket request body =
             Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ()
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-          ~body:(Printf.sprintf "memory/list error: %s\n" (Printexc.to_string e)) ())
+          ~body:(Printf.sprintf "memory/list error: %s\n" (Printexc.to_string e)) ~headers:close_headers ())
 
   | `POST, "/memory/create" ->
       let raw = read_all body in
@@ -6456,7 +6458,7 @@ let handler ~client ~sw ~clock _socket request body =
           | Some (`String s) when String.trim s <> "" -> Some (String.trim s) | _ -> None in
         let text = get_str "text" in
         if text = "" then
-          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing text\n" ()
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing text\n" ~headers:close_headers ()
         else
         let provided_memory_id = get_str "memory_id" in
         let rule = get_str_opt "rule" in
@@ -6490,7 +6492,7 @@ let handler ~client ~sw ~clock _socket request body =
             Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ())
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-          ~body:(Printf.sprintf "memory/create error: %s\n" (Printexc.to_string e)) ())
+          ~body:(Printf.sprintf "memory/create error: %s\n" (Printexc.to_string e)) ~headers:close_headers ())
 
   | `POST, "/memory/update" ->
       let raw = read_all body in
@@ -6500,7 +6502,7 @@ let handler ~client ~sw ~clock _socket request body =
         let memory_id = match List.assoc_opt "memory_id" kv with
           | Some (`String s) -> String.trim s | _ -> "" in
         if memory_id = "" then
-          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing memory_id\n" ()
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing memory_id\n" ~headers:close_headers ()
         else
         let text = match List.assoc_opt "text" kv with
           | Some (`String s) when String.trim s <> "" -> Some (String.trim s) | _ -> None in
@@ -6516,13 +6518,13 @@ let handler ~client ~sw ~clock _socket request body =
             let body = `Assoc [ ("status", `String "ok") ] |> Yojson.Safe.to_string in
             Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
         | Ok false ->
-            Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"memory not found\n" ()
+            Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"memory not found\n" ~headers:close_headers ()
         | Error e ->
             let body = `Assoc [ ("error", `String e) ] |> Yojson.Safe.to_string in
             Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ())
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-          ~body:(Printf.sprintf "memory/update error: %s\n" (Printexc.to_string e)) ())
+          ~body:(Printf.sprintf "memory/update error: %s\n" (Printexc.to_string e)) ~headers:close_headers ())
 
   | `POST, "/memory/delete" ->
       let raw = read_all body in
@@ -6533,20 +6535,20 @@ let handler ~client ~sw ~clock _socket request body =
           | _ -> ""
         in
         if memory_id = "" then
-          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing memory_id\n" ()
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing memory_id\n" ~headers:close_headers ()
         else
           (match Rag_lib.Pg.delete_memory memory_id with
           | Ok true ->
               let body = `Assoc [ ("status", `String "ok") ] |> Yojson.Safe.to_string in
               Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
           | Ok false ->
-              Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"memory not found\n" ()
+              Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"memory not found\n" ~headers:close_headers ()
           | Error e ->
               let body = `Assoc [ ("error", `String e) ] |> Yojson.Safe.to_string in
               Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ())
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-          ~body:(Printf.sprintf "memory/delete error: %s\n" (Printexc.to_string e)) ())
+          ~body:(Printf.sprintf "memory/delete error: %s\n" (Printexc.to_string e)) ~headers:close_headers ())
 
   | `POST, "/memory/get" ->
       let raw = read_all body in
@@ -6557,20 +6559,20 @@ let handler ~client ~sw ~clock _socket request body =
           | _ -> ""
         in
         if memory_id = "" then
-          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing memory_id\n" ()
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing memory_id\n" ~headers:close_headers ()
         else
           (match Rag_lib.Pg.get_memory memory_id with
           | Ok (Some mem) ->
               Cohttp_eio.Server.respond_string ~status:`OK
                 ~body:(Yojson.Safe.to_string mem) ~headers:json_headers ()
           | Ok None ->
-              Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"memory not found\n" ()
+              Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"memory not found\n" ~headers:close_headers ()
           | Error e ->
               let body = `Assoc [ ("error", `String e) ] |> Yojson.Safe.to_string in
               Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ())
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-          ~body:(Printf.sprintf "memory/get error: %s\n" (Printexc.to_string e)) ())
+          ~body:(Printf.sprintf "memory/get error: %s\n" (Printexc.to_string e)) ~headers:close_headers ())
 
   | `POST, "/task/recompute" ->
       let raw = read_all body in
@@ -6581,7 +6583,7 @@ let handler ~client ~sw ~clock _socket request body =
           | _ -> ""
         in
         if task_id = "" then
-          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing task_id\n" ()
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing task_id\n" ~headers:close_headers ()
         else begin
           (* Clear context/style emails, keep triggers *)
           ignore (Rag_lib.Pg.delete_task_context_and_style task_id);
@@ -6602,7 +6604,7 @@ let handler ~client ~sw ~clock _socket request body =
         end
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-          ~body:(Printf.sprintf "task/recompute error: %s\n" (Printexc.to_string e)) ())
+          ~body:(Printf.sprintf "task/recompute error: %s\n" (Printexc.to_string e)) ~headers:close_headers ())
 
   | `POST, "/email/recompute_tasks" ->
       let raw_body = read_all body in
@@ -6723,7 +6725,7 @@ let handler ~client ~sw ~clock _socket request body =
           end
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-          ~body:(Printf.sprintf "email/recompute_tasks error: %s\n" (Printexc.to_string e)) ())
+          ~body:(Printf.sprintf "email/recompute_tasks error: %s\n" (Printexc.to_string e)) ~headers:close_headers ())
 
   | `POST, "/email/force_task" ->
       let raw_body = read_all body in
@@ -6814,7 +6816,7 @@ let handler ~client ~sw ~clock _socket request body =
         end
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-          ~body:(Printf.sprintf "email/force_task error: %s\n" (Printexc.to_string e)) ())
+          ~body:(Printf.sprintf "email/force_task error: %s\n" (Printexc.to_string e)) ~headers:close_headers ())
 
   (* GET /task/needs_evidence — TB polls this to find doc_ids needing raw body upload.
      Returns { tasks: [ { task_id, doc_ids: [string] } ] } *)
@@ -6841,7 +6843,7 @@ let handler ~client ~sw ~clock _socket request body =
       let doc_id = Http.Header.get hdrs "x-thunderbird-message-id" |> Option.value ~default:"" |> String.trim in
       if task_id = "" || doc_id = "" then
         Cohttp_eio.Server.respond_string ~status:`Bad_request
-          ~body:"missing X-Task-Id or X-Thunderbird-Message-Id header\n" ()
+          ~body:"missing X-Task-Id or X-Thunderbird-Message-Id header\n" ~headers:close_headers ()
       else begin
         let raw = read_all body in
         let role = match Rag_lib.Pg.get_task_email_role ~task_id ~doc_id with
@@ -6876,7 +6878,7 @@ let handler ~client ~sw ~clock _socket request body =
           | _ -> ""
         in
         if task_id = "" then
-          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing task_id\n" ()
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing task_id\n" ~headers:close_headers ()
         else begin
           Printf.printf "[task/evidence_done] task=%s — checking if all bodies present\n%!" task_id;
           (* Check if any task_emails still have empty compressed_body *)
@@ -6899,7 +6901,7 @@ let handler ~client ~sw ~clock _socket request body =
         end
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-          ~body:(Printf.sprintf "task/evidence_done error: %s\n" (Printexc.to_string e)) ())
+          ~body:(Printf.sprintf "task/evidence_done error: %s\n" (Printexc.to_string e)) ~headers:close_headers ())
 
   (* POST /task/chat_bodies — Upload a raw RFC822 body for a [RETRIEVE]-selected email.
      Content-Type: message/rfc822
@@ -6911,7 +6913,7 @@ let handler ~client ~sw ~clock _socket request body =
       let doc_id = Http.Header.get hdrs "x-thunderbird-message-id" |> Option.value ~default:"" |> String.trim in
       if req_id = "" || doc_id = "" then
         Cohttp_eio.Server.respond_string ~status:`Bad_request
-          ~body:"missing X-Request-Id or X-Thunderbird-Message-Id header\n" ()
+          ~body:"missing X-Request-Id or X-Thunderbird-Message-Id header\n" ~headers:close_headers ()
       else begin
         let raw = read_all body in
         Printf.printf "[task/chat_bodies] req=%s doc=%s raw=%d bytes\n%!" req_id doc_id (String.length raw);
@@ -6932,7 +6934,7 @@ let handler ~client ~sw ~clock _socket request body =
           Cohttp_eio.Server.respond_string ~status:`OK ~body ~headers:json_headers ()
         else
           Cohttp_eio.Server.respond_string ~status:`Not_found
-            ~body:"request_id not found in retrieval cache\n" ()
+            ~body:"request_id not found in retrieval cache\n" ~headers:close_headers ()
       end
 
   (*
@@ -6957,9 +6959,9 @@ let handler ~client ~sw ~clock _socket request body =
         let chat_model = get_str "chat_model" in
         let request_id = get_str "request_id" in
         if task_id = "" then
-          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing task_id\n" ()
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing task_id\n" ~headers:close_headers ()
         else if user_message = "" && request_id = "" then
-          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing user_message\n" ()
+          Cohttp_eio.Server.respond_string ~status:`Bad_request ~body:"missing user_message\n" ~headers:close_headers ()
         else
         (* For completion calls (request_id provided), recover user_message from cache *)
         let user_message =
@@ -6976,7 +6978,7 @@ let handler ~client ~sw ~clock _socket request body =
             let body = `Assoc [ ("error", `String e) ] |> Yojson.Safe.to_string in
             Cohttp_eio.Server.respond_string ~status:`Internal_server_error ~body ~headers:json_headers ()
         | Ok None ->
-            Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"task not found\n" ()
+            Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"task not found\n" ~headers:close_headers ()
         | Ok (Some task_json) ->
             let task_kv = match task_json with `Assoc kv -> kv | _ -> [] in
             let task_str k = match List.assoc_opt k task_kv with Some (`String s) -> s | _ -> "" in
@@ -7826,7 +7828,7 @@ let handler ~client ~sw ~clock _socket request body =
                       ~body:(Yojson.Safe.to_string json) ~headers:json_headers ()))
       with e ->
         Cohttp_eio.Server.respond_string ~status:`Internal_server_error
-          ~body:(Printf.sprintf "task/chat error: %s\n" (Printexc.to_string e)) ())
+          ~body:(Printf.sprintf "task/chat error: %s\n" (Printexc.to_string e)) ~headers:close_headers ())
 
   (* ===================================================================
      Voice endpoints: TTS (Piper) and STT (sox mic + Whisper)
@@ -7960,9 +7962,9 @@ let handler ~client ~sw ~clock _socket request body =
         ~headers:json_headers ()
 
   | `POST, _ ->
-      Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"not found\n" ()
+      Cohttp_eio.Server.respond_string ~status:`Not_found ~body:"not found\n" ~headers:close_headers ()
   | _ ->
-      Cohttp_eio.Server.respond_string ~status:`Method_not_allowed ~body:"method not allowed\n" ()
+      Cohttp_eio.Server.respond_string ~status:`Method_not_allowed ~body:"method not allowed\n" ~headers:close_headers ()
   in
   if is_high_priority then with_high_priority dispatch
   else dispatch ()
@@ -8621,15 +8623,8 @@ let () =
         begin
           daemon_current_phase := "defer_high_priority";
           daemon_current_phase_started_at := debug_now ();
-          match Rag_lib.Pg.ingest_queue_pending_count () with
-          | Ok pending when pending > 0 ->
-              Printf.printf "[prefetch] deferring — high-priority request active count=%d pending_ingest=%d\n%!"
-                (Atomic.get high_priority_count) pending
-          | Ok _ ->
-              Printf.printf "[prefetch] deferring — high-priority request active count=%d\n%!"
-                (Atomic.get high_priority_count)
-          | Error e ->
-              Printf.eprintf "[prefetch] deferring — high-priority request active but ingest count failed: %s\n%!" e
+          Printf.printf "[prefetch] deferring — high-priority request active count=%d\n%!"
+            (Atomic.get high_priority_count)
         end
       else begin
         (* Phase -0.5: apply pending processed marks for already-ingested emails *)

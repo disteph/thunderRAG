@@ -37,18 +37,23 @@ let ensure_corpus_ingested () =
 
 (* ── Tests ── *)
 
+let db_stats_table_rows body_json table_name =
+  let tables = json_list_field "tables" body_json in
+  List.fold_left (fun acc t ->
+    if json_string_field "name" t = table_name then
+      match json_int_field "rows" t with Some n -> n | None -> acc
+    else acc
+  ) 0 tables
+
 let test_bulk_ingest () =
   skip_if_unreachable ();
   ensure_corpus_ingested ();
   let code, body = get ~path:"/admin/db_stats" in
   Alcotest.(check int) "db_stats 200" 200 code;
   let json = json_of_string body in
-  match json_int_field "emails" json with
-  | Some n ->
-      Printf.printf "[corpus] db_stats.emails = %d\n%!" n;
-      Alcotest.(check bool) "at least 90 emails ingested" true (n >= 90)
-  | None ->
-      Alcotest.fail "db_stats missing emails field"
+  let n = db_stats_table_rows json "emails" in
+  Printf.printf "[corpus] db_stats emails rows = %d\n%!" n;
+  Alcotest.(check bool) "at least 90 emails ingested" true (n >= 90)
 
 let test_ingested_status_batch () =
   skip_if_unreachable ();
@@ -171,7 +176,7 @@ let test_memory_crud_with_corpus () =
   let mem_id = json_string_field "memory_id" json in
   Alcotest.(check bool) "has memory_id" true (mem_id <> "");
   (* Verify it appears in list *)
-  let code2, body2 = get ~path:"/memory/list" in
+  let code2, body2 = post_json ~path:"/memory/list" ~body_str:"{}" in
   Alcotest.(check int) "memory/list 200" 200 code2;
   let json2 = json_of_string body2 in
   let memories = json_list_field "memories" json2 in
@@ -209,9 +214,11 @@ let test_db_stats () =
   let code, body = get ~path:"/admin/db_stats" in
   Alcotest.(check int) "db_stats 200" 200 code;
   let json = json_of_string body in
-  Alcotest.(check bool) "has emails" true (json_has_key "emails" json);
-  Alcotest.(check bool) "has chunks" true (json_has_key "chunks" json);
-  Printf.printf "[corpus] db_stats: %s\n%!" body
+  Alcotest.(check bool) "has tables" true (json_has_key "tables" json);
+  Alcotest.(check bool) "has total_size" true (json_has_key "total_size" json);
+  let email_rows = db_stats_table_rows json "emails" in
+  Printf.printf "[corpus] db_stats: email_rows=%d total_size=%s\n%!"
+    email_rows (json_string_field "total_size" json)
 
 let tests =
   [ Alcotest.test_case "bulk ingest 100"         `Slow test_bulk_ingest
